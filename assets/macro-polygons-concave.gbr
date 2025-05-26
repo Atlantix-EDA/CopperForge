@@ -1,0 +1,39 @@
+%TF.GenerationSoftware,HUMAN,DominicClifton,8.0.3*%
+%TF.CreationDate,2025-04-28T16:25:44+02:00*%
+%TF.SameCoordinates,Original*%
+%TF.FileFunction,Copper,L4,Bot*%
+%TF.FilePolarity,Positive*%
+%FSLAX46Y46*%
+G04 Gerber Fmt 4.6, Leading zero omitted, Abs format (unit mm)*
+%MOMM*%
+%LPD*%
+G01*
+G04 APERTURE LIST*
+G04 Aperture macros list*
+%AMSTAR5*
+0 Parametric 5-point star outline using diameter
+0 $1 = outer diameter (from params)
+0 $2 = the outer radius
+0 $3 = the inner radius
+$2=$1x0.5*
+$3=$2x0.4*
+4,1,10,
+$2x0.0000,$2x1.0000,
+$3x-0.5878,$3x0.8090,
+$2x-0.9511,$2x0.3090,
+$3x-0.9511,$3x-0.3090,
+$2x-0.5878,$2x-0.8090,
+$3x0.0000,$3x-1.0000,
+$2x0.5878,$2x-0.8090,
+$3x0.9511,$3x-0.3090,
+$2x0.9511,$2x0.3090,
+$3x0.5878,$3x0.8090,
+$2x0.0000,$2x1.0000,
+0.1000*%
+%ADD50STAR5,X5.000000*%
+D50*
+X025000000Y025000000D03*
+X-025000000Y025000000D03*
+X025000000Y-025000000D03*
+X-025000000Y-025000000D03*
+M02*

@@ -1,0 +1,21 @@
+%TF.GenerationSoftware,HUMAN,DominicClifton,8.0.3*%
+%TF.CreationDate,2025-04-28T16:25:44+02:00*%
+%TF.SameCoordinates,Original*%
+%TF.FileFunction,Copper,L4,Bot*%
+%TF.FilePolarity,Positive*%
+%FSLAX46Y46*%
+G04 Gerber Fmt 4.6, Leading zero omitted, Abs format (unit mm)*
+%MOMM*%
+%LPD*%
+G01*
+G04 Four rectangles, 2 along the vertical axis, 2 along the horizontal axis, the center point from each being +/-10mm from the origin.*
+G04 the ones along the vertical axis are 4mm (wide) by 2mm (tall) and the ones on the horizontal axis are 2mm (wide) x 4mm (tall)*
+%ADD101R,4.00X2.00*%
+%ADD102R,2.00X4.00*%
+D101*
+X00000000Y10000000D03*
+X00000000Y-10000000D03*
+D102*
+X10000000Y00000000D03*
+X-10000000Y00000000D03*
+M02*

@@ -1,0 +1,23 @@
+[package]
+name = "kiforge"
+version = "0.1.0"
+edition = "2024"
+authors = ["James Bonanno <atlantix-eda@proton.me>"]
+
+[dependencies]
+egui = "0.31.1"
+eframe = "0.31.1"
+gerber_viewer = { git = "https://github.com/MakerPnP/gerber_viewer", features = ["egui", "parser", "types"] }
+egui_lens = { version = "0.1.0"}
+egui_mobius_reactive = { version = "0.3.0-alpha.31" }
+egui_mobius = { version = "0.3.0-alpha.31" }
+env_logger = "0.11.8"
+dirs = "5.0"
+serde_json = "1.0"
+sysinfo = "0.35.1"
+local-ip = "0.1.0"
+chrono = "0.4.41"
+local-ip-address = "0.6.5"
+
+# delete this, it's just a cargo workspace workaround
+[workspace]

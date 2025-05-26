@@ -1,0 +1,119 @@
+%TF.GenerationSoftware,HUMAN,DominicClifton,8.0.3*%
+%TF.CreationDate,2025-04-28T16:25:44+02:00*%
+%TF.SameCoordinates,Original*%
+%TF.FileFunction,Copper,L4,Bot*%
+%TF.FilePolarity,Positive*%
+%FSLAX46Y46*%
+G04 Gerber Fmt 4.6, Leading zero omitted, Abs format (unit mm)*
+%MOMM*%
+%LPD*%
+G01*
+G04 APERTURE LIST*
+G04 Aperture macros list*
+%AMRoundRect*
+0 Rectangle with rounded corners*
+0 $1 Rounding radius*
+0 $2 $3 $4 $5 $6 $7 $8 $9 X,Y pos of 4 corners*
+0 Add a 4 corners polygon primitive as box body*
+4,1,4,$2,$3,$4,$5,$6,$7,$8,$9,$2,$3,0*
+0 Add four circle primitives for the rounded corners*
+1,1,$1+$1,$2,$3*
+1,1,$1+$1,$4,$5*
+1,1,$1+$1,$6,$7*
+1,1,$1+$1,$8,$9*
+0 Add four vector-line primitives between the rounded corners*
+20,1,$1+$1,$2,$3,$4,$5,0*
+20,1,$1+$1,$4,$5,$6,$7,0*
+20,1,$1+$1,$6,$7,$8,$9,0*
+20,1,$1+$1,$8,$9,$2,$3,0*%
+%ADD39RoundRect,X0.500000X-2.500000X-2.500000X2.500000X-2.500000X2.500000X2.500000X-2.500000X2.500000*%
+D39*
+X005000000Y005000000D03*
+X-005000000Y005000000D03*
+X005000000Y-005000000D03*
+X-005000000Y-005000000D03*
+G04 A small circle at the origin*
+%ADD100C,0.10*%
+D100*
+X00000000Y00000000D03*
+G04 Four rectangles, 2 along the vertical axis, 2 along the horizontal axis, the center point from each being +/-10mm from the origin.*
+G04 the ones along the vertical axis are 4mm (wide) by 2mm (tall) and the ones on the horizontal axis are 2mm (wide) x 4mm (tall)*
+%ADD101R,4.00X2.00*%
+%ADD102R,2.00X4.00*%
+D101*
+X00000000Y10000000D03*
+X00000000Y-10000000D03*
+D102*
+X10000000Y00000000D03*
+X-10000000Y00000000D03*
+%AMVectorPlus*
+0 A plus, drown using two vector-lines*
+0 $1 Line Width*
+0 $2 Width/Height*
+0 $3 $4 Center*
+0 Add two vector-line primitives between the rounded corners*
+20,1,$1,$3-$2,$4,$3+$2,$4,0*
+20,1,$1,$3,$4-$2,$3,$4+$2,0*%
+%ADD40VectorPlus,X0.500000X1.000000X0.000000X0.000000*%
+D40*
+X015000000Y015000000D03*
+X-015000000Y015000000D03*
+X015000000Y-015000000D03*
+X-015000000Y-015000000D03*
+%AMPolygon*
+0 $1 Vertices (3 minimum)*
+0 $2 Diameter*
+0 $3 $4 Center (X/Y)*
+0 $5 Rotation*
+5,1,$1,$3,$4,$2,$5*%
+%ADD41Polygon,X3X0.500000X0.000000X0.000000X0*%
+%ADD42Polygon,X3X1.000000X0.000000X0.000000X90*%
+%ADD43Polygon,X3X1.000000X0.000000X0.000000X180*%
+%ADD44Polygon,X3X2.000000X0.000000X0.000000X270*%
+D41*
+X020000000Y020000000D03*
+D42*
+X-020000000Y020000000D03*
+D43*
+X020000000Y-020000000D03*
+D44*
+X-020000000Y-020000000D03*
+%ADD45Polygon,X4X2.000000X0.000000X0.000000X45*%
+%ADD46Polygon,X4X2.000000X0.000000X0.000000X135*%
+%ADD47Polygon,X4X2.000000X0.000000X0.000000X225*%
+%ADD48Polygon,X4X2.000000X0.000000X0.000000X315*%
+D45*
+X020000000Y000000000D03*
+D46*
+X-020000000Y000000000D03*
+D47*
+X000000000Y020000000D03*
+D48*
+X000000000Y-020000000D03*
+%AMSTAR5*
+0 Parametric 5-point star outline using diameter
+0 $1 = outer diameter (from params)
+0 $2 = the outer radius
+0 $3 = the inner radius
+$2=$1x0.5*
+$3=$2x0.4*
+4,1,10,
+$2x0.0000,$2x1.0000,
+$3x-0.5878,$3x0.8090,
+$2x-0.9511,$2x0.3090,
+$3x-0.9511,$3x-0.3090,
+$2x-0.5878,$2x-0.8090,
+$3x0.0000,$3x-1.0000,
+$2x0.5878,$2x-0.8090,
+$3x0.9511,$3x-0.3090,
+$2x0.9511,$2x0.3090,
+$3x0.5878,$3x0.8090,
+$2x0.0000,$2x1.0000,
+0.1000*%
+%ADD50STAR5,X5.000000*%
+D50*
+X025000000Y025000000D03*
+X-025000000Y025000000D03*
+X025000000Y-025000000D03*
+X-025000000Y-025000000D03*
+M02*
