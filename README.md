@@ -32,12 +32,12 @@ What will make KiForge different from other applications is the use of algorithm
 
 ## Roadmap
 
-- [ ] Enhanced DRC with customizable rule sets
+- [ ] Direct KiCad project import
+- [ ] Enhanced DRC with customizable rule sets - algorithmic approaches
 - [ ] Advanced panelization algorithms
 - [ ] BOM integration and component visualization
-- [ ] Pick-and-place file generation
 - [ ] Manufacturing cost estimation
-- [ ] Direct KiCad project import
+
 
 ## Getting Started
 
