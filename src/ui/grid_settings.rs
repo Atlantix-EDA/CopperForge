@@ -2,7 +2,12 @@ use crate::{DemoLensApp, constants::LOG_TYPE_GRID, grid::{get_grid_status, GridS
 use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
 
-pub fn show(ui: &mut egui::Ui, app: &mut DemoLensApp, logger_state: &Dynamic<ReactiveEventLoggerState>, log_colors: &Dynamic<LogColors>) {
+pub fn show_grid_panel<'a>(
+    ui: &mut egui::Ui, 
+    app: &'a mut DemoLensApp,
+    logger_state: &'a Dynamic<ReactiveEventLoggerState>,
+    log_colors: &'a Dynamic<LogColors>
+) {
     let logger = ReactiveEventLogger::with_colors(logger_state, log_colors);
     
     ui.heading("Grid Settings");

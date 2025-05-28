@@ -3,7 +3,12 @@ use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
 use gerber_viewer::position::Vector;
 
-pub fn show(ui: &mut egui::Ui, app: &mut DemoLensApp, logger_state: &Dynamic<ReactiveEventLoggerState>, log_colors: &Dynamic<LogColors>) {
+pub fn show_orientation_panel<'a>(    
+    ui: &mut egui::Ui,
+    app: &'a mut DemoLensApp,
+    logger_state: &'a Dynamic<ReactiveEventLoggerState>,
+    log_colors: &'a Dynamic<LogColors>,
+) {
     let logger = ReactiveEventLogger::with_colors(logger_state, log_colors);
     ui.heading("Orientation");
     

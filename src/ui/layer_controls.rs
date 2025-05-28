@@ -1,9 +1,12 @@
 use crate::{DemoLensApp, layers::LayerType};
 use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
-use egui_mobius_reactive::Dynamic;
 use eframe::emath::Vec2;
+use egui_mobius_reactive::*; 
 
-pub fn show(ui: &mut egui::Ui, app: &mut DemoLensApp, logger_state: &Dynamic<ReactiveEventLoggerState>, log_colors: &Dynamic<LogColors>) {
+pub fn show_layers_panel<'a>(    ui: &mut egui::Ui, 
+    app: &'a mut DemoLensApp,
+    logger_state: &'a Dynamic<ReactiveEventLoggerState>,
+    log_colors: &'a Dynamic<LogColors>) {
     let logger = ReactiveEventLogger::with_colors(logger_state, log_colors);
     ui.heading("Layer Controls");
     ui.separator();

@@ -1,22 +1,25 @@
 use std::io::BufReader;
+use std::{fs, path::PathBuf};
 
 use eframe::emath::{Rect, Vec2};
 use eframe::epaint::Color32;
 use egui::ViewportBuilder;
+use egui_dock::{DockArea, DockState, NodeIndex, Style, SurfaceIndex};
+use serde::{Serialize, Deserialize};
 
 /// egui_lens imports
 use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 
 /// Use of prelude for egui_mobius_reactive
-use egui_mobius_reactive::*; 
+use egui_mobius_reactive::Dynamic;  
+use std::collections::HashMap;
 
 use gerber_viewer::gerber_parser::parse;
 use gerber_viewer::{
     draw_arrow, draw_outline, draw_crosshair, BoundingBox, GerberLayer, GerberRenderer, 
-    Transform2D, ViewState, Mirroring, draw_marker, UiState
+    ViewState, Mirroring, draw_marker, UiState
 };
 use gerber_viewer::position::Vector;
-use std::collections::HashMap;
 
 // Import platform modules
 mod platform;
@@ -32,16 +35,31 @@ use constants::*;
 use layers::{LayerType, LayerInfo};
 use grid::GridSettings;
 
+/// Define the tabs for the DockArea
+#[derive(Clone, Serialize, Deserialize)]
+enum TabKind {
+    ViewSettings,
+    DRC,
+    GerberView,
+    EventLog,
+}
 
+pub struct TabParams<'a> {
+    pub app: &'a mut DemoLensApp,
+
+}
+
+/// Tab container struct for DockArea
+#[derive(Clone, Serialize, Deserialize)]
+struct Tab {
+    kind: TabKind,
+    #[serde(skip)]
+    surface: Option<SurfaceIndex>,
+    #[serde(skip)]
+    node: Option<NodeIndex>,
+}
 
 /// The main application struct
-/// 
-/// This struct contains the state of the application, including the Gerber layer, view state, UI state,
-/// and other properties. It also contains the logger state and the banner and details instances. The 
-/// Logger state is used to log events and changes in the application, while the banner and details instances
-/// are used to display information about the application and the system it is running on. Note that the 
-/// logger_state is "reactive" and is used to log events in the application. The log_colors is also "reactive" and is used to
-/// manage the colors used in the logger. 
 pub struct DemoLensApp {
     // Multi-layer support
     pub layers: HashMap<LayerType, LayerInfo>,
@@ -55,11 +73,11 @@ pub struct DemoLensApp {
 
     pub rotation_degrees: f32,
     
-    // Logger state
-    pub logger_state: Dynamic<ReactiveEventLoggerState>,
-    pub log_colors: Dynamic<LogColors>,
-    pub banner: banner::Banner,
-    pub details: details::Details,
+    // Logger state, colors, banner, details
+    pub logger_state : Dynamic<ReactiveEventLoggerState>,
+    pub log_colors   : Dynamic<LogColors>,
+    pub banner       : banner::Banner,
+    pub details      : details::Details,
     
     // Properties
     pub enable_unique_colors: bool,
@@ -74,87 +92,213 @@ pub struct DemoLensApp {
     
     // Grid Settings
     pub grid_settings: GridSettings,
+
+    // Dock state
+    dock_state: DockState<Tab>,
+    config_path: PathBuf,
 }
 
-/// Implement the DemoLensApp struct
-///
-/// This implementation contains methods for creating a new instance of the app,
-/// configuring custom log colors, and watching for changes in the log colors.
-/// It also contains methods for resetting the view and adding platform details to the app.
-/// 
-impl DemoLensApp {
-    
-    /// **Configure custom colors** 
-    /// 
-    /// This function will get the current colors from the `Dynamic<LogColors>` instance, 
-    /// check if the custom colors for the specified log types are already set,
-    /// and if not, set them to the default values.
-    ///
-    fn configure_custom_log_colors_if_missing(colors: &mut Dynamic<LogColors>) {
+impl Tab {
+    fn new(kind: TabKind, surface: SurfaceIndex, node: NodeIndex) -> Self {
+        Self {
+            kind,
+            surface: Some(surface),
+            node: Some(node),
+        }
+    }
 
-        let mut colors_value = colors.get();
-        
-        if !colors_value.custom_colors.contains_key(LOG_TYPE_ROTATION) {
-            colors_value.set_custom_color(LOG_TYPE_ROTATION, egui::Color32::from_rgb(230, 126, 34));
+    fn title(&self) -> String {
+        match self.kind {
+            TabKind::ViewSettings => "View Settings".to_string(),
+            TabKind::DRC => "DRC".to_string(),
+            TabKind::GerberView => "Gerber View".to_string(),
+            TabKind::EventLog => "Event Log".to_string(),
         }
-        if !colors_value.custom_colors.contains_key(LOG_TYPE_CENTER_OFFSET) {
-            colors_value.set_custom_color(LOG_TYPE_CENTER_OFFSET, egui::Color32::from_rgb(142, 68, 173));
-        }
-        if !colors_value.custom_colors.contains_key(LOG_TYPE_DESIGN_OFFSET) {
-            colors_value.set_custom_color(LOG_TYPE_DESIGN_OFFSET, egui::Color32::from_rgb(39, 174, 96));
-        }
-        if !colors_value.custom_colors.contains_key(LOG_TYPE_MIRROR) {
-            colors_value.set_custom_color(LOG_TYPE_MIRROR, egui::Color32::from_rgb(192, 57, 43));
-        }
-        if !colors_value.custom_colors.contains_key(LOG_TYPE_DRC) {
-            colors_value.set_custom_color(LOG_TYPE_DRC, egui::Color32::from_rgb(155, 89, 182));
-        }
-        if !colors_value.custom_colors.contains_key(LOG_TYPE_GRID) {
-            colors_value.set_custom_color(LOG_TYPE_GRID, egui::Color32::from_rgb(52, 152, 219));
-        }
-        
-        colors.set(colors_value);
     }
-    
-    /// **Color change watcher** 
-    /// 
-    /// This function sets up a watcher for changes to the log colors, and when a change is detected,
-    /// it saves the current colors to a JSON file in the config directory. The egui_mobius_reactive 
-    /// on_change method is used to trigger the save operation whenever the colors change. One does not
-    /// need to call the signal registery for the `Derived` type to do this, as the `on_change` method 
-    /// is a built in to the `Dynamic` type.
-    ///
-    fn watch_for_color_changes(&self) {
-        let log_colors_clone = self.log_colors.clone();
-        
-        self.log_colors.on_change(move || {
-            let colors = log_colors_clone.get();
-            
-            let config_dir = dirs::config_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join("gerber_viewer");
-            
-            if let Err(e) = std::fs::create_dir_all(&config_dir) {
-                eprintln!("Failed to create config directory: {}", e);
-                return;
+
+
+    fn content(&self, ui: &mut egui::Ui, params: &mut TabParams<'_>) {
+        match self.kind {
+            TabKind::ViewSettings => {
+                // Use vertical layout like diskforge
+                ui.vertical(|ui| {
+                    let logger_state_clone = params.app.logger_state.clone();
+                    let log_colors_clone = params.app.log_colors.clone();
+                    
+                    // Layer Controls Section
+                    ui.heading("Layer Controls");
+                    ui.separator();
+                    ui::show_layers_panel(ui, params.app, &logger_state_clone, &log_colors_clone);
+                    
+                    ui.add_space(20.0);
+                    
+                    // Orientation Section
+                    ui.heading("Orientation");
+                    ui.separator();
+                    ui::show_orientation_panel(ui, params.app, &logger_state_clone, &log_colors_clone);
+                    
+                    ui.add_space(20.0);
+                    
+                    // Grid Settings Section
+                    ui.heading("Grid Settings");
+                    ui.separator();
+                    ui::show_grid_panel(ui, params.app, &logger_state_clone, &log_colors_clone);
+                });
             }
-            
-            let config_path = config_dir.join("log_colors.json");
-            
-            match serde_json::to_string_pretty(&colors) {
-                Ok(json) => {
-                    // Write JSON to file
-                    if let Err(e) = std::fs::write(&config_path, json) {
-                        eprintln!("Failed to write colors to {}: {}", config_path.display(), e);
-                    } else {
-                        println!("Successfully saved colors to {}", config_path.display());
+            TabKind::DRC => {
+                let logger_state_clone = params.app.logger_state.clone();
+                let log_colors_clone = params.app.log_colors.clone();
+                ui::show_drc_panel(ui, params.app, &logger_state_clone, &log_colors_clone);
+            }
+            TabKind::GerberView => {
+                self.render_gerber_view(ui, params.app);
+            }
+            TabKind::EventLog => {
+                let logger = ReactiveEventLogger::with_colors(&params.app.logger_state, &params.app.log_colors);
+                logger.show(ui);
+            }
+        }
+    }
+
+    fn render_gerber_view(&self, ui: &mut egui::Ui, app: &mut DemoLensApp) {
+        // Fill all available space in the panel
+        ui.ctx().request_repaint(); // Ensure continuous updates
+        
+        // Use allocate_response to ensure we fill the entire available area
+        let available_size = ui.available_size();
+        // Ensure minimum size to avoid zero-sized allocations
+        let size = egui::Vec2::new(
+            available_size.x.max(100.0),
+            available_size.y.max(100.0)
+        );
+        let response = ui.allocate_response(size, egui::Sense::drag());
+        let viewport = response.rect;
+
+        // Fill the background with the panel color to ensure no black gaps
+        let painter = ui.painter_at(viewport);
+        painter.rect_filled(viewport, 0.0, ui.visuals().extreme_bg_color);
+
+        if app.needs_initial_view {
+            app.reset_view(viewport)
+        }
+        
+        app.ui_state.update(ui, &viewport, &response, &mut app.view_state);
+
+        let painter = ui.painter().with_clip_rect(viewport);
+        
+        // Draw grid if enabled (before other elements so it appears underneath)
+        grid::draw_grid(&painter, &viewport, &app.view_state, &app.grid_settings);
+        
+        draw_crosshair(&painter, app.ui_state.origin_screen_pos, Color32::BLUE);
+        draw_crosshair(&painter, app.ui_state.center_screen_pos, Color32::LIGHT_GRAY);
+
+        // Render all visible layers based on showing_top
+        for layer_type in LayerType::all() {
+            if let Some(layer_info) = app.layers.get(&layer_type) {
+                if layer_info.visible {
+                    // Filter based on showing_top
+                    let should_render = layer_type.should_render(app.showing_top);
+                    
+                    if should_render {
+                        // Use the layer's specific gerber data if available, otherwise fall back to demo
+                        let gerber_to_render = layer_info.gerber_layer.as_ref()
+                            .unwrap_or(&app.gerber_layer);
+                        
+                        GerberRenderer::default().paint_layer(
+                            &painter,
+                            app.view_state,
+                            gerber_to_render,
+                            layer_type.color(),
+                            false, // Don't use unique colors for multi-layer view
+                            false, // Don't show polygon numbering
+                            app.rotation_degrees.to_radians(),
+                            app.mirroring,
+                            app.center_offset.into(),
+                            app.design_offset.into(),
+                        );
                     }
-                },
-                Err(e) => eprintln!("Failed to serialize colors: {}", e),
+                }
             }
-        });
+        }
+
+        // Get bounding box and outline vertices
+        let bbox = app.gerber_layer.bounding_box();
+        let origin = app.center_offset - app.design_offset;
+        let bbox_vertices = bbox.vertices();  
+        let outline_vertices = bbox.vertices();  
+        
+        // Transform vertices after getting them
+        let bbox_vertices_screen = bbox_vertices.iter()
+            .map(|v| app.view_state.gerber_to_screen_coords(*v + origin.to_position()))
+            .collect::<Vec<_>>();
+            
+        let outline_vertices_screen = outline_vertices.iter()
+            .map(|v| app.view_state.gerber_to_screen_coords(*v + origin.to_position()))
+            .collect::<Vec<_>>();
+
+        draw_outline(&painter, bbox_vertices_screen, Color32::RED);
+        draw_outline(&painter, outline_vertices_screen, Color32::GREEN);
+
+        let screen_radius = MARKER_RADIUS * app.view_state.scale;
+
+        let design_offset_screen_position = app.view_state.gerber_to_screen_coords(app.design_offset.to_position());
+        draw_arrow(&painter, design_offset_screen_position, app.ui_state.origin_screen_pos, Color32::ORANGE);
+        draw_marker(&painter, design_offset_screen_position, Color32::ORANGE, Color32::YELLOW, screen_radius);
+
+        let design_origin_screen_position = app.view_state.gerber_to_screen_coords((app.center_offset - app.design_offset).to_position());
+        draw_marker(&painter, design_origin_screen_position, Color32::PURPLE, Color32::MAGENTA, screen_radius);
+        
+        // Draw board dimensions in mils at the bottom
+        if let Some(layer_info) = app.layers.get(&LayerType::MechanicalOutline) {
+            if let Some(ref outline_layer) = layer_info.gerber_layer {
+                let bbox = outline_layer.bounding_box();
+                let width_mm = bbox.width();
+                let height_mm = bbox.height();
+                let width_mils = width_mm / 0.0254;
+                let height_mils = height_mm / 0.0254;
+                
+                let dimension_text = format!("{:.0} x {:.0} mils", width_mils, height_mils);
+                let text_pos = viewport.max - Vec2::new(10.0, 30.0);
+                painter.text(
+                    text_pos,
+                    egui::Align2::RIGHT_BOTTOM,
+                    dimension_text,
+                    egui::FontId::default(),
+                    Color32::from_rgb(200, 200, 200),
+                );
+            }
+        }
     }
-    
+}
+
+struct TabViewer<'a> {
+    app: &'a mut DemoLensApp,
+}
+
+impl<'a> egui_dock::TabViewer for TabViewer<'a> {
+    type Tab = Tab;
+
+    fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
+        tab.title().into()
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
+        let mut params = TabParams {
+            app: self.app,
+            // ...other fields as needed
+        };
+        tab.content(ui, &mut params);
+    }
+}
+
+impl Drop for DemoLensApp {
+    fn drop(&mut self) {
+        // Save dock state when application closes
+        self.save_dock_state();
+    }
+}
+
+impl DemoLensApp {
     /// **Create a new instance of the DemoLensApp**
     ///
     /// This function initializes the application state, including loading the Gerber layer,
@@ -216,79 +360,66 @@ impl DemoLensApp {
             layers.insert(layer_type, layer_info);
         }
         
-        // Create logger state
+        // Create logger state, colors, banner, and details
         let logger_state = Dynamic::new(ReactiveEventLoggerState::new());
-        
-        // Custom load logic for gerber_viewer
-        let mut log_colors = Dynamic::new({
-            let config_dir = dirs::config_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join("gerber_viewer");
-            let config_path = config_dir.join("log_colors.json");
-            
-            println!("Loading colors from: {}", config_path.display());
-            
-            if let Ok(file_content) = std::fs::read_to_string(&config_path) {
-                match serde_json::from_str(&file_content) {
-                    Ok(colors) => {
-                        println!("Successfully loaded colors from file");
-                        colors
-                    }
-                    Err(e) => {
-                        eprintln!("Failed to parse colors JSON: {}", e);
-                        LogColors::default()
-                    }
-                }
-            } else {
-                println!("No saved colors found, using defaults");
-                LogColors::default()
-            }
-        });
-        
-        // Configure custom colors for different event types (only if they don't exist)
-        Self::configure_custom_log_colors_if_missing(&mut log_colors);
-
-         // Create banner and details instances
-        let mut banner = banner::Banner::new();
-        let mut details = details::Details::new();
-        
-        // Format banner and get system info
-        banner.format();
+        let log_colors = Dynamic::new(LogColors::default());
+        let mut banner = banner::Banner::new(); 
+        banner.format(); 
+        let mut details = details::Details::new(); 
         details.get_os();
+        
+
+        // Initialize dock state with gerber view as the main content
+        let view_settings_tab = Tab::new(TabKind::ViewSettings, SurfaceIndex::main(), NodeIndex(0));
+        let drc_tab = Tab::new(TabKind::DRC, SurfaceIndex::main(), NodeIndex(1));
+        let gerber_tab = Tab::new(TabKind::GerberView, SurfaceIndex::main(), NodeIndex(2));
+        let log_tab = Tab::new(TabKind::EventLog, SurfaceIndex::main(), NodeIndex(3));
+        
+        // Create dock state with gerber view as the root
+        let mut dock_state = DockState::new(vec![gerber_tab]);
+        let surface = dock_state.main_surface_mut();
+        
+        // Split left for control panels
+        let [left, _right] = surface.split_left(
+            NodeIndex::root(),
+            0.3, // Left panel takes 30% of width
+            vec![view_settings_tab, drc_tab],
+        );
+        
+        // Add event log to bottom of left panel
+        surface.split_below(
+            left,
+            0.7, // Top takes 70% of height
+            vec![log_tab],
+        );
 
         let app = Self {
             layers,
             active_layer: LayerType::TopCopper,
             gerber_layer,
-            view_state: Default::default(),
+            view_state: ViewState::default(),
+            ui_state: UiState::default(),
             needs_initial_view: true,
             rotation_degrees: 0.0,
-            ui_state: Default::default(),
-            
-            // Logger state
             logger_state,
             log_colors,
             banner,
             details,
-            
-            // Properties with defaults
             enable_unique_colors: ENABLE_UNIQUE_SHAPE_COLORS,
             enable_polygon_numbering: ENABLE_POLYGON_NUMBERING,
             mirroring: MIRRORING.into(),
             center_offset: CENTER_OFFSET,
             design_offset: DESIGN_OFFSET,
             showing_top: true,
-            
-            // DRC Properties
             current_drc_ruleset: None,
-            
-            // Grid Settings
             grid_settings: GridSettings::default(),
+            dock_state,
+            config_path: dirs::config_dir()
+                .map(|d| d.join("kiforge"))
+                .unwrap_or_default(),
         };
         
-        // Setup color change watcher to auto-save when colors change
-        app.watch_for_color_changes();
-
+        // Add platform details
         app.add_banner_platform_details();
         
         app
@@ -301,7 +432,7 @@ impl DemoLensApp {
     /// and system details. It creates a logger using the `ReactiveEventLogger` and logs the banner
     /// and operating system details.
      fn add_banner_platform_details(&self) {
-        // Create a logger using references to our Dynamic state
+        // Create a logger using references to our logger state
         let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
         
         // Log banner message (welcome message)
@@ -361,6 +492,19 @@ impl DemoLensApp {
     }
 }
 
+impl DemoLensApp {
+    fn save_dock_state(&self) {
+        if let Some(config_dir) = dirs::config_dir() {
+            let kiforge_dir = config_dir.join("kiforge");
+            fs::create_dir_all(&kiforge_dir).ok();
+            let config_path = kiforge_dir.join("dock_state.json");
+            if let Ok(json) = serde_json::to_string_pretty(&self.dock_state) {
+                fs::write(config_path, json).ok();
+            }
+        }
+    }
+}
+
 /// Implement the eframe::App trait for DemoLensApp
 ///
 /// This implementation contains the main event loop for the application, including
@@ -372,161 +516,31 @@ impl DemoLensApp {
 /// 
 impl eframe::App for DemoLensApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Create a logger for this frame
-        let _logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
+        // Clone the dock state
+        let mut dock_state = self.dock_state.clone();
         
-        let show_system_info = ctx.memory(|mem| {
-            mem.data.get_temp::<bool>(egui::Id::new("show_system_info")).unwrap_or(false)
-        });
+        // Create the dock layout and tab viewer
+        let mut tab_viewer = TabViewer { app: self };
         
-        if show_system_info {
-            // Clear the flag
-            ctx.memory_mut(|mem| {
-                mem.data.remove::<bool>(egui::Id::new("show_system_info"));
-            });
+        // Create custom style to match panel colors
+        let mut style = Style::from_egui(ctx.style().as_ref());
+        style.dock_area_padding = None;
+        style.tab_bar.fill_tab_bar = true;
+        
+        // Show the dock area directly on the context
+        DockArea::new(&mut dock_state)
+            .style(style)
+            .show_add_buttons(false)
+            .show_close_buttons(true)
+            .show(ctx, &mut tab_viewer);
             
-            // Create a logger to display system info
-            let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
-            
-            // Log system details
-            let details_text = self.details.format_os();
-            logger.log_info(&details_text);
-            
-            // Then log banner message
-            logger.log_info(&self.banner.message);
+        // Save the updated dock state back to the app
+        self.dock_state = dock_state;
+        
+        // Save dock state to disk periodically
+        if ctx.input(|i| i.time) % 30.0 < 0.1 {
+            self.save_dock_state();
         }
-        
-        // No more automatic rotation
-
-        //
-        // Compute bounding box and outline
-        //
-        let bbox = self.gerber_layer.bounding_box();
-
-        let origin = self.center_offset - self.design_offset;
-
-        let transform = Transform2D {
-            rotation_radians: self.rotation_degrees.to_radians(),
-            mirroring: self.mirroring,
-            origin,
-            offset: self.design_offset,
-        };
-
-        // Compute rotated outline (GREEN)
-        let outline_vertices: Vec<_> = bbox
-            .vertices()
-            .into_iter()
-            .map(|v| transform.apply_to_position(v))
-            .collect();
-
-        // Compute transformed AABB (RED)
-        let bbox = BoundingBox::from_points(&outline_vertices);
-
-        // Convert to screen coords
-        let bbox_vertices_screen = bbox.vertices().into_iter()
-            .map(|v| self.view_state.gerber_to_screen_coords(v))
-            .collect::<Vec<_>>();
-
-        let outline_vertices_screen = outline_vertices.into_iter()
-            .map(|v| self.view_state.gerber_to_screen_coords(v))
-            .collect::<Vec<_>>();
-        
-        //
-        // Build a UI
-        //
-        
-        // Show the properties panel using our modular UI
-        ui::show_properties_panel(ctx, self);
-
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.centered_and_justified(|ui| {
-                    let response = ui.allocate_rect(ui.available_rect_before_wrap(), egui::Sense::drag());
-                    let viewport = response.rect;
-
-                    if self.needs_initial_view {
-                        self.reset_view(viewport)
-                    }
-                    
-                    //
-                    // handle pan, drag and cursor position
-                    //
-                    self.ui_state.update(ui, &viewport, &response, &mut self.view_state);
-
-                    //
-                    // Show the gerber layer and other overlays
-                    //
-
-                    let painter = ui.painter().with_clip_rect(viewport);
-                    
-                    // Draw grid if enabled (before other elements so it appears underneath)
-                    grid::draw_grid(&painter, &viewport, &self.view_state, &self.grid_settings);
-                    
-                    draw_crosshair(&painter, self.ui_state.origin_screen_pos, Color32::BLUE);
-                    draw_crosshair(&painter, self.ui_state.center_screen_pos, Color32::LIGHT_GRAY);
-
-                    // Render all visible layers based on showing_top
-                    for layer_type in LayerType::all() {
-                        if let Some(layer_info) = self.layers.get(&layer_type) {
-                            if layer_info.visible {
-                                // Filter based on showing_top
-                                let should_render = layer_type.should_render(self.showing_top);
-                                
-                                if should_render {
-                                    // Use the layer's specific gerber data if available, otherwise fall back to demo
-                                    let gerber_to_render = layer_info.gerber_layer.as_ref()
-                                        .unwrap_or(&self.gerber_layer);
-                                    
-                                    GerberRenderer::default().paint_layer(
-                                        &painter,
-                                        self.view_state,
-                                        gerber_to_render,
-                                        layer_type.color(),
-                                        false, // Don't use unique colors for multi-layer view
-                                        false, // Don't show polygon numbering
-                                        self.rotation_degrees.to_radians(),
-                                        self.mirroring,
-                                        self.center_offset.into(),
-                                        self.design_offset.into(),
-                                    );
-                                }
-                            }
-                        }
-                    }
-
-                    draw_outline(&painter, bbox_vertices_screen, Color32::RED);
-                    draw_outline(&painter, outline_vertices_screen, Color32::GREEN);
-
-                    let screen_radius = MARKER_RADIUS * self.view_state.scale;
-
-                    let design_offset_screen_position = self.view_state.gerber_to_screen_coords(self.design_offset.to_position());
-                    draw_arrow(&painter, design_offset_screen_position, self.ui_state.origin_screen_pos, Color32::ORANGE);
-                    draw_marker(&painter, design_offset_screen_position, Color32::ORANGE, Color32::YELLOW, screen_radius);
-
-                    let design_origin_screen_position = self.view_state.gerber_to_screen_coords((self.center_offset - self.design_offset).to_position());
-                    draw_marker(&painter, design_origin_screen_position, Color32::PURPLE, Color32::MAGENTA, screen_radius);
-                    
-                    // Draw board dimensions in mils at the bottom
-                    if let Some(layer_info) = self.layers.get(&LayerType::MechanicalOutline) {
-                        if let Some(ref outline_layer) = layer_info.gerber_layer {
-                            let bbox = outline_layer.bounding_box();
-                            let width_mm = bbox.width();
-                            let height_mm = bbox.height();
-                            let width_mils = width_mm / 0.0254;
-                            let height_mils = height_mm / 0.0254;
-                            
-                            let dimension_text = format!("{:.0} x {:.0} mils", width_mils, height_mils);
-                            let text_pos = viewport.max - Vec2::new(10.0, 30.0);
-                            painter.text(
-                                text_pos,
-                                egui::Align2::RIGHT_BOTTOM,
-                                dimension_text,
-                                egui::FontId::default(),
-                                Color32::from_rgb(200, 200, 200),
-                            );
-                        }
-                    }
-                });
-        });
     }
 }
 
