@@ -10,8 +10,6 @@ pub fn show_grid_panel<'a>(
 ) {
     let logger = ReactiveEventLogger::with_colors(logger_state, log_colors);
     
-    ui.heading("Grid Settings");
-    ui.add_space(4.0);
     if ui.checkbox(&mut app.grid_settings.enabled, "Enable Grid").changed() {
         logger.log_custom(
             LOG_TYPE_GRID,

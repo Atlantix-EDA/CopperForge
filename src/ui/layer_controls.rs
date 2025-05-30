@@ -8,8 +8,6 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
     logger_state: &'a Dynamic<ReactiveEventLoggerState>,
     log_colors: &'a Dynamic<LogColors>) {
     let logger = ReactiveEventLogger::with_colors(logger_state, log_colors);
-    ui.heading("Layer Controls");
-    ui.separator();
     
     // Layer visibility controls
     ui.label(&format!("Visible Layers (Showing {} side):", if app.showing_top { "TOP" } else { "BOTTOM" }));

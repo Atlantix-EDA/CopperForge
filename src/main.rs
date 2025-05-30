@@ -21,6 +21,7 @@ use gerber_viewer::{
 };
 use gerber_viewer::position::Vector;
 
+
 // Import platform modules
 mod platform;
 use platform::{banner, details};
@@ -30,6 +31,7 @@ mod constants;
 mod layers;
 mod grid;
 mod ui;
+mod kicad;
 
 use constants::*;
 use layers::{LayerType, LayerInfo};
@@ -64,6 +66,13 @@ pub struct DemoLensApp {
     // Multi-layer support
     pub layers: HashMap<LayerType, LayerInfo>,
     pub active_layer: LayerType,
+    
+    // KiCad support
+    pub pcb_data: Option<kicad::PcbFile>,
+    pub symbol_data: Option<Vec<kicad::Symbol>>,
+    pub active_pcb_layers: Vec<String>,
+    pub file_type: ui::FileType,
+    pub selected_component: Option<String>,
     
     // Legacy single layer support (for compatibility)
     pub gerber_layer: GerberLayer,
@@ -128,7 +137,18 @@ impl Tab {
                     // Layer Controls Section
                     ui.heading("Layer Controls");
                     ui.separator();
-                    ui::show_layers_panel(ui, params.app, &logger_state_clone, &log_colors_clone);
+                    
+                    match params.app.file_type {
+                        ui::FileType::Gerber => {
+                            ui::show_layers_panel(ui, params.app, &logger_state_clone, &log_colors_clone);
+                        }
+                        ui::FileType::KicadPcb => {
+                            ui::show_pcb_layer_panel(ui, params.app, &logger_state_clone, &log_colors_clone);
+                        }
+                        ui::FileType::KicadSymbol => {
+                            ui.label("Symbol view - no layers");
+                        }
+                    }
                     
                     ui.add_space(20.0);
                     
@@ -396,6 +416,11 @@ impl DemoLensApp {
         let app = Self {
             layers,
             active_layer: LayerType::TopCopper,
+            pcb_data: None,
+            symbol_data: None,
+            active_pcb_layers: Vec::new(),
+            file_type: ui::FileType::Gerber,
+            selected_component: None,
             gerber_layer,
             view_state: ViewState::default(),
             ui_state: UiState::default(),
@@ -516,6 +541,53 @@ impl DemoLensApp {
 /// 
 impl eframe::App for DemoLensApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Handle system info button clicked
+        let show_system_info = ctx.memory(|mem| {
+            mem.data.get_temp::<bool>(egui::Id::new("show_system_info")).unwrap_or(false)
+        });
+        
+        if show_system_info {
+            // Clear the flag
+            ctx.memory_mut(|mem| {
+                mem.data.remove::<bool>(egui::Id::new("show_system_info"));
+            });
+            
+            // Create a temporary logger for system info output
+            let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
+            
+            // Display system details
+            let details_text = self.details.format_os();
+            logger.log_info(&details_text);
+            
+            // Display banner
+            logger.log_info(&self.banner.message);
+        }
+        
+        // Top menu bar
+        egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
+            egui::menu::bar(ui, |ui| {
+                ui.menu_button("File", |ui| {
+                    let logger_state_clone = self.logger_state.clone();
+                    let log_colors_clone = self.log_colors.clone();
+                    ui::show_file_menu(ui, self, &logger_state_clone, &log_colors_clone);
+                    
+                    ui.separator();
+                    if ui.button("Exit").clicked() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                });
+                
+                ui.menu_button("View", |ui| {
+                    if ui.button("Fit to View").clicked() {
+                        let viewport = ctx.screen_rect();
+                        self.reset_view(viewport);
+                    }
+                    ui.separator();
+                    ui.checkbox(&mut self.showing_top, "Show Top Layers");
+                });
+            });
+        });
+        
         // Clone the dock state
         let mut dock_state = self.dock_state.clone();
         
@@ -551,7 +623,7 @@ impl eframe::App for DemoLensApp {
 fn main() -> eframe::Result<()> {
     env_logger::init(); // Log to stderr (optional).
     eframe::run_native(
-        "Gerber Viewer Lens Demo (egui)",
+        platform::parameters::gui::APPLICATION_NAME, // Use the application name from the platform module
         eframe::NativeOptions {
             viewport: ViewportBuilder::default().with_inner_size([1280.0, 768.0]),
             ..Default::default()

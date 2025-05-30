@@ -10,7 +10,6 @@ pub fn show_orientation_panel<'a>(
     log_colors: &'a Dynamic<LogColors>,
 ) {
     let logger = ReactiveEventLogger::with_colors(logger_state, log_colors);
-    ui.heading("Orientation");
     
     // Orientation controls
     ui.horizontal(|ui| {
