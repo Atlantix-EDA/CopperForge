@@ -5,6 +5,8 @@ pub mod grid_settings;
 pub mod view_settings_panel;
 pub mod file_browser;
 pub mod pcb_layer_panel;
+pub mod pcb_renderer;
+pub mod kicad_panel;
 
 // Re-export the show functions for each panel
 pub use layer_controls::show_layers_panel;

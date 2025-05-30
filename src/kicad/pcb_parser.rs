@@ -193,11 +193,21 @@ impl PcbParser {
             self.advance();
             Ok(())
         } else {
-            Err(KicadError::UnexpectedToken(format!(
-                "Expected {:?}, found {:?}",
-                expected,
-                self.current()
-            )))
+            let context = if self.position > 2 && self.position < self.tokens.len() {
+                format!(
+                    "Expected {:?}, found {:?} (prev: {:?})",
+                    expected,
+                    self.current(),
+                    self.tokens.get(self.position - 1)
+                )
+            } else {
+                format!(
+                    "Expected {:?}, found {:?}",
+                    expected,
+                    self.current()
+                )
+            };
+            Err(KicadError::UnexpectedToken(context))
         }
     }
     
@@ -224,7 +234,14 @@ impl PcbParser {
                 self.advance();
                 Ok(str)
             }
-            _ => Err(KicadError::ParseError("Expected string".to_string())),
+            _ => {
+                let context = if self.position > 0 && self.position < self.tokens.len() {
+                    format!("Expected string at position {}, found {:?}", self.position, self.current())
+                } else {
+                    format!("Expected string, position out of bounds: {}", self.position)
+                };
+                Err(KicadError::ParseError(context))
+            }
         }
     }
     
@@ -254,8 +271,12 @@ impl PcbParser {
         let layer_type = self.parse_string()?;
         let mut user_name = None;
         
-        if let Some(Token::String(_)) = self.current() {
-            user_name = Some(self.parse_string()?);
+        // Handle optional user name - could be string or ident
+        match self.current() {
+            Some(Token::String(_)) | Some(Token::Ident(_)) => {
+                user_name = Some(self.parse_string()?);
+            }
+            _ => {}
         }
         
         self.expect(Token::RParen)?;
@@ -523,20 +544,28 @@ impl PcbParser {
         
         let mut pcb = PcbFile::new();
         
-        while self.current() != Some(&Token::RParen) {
+        while self.current() != Some(&Token::RParen) && self.position < self.tokens.len() {
             match self.current() {
                 Some(Token::LParen) => {
                     self.advance();
                     match self.current() {
                         Some(Token::Version) => {
                             self.advance();
-                            pcb.version = self.parse_string()?;
+                            // Version can be a number or string
+                            pcb.version = match self.current() {
+                                Some(Token::Number(n)) => {
+                                    let num = *n;
+                                    self.advance();
+                                    num.to_string()
+                                }
+                                _ => self.parse_string()?
+                            };
                             self.advance();
                         }
                         Some(Token::Generator) => {
                             self.advance();
                             pcb.generator = self.parse_string()?;
-                            self.advance();
+                            self.advance(); // Skip closing paren
                         }
                         Some(Token::Layers) => {
                             self.position -= 1;
@@ -557,13 +586,21 @@ impl PcbParser {
             }
         }
         
-        self.expect(Token::RParen)?;
+        if self.current() == Some(&Token::RParen) {
+            self.advance();
+        }
         Ok(pcb)
+    }
+}
+
+impl PcbParser {
+    pub fn parse_from_str(content: &str) -> Result<PcbFile> {
+        let mut parser = PcbParser::new(content);
+        parser.parse()
     }
 }
 
 pub fn parse_pcb_for_cam(filename: &str) -> Result<PcbFile> {
     let content = std::fs::read_to_string(filename)?;
-    let mut parser = PcbParser::new(&content);
-    parser.parse()
+    PcbParser::parse_from_str(&content)
 }

@@ -32,6 +32,7 @@ mod layers;
 mod grid;
 mod ui;
 mod kicad;
+mod kicad_api;
 
 use constants::*;
 use layers::{LayerType, LayerInfo};
@@ -44,6 +45,7 @@ enum TabKind {
     DRC,
     GerberView,
     EventLog,
+    KiCadSync,
 }
 
 pub struct TabParams<'a> {
@@ -105,6 +107,12 @@ pub struct DemoLensApp {
     // Dock state
     dock_state: DockState<Tab>,
     config_path: PathBuf,
+    
+    // KiCad API connection
+    kicad_monitor: kicad_api::KiCadMonitor,
+    kicad_auto_refresh: bool,
+    kicad_refresh_interval: f32,
+    kicad_synced_layers: Vec<LayerType>,
 }
 
 impl Tab {
@@ -122,6 +130,7 @@ impl Tab {
             TabKind::DRC => "DRC".to_string(),
             TabKind::GerberView => "Gerber View".to_string(),
             TabKind::EventLog => "Event Log".to_string(),
+            TabKind::KiCadSync => "KiCad Sync".to_string(),
         }
     }
 
@@ -177,6 +186,11 @@ impl Tab {
                 let logger = ReactiveEventLogger::with_colors(&params.app.logger_state, &params.app.log_colors);
                 logger.show(ui);
             }
+            TabKind::KiCadSync => {
+                let logger_state_clone = params.app.logger_state.clone();
+                let log_colors_clone = params.app.log_colors.clone();
+                ui::kicad_panel::show_kicad_panel(ui, params.app, &logger_state_clone, &log_colors_clone);
+            }
         }
     }
 
@@ -212,6 +226,27 @@ impl Tab {
         draw_crosshair(&painter, app.ui_state.origin_screen_pos, Color32::BLUE);
         draw_crosshair(&painter, app.ui_state.center_screen_pos, Color32::LIGHT_GRAY);
 
+        // Render based on file type
+        match app.file_type {
+            ui::FileType::KicadPcb => {
+                self.render_pcb_layers(&painter, app, &viewport);
+            }
+            _ => {
+                // Render Gerber layers
+                self.render_gerber_layers(&painter, app, &viewport);
+            }
+        }
+    }
+    
+    fn get_pcb_layer_color(&self, layer_name: &str) -> Color32 {
+        ui::pcb_layer_panel::get_layer_color(layer_name)
+    }
+    
+    fn render_pcb_layers(&self, painter: &egui::Painter, app: &mut DemoLensApp, viewport: &Rect) {
+        ui::pcb_renderer::PcbRenderer::render_pcb(painter, app, viewport);
+    }
+    
+    fn render_gerber_layers(&self, painter: &egui::Painter, app: &mut DemoLensApp, viewport: &Rect) {
         // Render all visible layers based on showing_top
         for layer_type in LayerType::all() {
             if let Some(layer_info) = app.layers.get(&layer_type) {
@@ -388,12 +423,38 @@ impl DemoLensApp {
         let mut details = details::Details::new(); 
         details.get_os();
         
+        // Load the PCB file from assets
+        let pcb_str = include_str!("../assets/fpga.kicad_pcb");
+        let pcb_data = match kicad::parse_layers_only(pcb_str) {
+            Ok(pcb) => {
+                eprintln!("Successfully loaded PCB file with {} layers", pcb.layers.len());
+                Some(pcb)
+            }
+            Err(e) => {
+                eprintln!("Failed to parse PCB file: {:?}", e);
+                None
+            }
+        };
+        
+        // Set up active PCB layers if PCB was loaded
+        let mut active_pcb_layers = Vec::new();
+        if let Some(ref pcb) = pcb_data {
+            // Enable common layers by default
+            let default_layers = ["F.Cu", "B.Cu", "F.SilkS", "B.SilkS", "Edge.Cuts"];
+            for (_, layer) in &pcb.layers {
+                if default_layers.contains(&layer.name.as_str()) {
+                    active_pcb_layers.push(layer.name.clone());
+                }
+            }
+        }
+        
 
         // Initialize dock state with gerber view as the main content
         let view_settings_tab = Tab::new(TabKind::ViewSettings, SurfaceIndex::main(), NodeIndex(0));
         let drc_tab = Tab::new(TabKind::DRC, SurfaceIndex::main(), NodeIndex(1));
-        let gerber_tab = Tab::new(TabKind::GerberView, SurfaceIndex::main(), NodeIndex(2));
-        let log_tab = Tab::new(TabKind::EventLog, SurfaceIndex::main(), NodeIndex(3));
+        let kicad_tab = Tab::new(TabKind::KiCadSync, SurfaceIndex::main(), NodeIndex(2));
+        let gerber_tab = Tab::new(TabKind::GerberView, SurfaceIndex::main(), NodeIndex(3));
+        let log_tab = Tab::new(TabKind::EventLog, SurfaceIndex::main(), NodeIndex(4));
         
         // Create dock state with gerber view as the root
         let mut dock_state = DockState::new(vec![gerber_tab]);
@@ -403,7 +464,7 @@ impl DemoLensApp {
         let [left, _right] = surface.split_left(
             NodeIndex::root(),
             0.3, // Left panel takes 30% of width
-            vec![view_settings_tab, drc_tab],
+            vec![view_settings_tab, drc_tab, kicad_tab],
         );
         
         // Add event log to bottom of left panel
@@ -413,13 +474,16 @@ impl DemoLensApp {
             vec![log_tab],
         );
 
+        // Determine file type before moving pcb_data
+        let file_type = if pcb_data.is_some() { ui::FileType::KicadPcb } else { ui::FileType::Gerber };
+        
         let app = Self {
             layers,
             active_layer: LayerType::TopCopper,
-            pcb_data: None,
+            pcb_data,
             symbol_data: None,
-            active_pcb_layers: Vec::new(),
-            file_type: ui::FileType::Gerber,
+            active_pcb_layers,
+            file_type,
             selected_component: None,
             gerber_layer,
             view_state: ViewState::default(),
@@ -442,6 +506,10 @@ impl DemoLensApp {
             config_path: dirs::config_dir()
                 .map(|d| d.join("kiforge"))
                 .unwrap_or_default(),
+            kicad_monitor: kicad_api::KiCadMonitor::new(),
+            kicad_auto_refresh: true,
+            kicad_refresh_interval: 1.0,
+            kicad_synced_layers: Vec::new(),
         };
         
         // Add platform details
@@ -469,7 +537,27 @@ impl DemoLensApp {
      }
 
     fn reset_view(&mut self, viewport: Rect) {
-        // Find bounding box from all loaded layers
+        // Handle PCB view
+        if self.file_type == ui::FileType::KicadPcb {
+            if let Some(pcb) = &self.pcb_data {
+                let pcb_bounds = ui::pcb_renderer::PcbRenderer::calculate_pcb_bounds(pcb);
+                
+                // Set a reasonable default scale for PCB viewing
+                let scale_x = viewport.width() / (pcb_bounds.width() * 1.2);
+                let scale_y = viewport.height() / (pcb_bounds.height() * 1.2);
+                let scale = scale_x.min(scale_y).max(0.1);
+                
+                self.view_state.scale = scale;
+                self.view_state.translation = Vec2::new(
+                    viewport.center().x,
+                    viewport.center().y
+                );
+                self.needs_initial_view = false;
+                return;
+            }
+        }
+        
+        // Find bounding box from all loaded layers (for Gerber)
         let mut combined_bbox: Option<BoundingBox> = None;
         
         for layer_info in self.layers.values() {

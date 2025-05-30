@@ -26,5 +26,8 @@ logos = "0.14"
 uuid = { version = "1.0", features = ["v4"] }
 rfd = "0.15"
 
+# KiCad API integration
+# kicad-api-rs = "0.0.1"  # Not yet published on crates.io
+
 # delete this, it's just a cargo workspace workaround
 [workspace]

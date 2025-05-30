@@ -72,7 +72,7 @@ pub fn show_pcb_layer_panel(ui: &mut egui::Ui, app: &mut DemoLensApp, logger_sta
     }
 }
 
-fn get_layer_color(layer_name: &str) -> egui::Color32 {
+pub fn get_layer_color(layer_name: &str) -> egui::Color32 {
     match layer_name {
         "F.Cu" => egui::Color32::from_rgb(200, 50, 50),      // Front copper - red
         "B.Cu" => egui::Color32::from_rgb(50, 50, 200),      // Back copper - blue
