@@ -75,14 +75,16 @@ impl LayerType {
 pub struct LayerInfo {
     pub layer_type: LayerType,
     pub gerber_layer: Option<GerberLayer>,
+    pub raw_gerber_data: Option<String>,  // Store raw Gerber content for DRC parsing
     pub visible: bool,
 }
 
 impl LayerInfo {
-    pub fn new(layer_type: LayerType, gerber_layer: Option<GerberLayer>, visible: bool) -> Self {
+    pub fn new(layer_type: LayerType, gerber_layer: Option<GerberLayer>, raw_gerber_data: Option<String>, visible: bool) -> Self {
         Self {
             layer_type,
             gerber_layer,
+            raw_gerber_data,
             visible,
         }
     }
