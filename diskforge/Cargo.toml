@@ -1,0 +1,32 @@
+[package]
+name = "diskforge"
+version = "0.1.0"
+edition = "2021"
+authors = ["James Bonanno <atlantix-eda@proton.me"]
+description = "An SD Card formatter and platform for disk image creation"
+license = "MIT"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+eframe = { workspace = true }
+egui = { workspace = true }
+egui_dock = { workspace = true }
+egui_extras = { workspace = true }
+egui_lens = { path = "../../crates/egui_lens" }
+egui_mobius_reactive = { workspace = true }
+egui_mobius = { workspace = true }
+egui_mobius_widgets = { workspace = true }
+chrono = { workspace = true }
+image = { workspace = true }
+once_cell = { workspace = true }
+egui_taffy = { workspace = true }
+dirs = { workspace = true }
+tokio = { workspace = true }
+env_logger = { workspace = true }
+log = { workspace = true }
+egui_plot = { workspace = true }
+ndarray = { workspace = true }
+sysinfo = { workspace = true }
+local-ip-address = { workspace = true }
+rfd = { workspace = true }

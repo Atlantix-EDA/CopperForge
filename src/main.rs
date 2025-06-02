@@ -7,6 +7,9 @@ use egui::ViewportBuilder;
 use egui_dock::{DockArea, DockState, NodeIndex, Style, SurfaceIndex};
 use serde::{Serialize, Deserialize};
 
+mod project_state;
+use project_state::{ProjectConfig, ProjectState};
+
 /// egui_lens imports
 use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 
@@ -520,6 +523,7 @@ enum TabKind {
     DRC,
     GerberView,
     EventLog,
+    Project,
 }
 
 pub struct TabParams<'a> {
@@ -578,6 +582,17 @@ pub struct DemoLensApp {
     
     // Grid Settings
     pub grid_settings: GridSettings,
+    
+    // Project management
+    pub project_config: ProjectConfig,
+    pub file_dialog: egui_file_dialog::FileDialog,
+    pub last_picked_file: Option<PathBuf>,
+    
+    // Legacy fields for compatibility (will be removed later)
+    pub selected_pcb_file: Option<PathBuf>,
+    pub generated_gerber_dir: Option<PathBuf>,
+    pub generating_gerbers: bool,
+    pub loading_gerbers: bool,
 
     // Dock state
     dock_state: DockState<Tab>,
@@ -599,6 +614,7 @@ impl Tab {
             TabKind::DRC => "DRC".to_string(),
             TabKind::GerberView => "Gerber View".to_string(),
             TabKind::EventLog => "Event Log".to_string(),
+            TabKind::Project => "Project".to_string(),
         }
     }
 
@@ -653,6 +669,11 @@ impl Tab {
             TabKind::EventLog => {
                 let logger = ReactiveEventLogger::with_colors(&params.app.logger_state, &params.app.log_colors);
                 logger.show(ui);
+            }
+            TabKind::Project => {
+                let logger_state_clone = params.app.logger_state.clone();
+                let log_colors_clone = params.app.log_colors.clone();
+                ui::show_project_panel(ui, params.app, &logger_state_clone, &log_colors_clone);
             }
         }
     }
@@ -976,6 +997,10 @@ impl Drop for DemoLensApp {
     fn drop(&mut self) {
         // Save dock state when application closes
         self.save_dock_state();
+        // Save project config
+        if let Err(e) = self.project_config.save_to_file(&self.config_path) {
+            eprintln!("Failed to save project config: {}", e);
+        }
     }
 }
 
@@ -1051,31 +1076,39 @@ impl DemoLensApp {
         details.get_os();
         
 
-        // Initialize dock state with gerber view as the main content
-        let view_settings_tab = Tab::new(TabKind::ViewSettings, SurfaceIndex::main(), NodeIndex(0));
-        let drc_tab = Tab::new(TabKind::DRC, SurfaceIndex::main(), NodeIndex(1));
-        let gerber_tab = Tab::new(TabKind::GerberView, SurfaceIndex::main(), NodeIndex(2));
-        let log_tab = Tab::new(TabKind::EventLog, SurfaceIndex::main(), NodeIndex(3));
-        
-        // Create dock state with gerber view as the root
-        let mut dock_state = DockState::new(vec![gerber_tab]);
-        let surface = dock_state.main_surface_mut();
-        
-        // Split left for control panels
-        let [left, _right] = surface.split_left(
-            NodeIndex::root(),
-            0.3, // Left panel takes 30% of width
-            vec![view_settings_tab, drc_tab],
-        );
-        
-        // Add event log to bottom of left panel
-        surface.split_below(
-            left,
-            0.7, // Top takes 70% of height
-            vec![log_tab],
-        );
+        // Initialize dock state - try to load from saved config first
+        let dock_state = if let Some(saved_dock_state) = Self::load_dock_state() {
+            saved_dock_state
+        } else {
+            // Create default dock layout if no saved state exists
+            let view_settings_tab = Tab::new(TabKind::ViewSettings, SurfaceIndex::main(), NodeIndex(0));
+            let drc_tab = Tab::new(TabKind::DRC, SurfaceIndex::main(), NodeIndex(1));
+            let project_tab = Tab::new(TabKind::Project, SurfaceIndex::main(), NodeIndex(2));
+            let gerber_tab = Tab::new(TabKind::GerberView, SurfaceIndex::main(), NodeIndex(3));
+            let log_tab = Tab::new(TabKind::EventLog, SurfaceIndex::main(), NodeIndex(4));
+            
+            // Create dock state with gerber view as the root
+            let mut dock_state = DockState::new(vec![gerber_tab]);
+            let surface = dock_state.main_surface_mut();
+            
+            // Split left for control panels
+            let [left, _right] = surface.split_left(
+                NodeIndex::root(),
+                0.3, // Left panel takes 30% of width
+                vec![view_settings_tab, drc_tab, project_tab],
+            );
+            
+            // Add event log to bottom of left panel
+            surface.split_below(
+                left,
+                0.7, // Top takes 70% of height
+                vec![log_tab],
+            );
+            
+            dock_state
+        };
 
-        let app = Self {
+        let mut app = Self {
             layers,
             active_layer: LayerType::TopCopper,
             gerber_layer,
@@ -1101,16 +1134,108 @@ impl DemoLensApp {
             corner_overlay_shapes: Vec::new(),
             mouse_pos_display_units: false, // Default to mm
             grid_settings: GridSettings::default(),
+            project_config: ProjectConfig::default(),
+            file_dialog: egui_file_dialog::FileDialog::new(),
+            last_picked_file: None,
+            selected_pcb_file: None,
+            generated_gerber_dir: None,
+            generating_gerbers: false,
+            loading_gerbers: false,
             dock_state,
             config_path: dirs::config_dir()
                 .map(|d| d.join("kiforge"))
                 .unwrap_or_default(),
         };
         
+        // Load project config from disk
+        if let Ok(config) = ProjectConfig::load_from_file(&app.config_path) {
+            app.project_config = config;
+            
+            // Sync legacy fields with project state
+            match &app.project_config.state {
+                ProjectState::NoProject => {},
+                ProjectState::PcbSelected { pcb_path } |
+                ProjectState::GeneratingGerbers { pcb_path } => {
+                    app.selected_pcb_file = Some(pcb_path.clone());
+                },
+                ProjectState::GerbersGenerated { pcb_path, gerber_dir } |
+                ProjectState::LoadingGerbers { pcb_path, gerber_dir } |
+                ProjectState::Ready { pcb_path, gerber_dir, .. } => {
+                    app.selected_pcb_file = Some(pcb_path.clone());
+                    app.generated_gerber_dir = Some(gerber_dir.clone());
+                },
+            }
+        }
+        
         // Add platform details
         app.add_banner_platform_details();
         
+        // Initialize project based on saved state
+        app.initialize_project();
+        
         app
+    }
+    
+    fn initialize_project(&mut self) {
+        let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
+        
+        match &self.project_config.state.clone() {
+            ProjectState::NoProject => {
+                logger.log_info("No previous project found. Please select a PCB file.");
+            },
+            ProjectState::PcbSelected { pcb_path } => {
+                if pcb_path.exists() {
+                    logger.log_info(&format!("Restored PCB file: {}", pcb_path.display()));
+                    if self.project_config.auto_generate_on_startup {
+                        logger.log_info("Auto-generating gerbers...");
+                        self.generating_gerbers = true;
+                    }
+                } else {
+                    logger.log_error(&format!("PCB file not found: {}", pcb_path.display()));
+                    self.project_config.state = ProjectState::NoProject;
+                }
+            },
+            ProjectState::GeneratingGerbers { pcb_path } => {
+                // Resume generation if interrupted
+                if pcb_path.exists() {
+                    logger.log_info("Resuming gerber generation...");
+                    self.generating_gerbers = true;
+                } else {
+                    self.project_config.state = ProjectState::NoProject;
+                }
+            },
+            ProjectState::GerbersGenerated { pcb_path, gerber_dir } => {
+                if pcb_path.exists() && gerber_dir.exists() {
+                    logger.log_info(&format!("Found generated gerbers at: {}", gerber_dir.display()));
+                    if self.project_config.auto_generate_on_startup {
+                        logger.log_info("Auto-loading gerbers...");
+                        self.loading_gerbers = true;
+                    }
+                } else {
+                    logger.log_error("PCB or gerber files not found");
+                    self.project_config.state = ProjectState::NoProject;
+                }
+            },
+            ProjectState::LoadingGerbers { pcb_path, gerber_dir } => {
+                // Resume loading if interrupted
+                if pcb_path.exists() && gerber_dir.exists() {
+                    logger.log_info("Resuming gerber loading...");
+                    self.loading_gerbers = true;
+                } else {
+                    self.project_config.state = ProjectState::NoProject;
+                }
+            },
+            ProjectState::Ready { pcb_path, gerber_dir, .. } => {
+                if pcb_path.exists() && gerber_dir.exists() {
+                    logger.log_info(&format!("Project ready: {}", pcb_path.file_name().unwrap_or_default().to_string_lossy()));
+                    // Auto-load the gerbers
+                    self.loading_gerbers = true;
+                } else {
+                    logger.log_error("Project files not found");
+                    self.project_config.state = ProjectState::NoProject;
+                }
+            },
+        }
     }
 
     /// **Add platform details to the app**
@@ -1191,6 +1316,18 @@ impl DemoLensApp {
             }
         }
     }
+
+    fn load_dock_state() -> Option<DockState<Tab>> {
+        if let Some(config_dir) = dirs::config_dir() {
+            let config_path = config_dir.join("kiforge").join("dock_state.json");
+            if let Ok(json) = fs::read_to_string(config_path) {
+                if let Ok(dock_state) = serde_json::from_str::<DockState<Tab>>(&json) {
+                    return Some(dock_state);
+                }
+            }
+        }
+        None
+    }
 }
 
 /// Implement the eframe::App trait for DemoLensApp
@@ -1239,7 +1376,7 @@ impl eframe::App for DemoLensApp {
 fn main() -> eframe::Result<()> {
     env_logger::init(); // Log to stderr (optional).
     eframe::run_native(
-        "Gerber Viewer Lens Demo (egui)",
+        "KiForge - PCB & CAM for KiCad",
         eframe::NativeOptions {
             viewport: ViewportBuilder::default().with_inner_size([1280.0, 768.0]),
             ..Default::default()

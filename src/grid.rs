@@ -11,8 +11,8 @@ pub struct GridSettings {
 impl Default for GridSettings {
     fn default() -> Self {
         Self {
-            enabled: false,
-            spacing_mils: 10.0,
+            enabled: true,
+            spacing_mils: 100.0,
             dot_size: 1.0,
         }
     }

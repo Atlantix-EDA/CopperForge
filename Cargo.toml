@@ -20,6 +20,9 @@ local-ip = "0.1.0"
 chrono = "0.4.41"
 local-ip-address = "0.6.5"
 egui_dock = {version = "0.16.0", features=["serde"]}
+rfd = "0.15.3"
+notify = "8.0.0"
+egui-file-dialog = "0.9.0"
 
 
 # delete this, it's just a cargo workspace workaround
