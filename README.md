@@ -24,7 +24,7 @@ Shown below is a the loading of a PCB design with over 400+ components,
 where the KiCad pcb design is loaded and the gerbers are generated 
 within the tool and the display is updated. 
 
-
+![](https://github.com/saturn77/KiForge/blob/master/assets/media/KiForge_usage.gif)
 
 ## Key Features
 
