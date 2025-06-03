@@ -10,27 +10,29 @@
 
 </div>
 
-KiForge is designed to support all phases of design optimization beginning with the PCB design flow and continuing to CAM and manfuacturing. It's considering a modern software EDA tool - built with Rust, egui, and associated crates, it leverages the fast memory management, memory safety, and fast rendering operates that the Rust ecosystem provides. 
+KiForge is a modern EDA tool designed to optimize every phase of PCB development, from initial design through manufacturing. Built with Rust and egui, it delivers fast, memory-safe operations with real-time rendering performance.
 
-Features include PCB design rule checking and optimizations, real time bill of materials, component placement information, and CAM operations for manufacturing. 
+**Key capabilities include:**
+- PCB design rule checking and optimization
+- Real-time bill of materials generation
+- Component placement analysis
+- CAM operations for manufacturing preparation
 
-Designers and engineers can employ KiForge to be a **companion design tool to KiCad**, running it in parallel to KiCad PCB to obtain informatin that they during PCB design as well as packaging the design for manufacturing. 
+KiForge serves as a **companion tool to KiCad**, running alongside KiCad PCB to provide enhanced insights during design and streamline manufacturing preparation. 
 
-This software application takes from various Rust based projects -- the `MakerPnP` project with `gerber_types` and `gerber_parser`, and the `gerber_viewer`. It takes from the `egui_mobius` software stack - `egui_mobius_reactive` and `egui_lens` to support the integrated event logger and reactive state management. 
+The application leverages proven Rust ecosystem libraries including `gerber_types`, `gerber_parser`, and `gerber_viewer` from the `MakerPnP` project, plus the `egui_mobius` stack for reactive state management and event logging.
 
-What will make KiForge different from other applications is the use of algorithms for PCB manufacturing optimization, all in a memory safe multi-threaded environment. 
+What sets KiForge apart is its focus on algorithmic PCB manufacturing optimization within a memory-safe, multi-threaded environment. 
 
-Shown below is a the loading of a PCB design with over 400+ components,
-where the KiCad pcb design is loaded and the gerbers are generated 
-within the tool and the display is updated. 
+Shown below is the loading of a PCB design with over 400+ components, where the KiCad PCB design is loaded, the gerbers are generated within the tool, and the display is updated. 
 
-![](https://github.com/saturn77/KiForge/blob/master/assets/media/KiForge_usage.gif)
+![KiForge Demo](./assets/media/KiForge_usage.gif)
 
 ## Key Features
 
 - **Gerber Import & Visualization**: Import and view multi-layer Gerber files with support for all standard PCB layers
-- **Design Rule Checking (DRC)**: Run comprehensive manufacturing checks to catch issues before production
-- **Panelization Support**: Optimize PCB panel layouts to maximize material usage and reduce manufacturing costs
+- **Design Rule Checking (DRC)** *(Improvements in Progress)*: Run comprehensive manufacturing checks to catch issues before production
+- **Panelization Support** *(Work in Progress)*: Optimize PCB panel layouts to maximize material usage and reduce manufacturing costs
 - **Component Data Import** *(Work in Progress)*: Import and visualize PCB part data for assembly preparation
 
 ## Current Capabilities
@@ -48,20 +50,59 @@ within the tool and the display is updated.
 
 ## Roadmap
 
-- [ ] Direct KiCad pcb file import (done)
-- [ ] Real time BOM display 
-- [ ] Manfuacutring Cost Estimate 
-- [ ] Identification of library issues, such as lack of 3D symbols
-- [ ] Enhanced DRC with customizable rule sets - algorithmic approaches
+### Completed ✅
+- Direct KiCad PCB file import
+- Multi-layer Gerber visualization
+- Interactive layer controls
+- Basic DRC functionality
 
+### In Development 🚧
+- Real-time BOM display 
+- Enhanced DRC with customizable rule sets
+- Manufacturing optimization algorithms
+
+### Planned 📋
+- Manufacturing cost estimation
+- Component library validation
+- Advanced panelization tools
+- Assembly preparation features
+- Integration with external CAM tools
+
+
+## Requirements
+
+- **Rust**: 1.65.0 or higher (see [rustup.rs](https://rustup.rs/) for installation)
+- **KiCad**: 9.0+ (for PCB file import functionality)
+- **Operating System**: Linux, macOS, or Windows
 
 ## Getting Started
 
-```bash
-git clone https://www.github.com/saturn77/KiForge.git
-cd KiForge
-cargo run
-```
+### Installation
+
+1. **Clone the repository:**
+   ```bash
+   git clone https://www.github.com/saturn77/KiForge.git
+   cd KiForge
+   ```
+
+2. **Build and run:**
+   ```bash
+   cargo run --release
+   ```
+
+### Basic Usage
+
+1. **Load a PCB file:** Use File → Open to load a KiCad `.kicad_pcb` file
+2. **View layers:** Toggle layer visibility using the layer controls panel
+3. **Run DRC:** Access Design Rule Check from the DRC panel
+4. **Adjust settings:** Configure grid, orientation, and view options
+
+### Supported File Formats
+
+- KiCad PCB files (`.kicad_pcb`)
+- Gerber files (`.gbr`, `.ger`)
+- Excellon drill files (`.drl`)
+- Pick and place files (`.csv`)
 
 ## License
 
