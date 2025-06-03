@@ -20,7 +20,7 @@ KiForge is a modern EDA tool designed to optimize every phase of PCB development
 
 KiForge serves as a **companion tool to KiCad**, running alongside KiCad PCB to provide enhanced insights during design and streamline manufacturing preparation. 
 
-The application leverages proven Rust ecosystem libraries including `gerber_types`, `gerber_parser`, and `gerber_viewer` from the `MakerPnP` project, plus the `egui_mobius` stack for reactive state management and event logging.
+The application leverages proven Rust ecosystem libraries including `gerber_types`, `gerber_parser`, and `gerber_viewer` from the `MakerPnP` project, plus the `egui_mobius` stack with `egui_lens` for reactive state management and event logging.
 
 What sets KiForge apart is its focus on algorithmic PCB manufacturing optimization within a memory-safe, multi-threaded environment. 
 
