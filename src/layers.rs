@@ -10,6 +10,8 @@ pub enum LayerType {
     BottomSilk,
     TopSoldermask,
     BottomSoldermask,
+    TopPaste,
+    BottomPaste,
     MechanicalOutline,
 }
 
@@ -22,6 +24,8 @@ impl LayerType {
             Self::BottomSilk,
             Self::TopSoldermask,
             Self::BottomSoldermask,
+            Self::TopPaste,
+            Self::BottomPaste,
             Self::MechanicalOutline,
         ]
     }
@@ -34,6 +38,8 @@ impl LayerType {
             Self::BottomSilk => "Bottom Silk",
             Self::TopSoldermask => "Top Soldermask",
             Self::BottomSoldermask => "Bottom Soldermask",
+            Self::TopPaste => "Top Paste",
+            Self::BottomPaste => "Bottom Paste",
             Self::MechanicalOutline => "Mechanical Outline",
         }
     }
@@ -46,6 +52,8 @@ impl LayerType {
             Self::BottomSilk => Color32::from_rgba_premultiplied(255, 255, 255, 250),    // White silk
             Self::TopSoldermask => Color32::from_rgba_premultiplied(0, 132, 80, 180),    // Green with transparency
             Self::BottomSoldermask => Color32::from_rgba_premultiplied(0, 80, 132, 180), // Blue for bottom soldermask
+            Self::TopPaste => Color32::from_rgba_premultiplied(192, 192, 192, 200),      // Light gray for paste
+            Self::BottomPaste => Color32::from_rgba_premultiplied(128, 128, 128, 200),   // Darker gray for bottom paste
             Self::MechanicalOutline => Color32::from_rgba_premultiplied(255, 255, 0, 250), // Yellow outline
         }
     }
@@ -58,14 +66,16 @@ impl LayerType {
             Self::BottomSilk => "cmod_s7-B_SilkS.gbr",
             Self::TopSoldermask => "cmod_s7-F_Mask.gbr",
             Self::BottomSoldermask => "cmod_s7-B_Mask.gbr",
+            Self::TopPaste => "cmod_s7-F_Paste.gbr",
+            Self::BottomPaste => "cmod_s7-B_Paste.gbr",
             Self::MechanicalOutline => "cmod_s7-Edge_Cuts.gbr",
         }
     }
     
     pub fn should_render(&self, showing_top: bool) -> bool {
         match self {
-            Self::TopCopper | Self::TopSilk | Self::TopSoldermask => showing_top,
-            Self::BottomCopper | Self::BottomSilk | Self::BottomSoldermask => !showing_top,
+            Self::TopCopper | Self::TopSilk | Self::TopSoldermask | Self::TopPaste => showing_top,
+            Self::BottomCopper | Self::BottomSilk | Self::BottomSoldermask | Self::BottomPaste => !showing_top,
             Self::MechanicalOutline => true, // Always show outline
         }
     }

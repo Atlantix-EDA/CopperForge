@@ -1,4 +1,4 @@
-use crate::{DemoLensApp, LayerType, LayerInfo};
+use crate::{DemoLensApp, LayerInfo};
 use crate::project_state::{ProjectState};
 use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
@@ -338,71 +338,86 @@ fn generate_gerbers_from_pcb(pcb_path: &Path, logger: &ReactiveEventLogger) -> O
 }
 
 fn load_gerbers_into_viewer(app: &mut DemoLensApp, gerber_dir: &Path, logger: &ReactiveEventLogger) {
-    // Clear all existing layers first
+    use crate::layer_detection::UnassignedGerber;
+    
+    // Clear all existing layers and unassigned gerbers first
     logger.log_info("Clearing existing gerber layers...");
     app.layers.clear();
-    
-    // Map gerber file suffixes to layer types
-    // Note: KiCad may output different suffixes depending on version
-    let layer_mappings = [
-        ("-F_Cu.gbr", LayerType::TopCopper),
-        ("-B_Cu.gbr", LayerType::BottomCopper),
-        ("-F_SilkS.gbr", LayerType::TopSilk),
-        ("-B_SilkS.gbr", LayerType::BottomSilk),
-        ("-F_Silkscreen.gbr", LayerType::TopSilk),  // Alternative naming
-        ("-B_Silkscreen.gbr", LayerType::BottomSilk),  // Alternative naming
-        ("-F_Mask.gbr", LayerType::TopSoldermask),
-        ("-B_Mask.gbr", LayerType::BottomSoldermask),
-        ("-Edge_Cuts.gbr", LayerType::MechanicalOutline),
-    ];
+    app.unassigned_gerbers.clear();
+    app.layer_assignments.clear();
     
     let mut loaded_count = 0;
+    let mut unassigned_count = 0;
     
-    // Read directory and load matching gerber files
+    // Read directory and load all gerber files
     if let Ok(entries) = std::fs::read_dir(gerber_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) == Some("gbr") {
                 let filename = path.file_name()
                     .and_then(|n| n.to_str())
-                    .unwrap_or("");
+                    .unwrap_or("")
+                    .to_string();
                 
-                // Find matching layer type
-                for (suffix, layer_type) in &layer_mappings {
-                    if filename.ends_with(suffix) {
-                        // Load the gerber file
-                        match std::fs::read_to_string(&path) {
-                            Ok(gerber_content) => {
-                                let reader = BufReader::new(gerber_content.as_bytes());
-                                match parse(reader) {
-                                    Ok(doc) => {
-                                        let commands = doc.into_commands();
-                                        let gerber_layer = GerberLayer::new(commands);
-                                        
-                                        // Create layer info with all layers visible (checkbox checked) by default
-                                        // The actual rendering is controlled by should_render() based on TOP/BOTTOM view
+                // Try to load and parse the gerber file
+                match std::fs::read_to_string(&path) {
+                    Ok(gerber_content) => {
+                        let reader = BufReader::new(gerber_content.as_bytes());
+                        match parse(reader) {
+                            Ok(doc) => {
+                                let commands = doc.into_commands();
+                                let gerber_layer = GerberLayer::new(commands);
+                                
+                                // Try to detect layer type using regex patterns
+                                if let Some(detected_type) = app.layer_detector.detect_layer_type(&filename) {
+                                    // Check if we already have this layer type assigned
+                                    if let Some(existing_assignment) = app.layer_assignments.iter()
+                                        .find(|(_, layer_type)| **layer_type == detected_type)
+                                        .map(|(fname, _)| fname.clone()) {
+                                        // This layer type is already assigned to another file
+                                        logger.log_warning(&format!(
+                                            "Layer type {:?} already assigned to {}. Adding {} to unassigned list.",
+                                            detected_type, existing_assignment, filename
+                                        ));
+                                        app.unassigned_gerbers.push(UnassignedGerber {
+                                            filename: filename.clone(),
+                                            content: gerber_content.clone(),
+                                            parsed_layer: gerber_layer,
+                                        });
+                                        unassigned_count += 1;
+                                    } else {
+                                        // Create layer info
                                         let layer_info = LayerInfo::new(
-                                            *layer_type,
+                                            detected_type,
                                             Some(gerber_layer),
-                                            Some(gerber_content),
+                                            Some(gerber_content.clone()),
                                             true, // All layers have their checkbox checked by default
                                         );
                                         
                                         // Insert into layers map
-                                        app.layers.insert(*layer_type, layer_info);
+                                        app.layers.insert(detected_type, layer_info);
+                                        app.layer_assignments.insert(filename.clone(), detected_type);
                                         loaded_count += 1;
-                                        logger.log_info(&format!("Loaded {} as {:?}", filename, layer_type));
+                                        logger.log_info(&format!("Loaded {} as {:?}", filename, detected_type));
                                     }
-                                    Err(e) => {
-                                        logger.log_error(&format!("Failed to parse {}: {:?}", filename, e));
-                                    }
+                                } else {
+                                    // Could not detect layer type, add to unassigned list
+                                    logger.log_warning(&format!("Could not detect layer type for: {}", filename));
+                                    app.unassigned_gerbers.push(UnassignedGerber {
+                                        filename: filename.clone(),
+                                        content: gerber_content,
+                                        parsed_layer: gerber_layer,
+                                    });
+                                    unassigned_count += 1;
                                 }
                             }
                             Err(e) => {
-                                logger.log_error(&format!("Failed to read {}: {}", filename, e));
+                                logger.log_error(&format!("Failed to parse {}: {:?}", filename, e));
                             }
                         }
-                        break; // Found matching layer type
+                    }
+                    Err(e) => {
+                        logger.log_error(&format!("Failed to read {}: {}", filename, e));
                     }
                 }
             }
@@ -411,8 +426,13 @@ fn load_gerbers_into_viewer(app: &mut DemoLensApp, gerber_dir: &Path, logger: &R
     
     if loaded_count > 0 {
         logger.log_info(&format!("Successfully loaded {} gerber layers", loaded_count));
+        if unassigned_count > 0 {
+            logger.log_warning(&format!("{} gerber files could not be automatically assigned", unassigned_count));
+        }
         app.needs_initial_view = true; // Trigger view reset
+    } else if unassigned_count > 0 {
+        logger.log_warning(&format!("No layers were automatically detected. {} gerber files need manual assignment.", unassigned_count));
     } else {
-        logger.log_error("No gerber files were loaded");
+        logger.log_error("No gerber files were found");
     }
 }

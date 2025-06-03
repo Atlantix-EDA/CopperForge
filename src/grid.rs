@@ -4,7 +4,7 @@ use gerber_viewer::ViewState;
 
 pub struct GridSettings {
     pub enabled: bool,
-    pub spacing_mils: f32,
+    pub spacing_mm: f32,  // Always store in mm internally
     pub dot_size: f32,
 }
 
@@ -12,7 +12,7 @@ impl Default for GridSettings {
     fn default() -> Self {
         Self {
             enabled: true,
-            spacing_mils: 100.0,
+            spacing_mm: 2.54,  // 100 mils = 2.54 mm
             dot_size: 1.0,
         }
     }
@@ -29,9 +29,8 @@ pub fn draw_grid(
         return;
     }
     
-    // The CMOS S7 gerber files use millimeters (mm) as the unit
-    // 1 mil = 0.0254 mm, so to convert mils to mm we multiply by 0.0254
-    let grid_spacing_gerber = settings.spacing_mils as f64 * 0.0254;
+    // Grid spacing is stored in mm
+    let grid_spacing_gerber = settings.spacing_mm as f64;
     
     // Convert to screen units
     let grid_spacing_screen = grid_spacing_gerber * view_state.scale as f64;
@@ -90,8 +89,8 @@ pub fn draw_grid(
 }
 
 /// Get grid visibility status message
-pub fn get_grid_status(view_state: &ViewState, grid_spacing_mils: f32) -> GridStatus {
-    let grid_spacing_gerber = grid_spacing_mils as f64 * 0.0254;
+pub fn get_grid_status(view_state: &ViewState, grid_spacing_mm: f32) -> GridStatus {
+    let grid_spacing_gerber = grid_spacing_mm as f64;
     let grid_spacing_screen = grid_spacing_gerber * view_state.scale as f64;
     
     if grid_spacing_screen < 5.0 {

@@ -24,7 +24,11 @@ pub fn show_drc_panel<'a>(
                     logger.log_info("Analyzing Gerber files with imageproc trace detection");
                     
                     // Run the actual DRC check (now includes OpenCV)
-                    let violations = crate::run_simple_drc_check(app);
+                    let violations = crate::drc::run_simple_drc_check(
+                        &app.layers,
+                        &app.drc_rules,
+                        &mut app.trace_quality_issues
+                    );
                     
                     logger.log_info("Running imageproc edge detection and morphological analysis");
                     logger.log_info("Checking trace widths with Canny edge detection");
@@ -196,7 +200,11 @@ pub fn show_drc_panel<'a>(
                     logger.log_info("Analyzing Gerber files...");
                     
                     // Run the actual DRC check (now includes OpenCV)
-                    let violations = crate::run_simple_drc_check(app);
+                    let violations = crate::drc::run_simple_drc_check(
+                        &app.layers,
+                        &app.drc_rules,
+                        &mut app.trace_quality_issues
+                    );
                     
                     logger.log_info("Running imageproc edge detection and morphological analysis");
                     logger.log_info("Checking trace widths with Canny edge detection");
@@ -328,7 +336,11 @@ pub fn show_drc_panel<'a>(
                     logger.log_info("Starting trace quality analysis...");
                     
                     // Run the DRC check which includes quality analysis
-                    let violations = crate::run_simple_drc_check(app);
+                    let _violations = crate::drc::run_simple_drc_check(
+                        &app.layers,
+                        &app.drc_rules,
+                        &mut app.trace_quality_issues
+                    );
                     
                     let corner_issues = app.trace_quality_issues.iter()
                         .filter(|issue| matches!(issue.issue_type, TraceQualityType::SharpCorner))

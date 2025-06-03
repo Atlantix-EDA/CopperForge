@@ -1,5 +1,8 @@
-use gerber_viewer::{GerberLayer, GerberPrimitive};
-use gerber_viewer::position::Position;
+use gerber_viewer::{GerberLayer, GerberPrimitive, BoundingBox};
+use gerber_viewer::position::{Position, Vector};
+use std::collections::HashMap;
+use std::io::BufReader;
+use gerber_viewer::gerber_parser::parse;
 
 #[derive(Debug, Clone)]
 pub struct DrcSimple {
@@ -67,6 +70,91 @@ pub enum TraceQualityType {
 pub struct CornerOverlayShape {
     pub points: Vec<Position>,  // Polygon points forming the filled corner
     pub trace_width: f32,
+}
+
+/// DRC Rules structure with unit conversion support
+#[derive(Debug, Clone)]
+pub struct DrcRules {
+    pub min_trace_width: f32,      // mm
+    pub min_via_diameter: f32,     // mm  
+    pub min_drill_diameter: f32,   // mm
+    pub min_spacing: f32,          // mm
+    pub min_annular_ring: f32,     // mm
+    pub use_mils: bool,            // true = display in mils, false = mm
+}
+
+impl Default for DrcRules {
+    fn default() -> Self {
+        Self {
+            min_trace_width: 0.15,    // 0.15mm = ~6 mil
+            min_via_diameter: 0.3,    // 0.3mm = ~12 mil
+            min_drill_diameter: 0.2,  // 0.2mm = ~8 mil
+            min_spacing: 0.15,        // 0.15mm = ~6 mil
+            min_annular_ring: 0.1,    // 0.1mm = ~4 mil
+            use_mils: false,          // Default to mm
+        }
+    }
+}
+
+impl DrcRules {
+    /// Convert mm to mils (1 mm = 39.3701 mils)
+    pub fn mm_to_mils(mm: f32) -> f32 {
+        mm * 39.3701
+    }
+    
+    /// Convert mils to mm (1 mil = 0.0254 mm)
+    pub fn mils_to_mm(mils: f32) -> f32 {
+        mils * 0.0254
+    }
+    
+    /// Get display value (convert to mils if use_mils is true)
+    pub fn get_display_value(&self, mm_value: f32) -> f32 {
+        if self.use_mils {
+            Self::mm_to_mils(mm_value)
+        } else {
+            mm_value
+        }
+    }
+    
+    /// Set value from display (convert from mils if use_mils is true)
+    pub fn set_from_display(&self, display_value: f32) -> f32 {
+        if self.use_mils {
+            Self::mils_to_mm(display_value)
+        } else {
+            display_value
+        }
+    }
+    
+    /// Get unit suffix
+    pub fn unit_suffix(&self) -> &str {
+        if self.use_mils { " mils" } else { " mm" }
+    }
+}
+
+/// DRC violation result
+#[derive(Debug, Clone)]
+pub struct DrcViolation {
+    pub rule_name: String,
+    pub description: String,
+    pub layer: String,
+    pub measured_value: f32,  // mm
+    pub required_value: f32,  // mm
+    pub x: f32,              // mm
+    pub y: f32,              // mm
+}
+
+impl DrcViolation {
+    pub fn format_message(&self) -> String {
+        format!("{}: {} on {} - measured {:.3}mm, required {:.3}mm at ({:.1}, {:.1})",
+            self.rule_name,
+            self.description,
+            self.layer,
+            self.measured_value,
+            self.required_value,
+            self.x,
+            self.y
+        )
+    }
 }
 
 impl DrcSimple {
@@ -391,7 +479,7 @@ impl DrcSimple {
             let corner_pos = Position::new(corner_issue.location.0 as f64, corner_issue.location.1 as f64);
             
             // Find the line segments that form this corner
-            if let Some((idx1, idx2, dir1, dir2)) = self.find_corner_segments(corner_pos, original_primitives, 0.001) {
+            if let Some((idx1, _idx2, dir1, dir2)) = self.find_corner_segments(corner_pos, original_primitives, 0.001) {
                 // Get the trace width from one of the lines
                 let trace_width = if let GerberPrimitive::Line { width, .. } = &original_primitives[idx1] {
                     *width as f32
@@ -754,4 +842,371 @@ mod tests {
         };
         assert_eq!(drc.lines_only, true);
     }
+}
+
+// Main DRC checking functions moved from main.rs
+
+/// Helper function to check if an aperture is likely a trace (not a pad/pour)
+pub fn is_trace_aperture(diameter: f32) -> bool {
+    // Apertures smaller than 0.5mm (20 mils) are likely traces
+    // Larger apertures are likely pads or copper pours
+    diameter < 0.5
+}
+
+/// Helper function to determine if a location is likely a trace (not in a pad cluster)
+pub fn is_likely_trace_location(_x: f32, _y: f32, _diameter: f32) -> bool {
+    // TODO: Implement clustering logic to identify pad locations
+    // For now, accept all locations
+    true
+}
+
+/// Check if a point is within the PCB boundary
+pub fn is_within_pcb_boundary(x: f32, y: f32, boundary: &BoundingBox) -> bool {
+    x >= boundary.min.x as f32 && 
+    x <= boundary.max.x as f32 && 
+    y >= boundary.min.y as f32 && 
+    y <= boundary.max.y as f32
+}
+
+/// Extract coordinates from a gerber command string
+pub fn extract_coordinates_from_command(command_str: &str) -> (f32, f32) {
+    let mut x = 0.0;
+    let mut y = 0.0;
+    
+    // Extract X coordinate
+    if let Some(x_start) = command_str.find("x: ") {
+        let x_offset = x_start + 3;
+        if let Some(x_end) = command_str[x_offset..].find(',') {
+            if let Ok(x_nano) = command_str[x_offset..x_offset + x_end].parse::<f32>() {
+                x = x_nano;
+            }
+        }
+    }
+    
+    // Extract Y coordinate  
+    if let Some(y_start) = command_str.find("y: ") {
+        let y_offset = y_start + 3;
+        if let Some(y_end) = command_str[y_offset..].find(' ') {
+            if let Ok(y_nano) = command_str[y_offset..y_offset + y_end].parse::<f32>() {
+                y = y_nano;
+            }
+        }
+    }
+    
+    (x, y)
+}
+
+/// Cluster DRC violations by trace  
+pub fn cluster_violations_per_trace(violations: &[DrcViolation]) -> Vec<DrcViolation> {
+    if violations.is_empty() {
+        return Vec::new();
+    }
+    
+    // Group violations by proximity (traces are continuous)
+    let mut clusters: Vec<Vec<&DrcViolation>> = Vec::new();
+    let cluster_distance = 5.0; // mm - violations within 5mm are likely same trace
+    
+    for violation in violations {
+        let mut added_to_cluster = false;
+        
+        for cluster in &mut clusters {
+            // Check if this violation is close to any violation in the cluster
+            for cluster_violation in cluster.iter() {
+                let dx = violation.x - cluster_violation.x;
+                let dy = violation.y - cluster_violation.y;
+                let distance = (dx * dx + dy * dy).sqrt();
+                
+                if distance <= cluster_distance {
+                    cluster.push(violation);
+                    added_to_cluster = true;
+                    break;
+                }
+            }
+            if added_to_cluster {
+                break;
+            }
+        }
+        
+        if !added_to_cluster {
+            clusters.push(vec![violation]);
+        }
+    }
+    
+    // Merge overlapping clusters
+    let mut merged = true;
+    while merged {
+        merged = false;
+        let mut i = 0;
+        while i < clusters.len() {
+            let mut j = i + 1;
+            while j < clusters.len() {
+                // Check if clusters should be merged
+                let mut should_merge = false;
+                'outer: for v1 in &clusters[i] {
+                    for v2 in &clusters[j] {
+                        let dx = v1.x - v2.x;
+                        let dy = v1.y - v2.y;
+                        let distance = (dx * dx + dy * dy).sqrt();
+                        if distance <= cluster_distance {
+                            should_merge = true;
+                            break 'outer;
+                        }
+                    }
+                }
+                
+                if should_merge {
+                    // Merge cluster j into cluster i
+                    let cluster_j = clusters.remove(j);
+                    clusters[i].extend(cluster_j);
+                    merged = true;
+                } else {
+                    j += 1;
+                }
+            }
+            i += 1;
+        }
+    }
+    
+    println!("Clustered {} violations into {} traces", violations.len(), clusters.len());
+    
+    // Return one representative violation per cluster (trace)
+    clusters.into_iter()
+        .map(|cluster| {
+            // Find the violation with the smallest width (worst case)
+            cluster.into_iter()
+                .min_by(|a, b| a.measured_value.partial_cmp(&b.measured_value).unwrap())
+                .unwrap()
+                .clone()
+        })
+        .collect()
+}
+
+/// Check trace width in gerber data
+pub fn check_trace_width_in_gerber_data(
+    gerber_data: &str, 
+    layer_name: &str, 
+    min_width: f32,
+    pcb_boundary: &BoundingBox
+) -> Vec<DrcViolation> {
+    let mut violations = Vec::new();
+    
+    let reader = BufReader::new(gerber_data.as_bytes());
+    match parse(reader) {
+        Ok(doc) => {
+            println!("Successfully parsed Gerber file for {}", layer_name);
+            
+            // Convert to commands like in the working code
+            let commands = doc.into_commands();
+            println!("Found {} commands in {}", commands.len(), layer_name);
+            
+            // Now parse for real DRC violations
+            println!("Analyzing {} commands for DRC violations in {}", commands.len(), layer_name);
+            
+            // Build a map of aperture codes to their diameters
+            let mut aperture_map = std::collections::HashMap::new();
+            let mut current_aperture: Option<i32> = None;
+            
+            for command in &commands {
+                // Extract aperture definitions and classify them
+                let command_str = format!("{:?}", command);
+                if command_str.contains("ApertureDefinition") {
+                    if let Some(code_start) = command_str.find("code: ") {
+                        if let Some(code_end) = command_str[code_start + 6..].find(',') {
+                            if let Ok(code) = command_str[code_start + 6..code_start + 6 + code_end].parse::<i32>() {
+                                // Extract diameter from circle apertures
+                                if let Some(diameter_start) = command_str.find("diameter: ") {
+                                    if let Some(diameter_end) = command_str[diameter_start + 10..].find(',') {
+                                        if let Ok(diameter) = command_str[diameter_start + 10..diameter_start + 10 + diameter_end].parse::<f32>() {
+                                            // Only include small apertures likely to be traces (not pads/pours)
+                                            if is_trace_aperture(diameter) {
+                                                aperture_map.insert(code, diameter);
+                                                println!("Found trace aperture {}: diameter {}mm", code, diameter);
+                                            } else {
+                                                println!("Ignored pad/pour aperture {}: diameter {}mm (too large)", code, diameter);
+                                            }
+                                        }
+                                    }
+                                }
+                                // Extract width from rectangular apertures
+                                if let Some(x_start) = command_str.find("x: ") {
+                                    if let Some(x_end) = command_str[x_start + 3..].find(',') {
+                                        if let Ok(width) = command_str[x_start + 3..x_start + 3 + x_end].parse::<f32>() {
+                                            // Only include small rectangular apertures likely to be traces
+                                            if is_trace_aperture(width) {
+                                                aperture_map.insert(code, width);
+                                                println!("Found trace aperture {}: width {}mm", code, width);
+                                            } else {
+                                                println!("Ignored pad/pour aperture {}: width {}mm (too large)", code, width);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Track aperture selections
+                if command_str.contains("SelectAperture") {
+                    if let Some(aperture_start) = command_str.find("SelectAperture(") {
+                        if let Some(aperture_end) = command_str[aperture_start + 15..].find(')') {
+                            if let Ok(aperture) = command_str[aperture_start + 15..aperture_start + 15 + aperture_end].parse::<i32>() {
+                                current_aperture = Some(aperture);
+                            }
+                        }
+                    }
+                }
+                
+                // Check interpolate operations (drawing lines - equivalent to D01)
+                // Ignore Flash operations (D03) which are used for pads/vias
+                if command_str.contains("Interpolate") && !command_str.contains("Flash") {
+                    if let Some(current_aperture_code) = current_aperture {
+                        if let Some(&diameter) = aperture_map.get(&current_aperture_code) {
+                            if diameter < min_width {
+                                // Extract coordinates from command string
+                                let (x, y) = extract_coordinates_from_command(&command_str);
+                                let x_mm = x / 1_000_000.0; // Convert from nanometers to mm
+                                let y_mm = y / 1_000_000.0;
+                                
+                                // Additional filtering: reject if coordinates suggest this is near a pad/component
+                                if is_within_pcb_boundary(x_mm, y_mm, pcb_boundary) && is_likely_trace_location(x_mm, y_mm, diameter) {
+                                    violations.push(DrcViolation {
+                                        rule_name: "Minimum Trace Width".to_string(),
+                                        description: format!("Trace width {:.3}mm below minimum", diameter),
+                                        layer: layer_name.to_string(),
+                                        measured_value: diameter,
+                                        required_value: min_width,
+                                        x: x_mm,
+                                        y: y_mm,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            println!("Found {} potential trace width violations in {}", violations.len(), layer_name);
+        }
+        Err(e) => {
+            println!("Failed to parse Gerber data for {}: {:?}", layer_name, e);
+        }
+    }
+    
+    violations
+}
+
+/// Main DRC check function - runs all configured DRC checks
+pub fn run_simple_drc_check(
+    layers: &HashMap<crate::layers::LayerType, crate::layers::LayerInfo>,
+    drc_rules: &DrcRules,
+    trace_quality_issues: &mut Vec<TraceQualityIssue>
+) -> Vec<DrcViolation> {
+    use crate::layers::LayerType;
+    
+    let mut violations = Vec::new();
+    
+    // Clear previous quality issues
+    trace_quality_issues.clear();
+    
+    // Get PCB boundary from mechanical outline layer
+    let pcb_boundary = if let Some(outline_info) = layers.get(&LayerType::MechanicalOutline) {
+        outline_info.gerber_layer.as_ref().map(|layer| layer.bounding_box())
+    } else {
+        None
+    };
+    
+    if pcb_boundary.is_none() {
+        println!("Warning: No mechanical outline found - cannot determine PCB boundary for DRC");
+        return violations;
+    }
+    
+    let boundary = pcb_boundary.unwrap();
+    println!("DRC boundary check: PCB area is {:.1} x {:.1} mm", boundary.width(), boundary.height());
+    
+    // Check each copper layer for trace width violations
+    for (layer_type, layer_info) in layers {
+        // Only check copper layers
+        if !matches!(layer_type, LayerType::TopCopper | LayerType::BottomCopper) {
+            continue;
+        }
+        
+        // Use primitive-based DRC analysis
+        if let Some(gerber_layer) = &layer_info.gerber_layer {
+            println!("Running primitive-based trace detection on {}", layer_type.display_name());
+            
+            let drc = DrcSimple {
+                min_trace_width: drc_rules.min_trace_width,
+                lines_only: true,  // Only check Line primitives to avoid copper pour false positives
+                min_trace_length: 1.0,  // Only lines >= 1mm are considered traces (not pad connections)
+                ..DrcSimple::default()
+            };
+            
+            // Get mechanical outline bounds for filtering
+            let pcb_bounds = layers.get(&LayerType::MechanicalOutline)
+                .and_then(|outline| outline.gerber_layer.as_ref())
+                .map(|layer| layer.bounding_box());
+                
+            let primitive_violations = drc.run_trace_width_drc_with_bounds(gerber_layer, pcb_bounds);
+            
+            // Also analyze trace quality (corners, jogs, etc.)
+            let quality_issues = drc.analyze_trace_quality(gerber_layer);
+            println!("Found {} trace quality issues on {}", quality_issues.len(), layer_type.display_name());
+            
+            // Log corner issues specifically
+            for issue in &quality_issues {
+                if matches!(issue.issue_type, TraceQualityType::SharpCorner) {
+                    println!("Corner issue at ({:.2}, {:.2}): {}", issue.location.0, issue.location.1, issue.description);
+                }
+            }
+            
+            // Store quality issues for this layer (extend the existing vector)
+            trace_quality_issues.extend(quality_issues);
+            
+            if let Some(bounds) = &pcb_bounds {
+                println!("PCB bounds: ({:.2}, {:.2}) to ({:.2}, {:.2})", 
+                    bounds.min.x, bounds.min.y, bounds.max.x, bounds.max.y);
+            }
+            
+            // Convert to DrcViolation format
+            for (i, violation) in primitive_violations.iter().enumerate() {
+                if i < 3 { // Debug first few violations
+                    println!("Violation {}: trace at ({:.2}, {:.2}), width {:.3}mm", 
+                        i, violation.trace.center_x, violation.trace.center_y, violation.trace.width);
+                }
+            }
+            
+            // Convert to DrcViolation format
+            for violation in primitive_violations {
+                violations.push(DrcViolation {
+                    rule_name: "Primitive Trace Width".to_string(),
+                    description: format!("Trace width {:.3}mm below minimum", violation.measured_width),
+                    layer: layer_type.display_name().to_string(),
+                    measured_value: violation.measured_width,
+                    required_value: drc_rules.min_trace_width,
+                    x: violation.trace.center_x,
+                    y: violation.trace.center_y,
+                });
+            }
+        }
+        
+        // Also check using raw gerber data analysis
+        if let Some(raw_data) = &layer_info.raw_gerber_data {
+            let raw_violations = check_trace_width_in_gerber_data(
+                raw_data, 
+                layer_type.display_name(), 
+                drc_rules.min_trace_width,
+                &boundary
+            );
+            
+            // Cluster violations to reduce duplicates
+            let clustered = cluster_violations_per_trace(&raw_violations);
+            println!("Raw gerber analysis found {} violations ({} traces) on {}", 
+                raw_violations.len(), clustered.len(), layer_type.display_name());
+            
+            violations.extend(clustered);
+        }
+    }
+    
+    violations
 }

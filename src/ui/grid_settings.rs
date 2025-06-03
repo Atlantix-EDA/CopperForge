@@ -10,7 +10,6 @@ pub fn show_grid_panel<'a>(
 ) {
     let logger = ReactiveEventLogger::with_colors(logger_state, log_colors);
     
-    ui.heading("Grid Settings");
     ui.add_space(4.0);
     if ui.checkbox(&mut app.grid_settings.enabled, "Enable Grid").changed() {
         logger.log_custom(
@@ -20,28 +19,65 @@ pub fn show_grid_panel<'a>(
     }
     
     ui.horizontal(|ui| {
-        ui.label("Grid Spacing (mils):");
-        let prev_spacing = app.grid_settings.spacing_mils;
+        let label = if app.global_units_mils {
+            "Grid Spacing (mils):"
+        } else {
+            "Grid Spacing (mm):"
+        };
+        ui.label(label);
         
-        // Add slider
-        let slider_response = ui.add(
-            egui::Slider::new(&mut app.grid_settings.spacing_mils, 1.0..=1000.0)
-                .logarithmic(true)
-        );
+        let _prev_spacing_mm = app.grid_settings.spacing_mm;
         
-        // Add text input box next to slider
-        let text_response = ui.add(
-            egui::DragValue::new(&mut app.grid_settings.spacing_mils)
-                .speed(1.0)
-                .range(1.0..=1000.0)
-                .suffix(" mils")
-        );
-        
-        if slider_response.changed() || text_response.changed() {
-            logger.log_custom(
-                LOG_TYPE_GRID,
-                &format!("Grid spacing changed from {:.1} to {:.1} mils", prev_spacing, app.grid_settings.spacing_mils)
+        if app.global_units_mils {
+            // Convert to mils for display
+            let mut spacing_mils = app.grid_settings.spacing_mm / 0.0254;
+            let prev_mils = spacing_mils;
+            
+            // Add slider
+            let slider_response = ui.add(
+                egui::Slider::new(&mut spacing_mils, 1.0..=1000.0)
+                    .logarithmic(true)
             );
+            
+            // Add text input box next to slider
+            let text_response = ui.add(
+                egui::DragValue::new(&mut spacing_mils)
+                    .speed(1.0)
+                    .range(1.0..=1000.0)
+                    .suffix(" mils")
+            );
+            
+            if slider_response.changed() || text_response.changed() {
+                app.grid_settings.spacing_mm = spacing_mils * 0.0254;
+                logger.log_custom(
+                    LOG_TYPE_GRID,
+                    &format!("Grid spacing changed from {:.1} to {:.1} mils", prev_mils, spacing_mils)
+                );
+            }
+        } else {
+            // Work directly in mm
+            let prev_mm = app.grid_settings.spacing_mm;
+            
+            // Add slider
+            let slider_response = ui.add(
+                egui::Slider::new(&mut app.grid_settings.spacing_mm, 0.025..=25.0)
+                    .logarithmic(true)
+            );
+            
+            // Add text input box next to slider
+            let text_response = ui.add(
+                egui::DragValue::new(&mut app.grid_settings.spacing_mm)
+                    .speed(0.1)
+                    .range(0.025..=25.0)
+                    .suffix(" mm")
+            );
+            
+            if slider_response.changed() || text_response.changed() {
+                logger.log_custom(
+                    LOG_TYPE_GRID,
+                    &format!("Grid spacing changed from {:.2} to {:.2} mm", prev_mm, app.grid_settings.spacing_mm)
+                );
+            }
         }
     });
     
@@ -58,7 +94,7 @@ pub fn show_grid_panel<'a>(
     
     // Show grid visibility status
     if app.grid_settings.enabled {
-        let status = get_grid_status(&app.view_state, app.grid_settings.spacing_mils);
+        let status = get_grid_status(&app.view_state, app.grid_settings.spacing_mm);
         
         match status {
             GridStatus::TooFine => {

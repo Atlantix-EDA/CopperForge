@@ -8,8 +8,6 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
     logger_state: &'a Dynamic<ReactiveEventLoggerState>,
     log_colors: &'a Dynamic<LogColors>) {
     let logger = ReactiveEventLogger::with_colors(logger_state, log_colors);
-    ui.heading("Layer Controls");
-    ui.separator();
     
     // Layer visibility controls
     ui.label(&format!("Visible Layers (Showing {} side):", if app.showing_top { "TOP" } else { "BOTTOM" }));
@@ -56,6 +54,105 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
                         ));
                     }
                 });
+            }
+        }
+    }
+    
+    // Show unassigned gerbers section if any exist
+    if !app.unassigned_gerbers.is_empty() {
+        ui.add_space(8.0);
+        ui.separator();
+        ui.heading("Unassigned Gerber Files");
+        ui.label("Please assign these files to their correct layer types:");
+        ui.add_space(4.0);
+        
+        let mut assignments_to_make = Vec::new();
+        
+        for unassigned in &app.unassigned_gerbers {
+            ui.horizontal(|ui| {
+                ui.label(&unassigned.filename);
+                ui.add_space(10.0);
+                
+                // Create dropdown for layer type selection
+                let current_selection = app.layer_assignments.get(&unassigned.filename)
+                    .copied()
+                    .unwrap_or(LayerType::TopCopper); // Default selection
+                
+                egui::ComboBox::from_id_salt(&unassigned.filename)
+                    .selected_text(current_selection.display_name())
+                    .show_ui(ui, |ui| {
+                        for layer_type in LayerType::all() {
+                            // Check if this layer type is already assigned to another file
+                            let already_assigned = app.layers.contains_key(&layer_type);
+                            
+                            if already_assigned {
+                                ui.add_enabled(false, egui::SelectableLabel::new(
+                                    false,
+                                    format!("✓ {} (assigned)", layer_type.display_name())
+                                ));
+                            } else if ui.selectable_value(&mut assignments_to_make, vec![(unassigned.filename.clone(), layer_type)], layer_type.display_name()).clicked() {
+                                assignments_to_make.push((unassigned.filename.clone(), layer_type));
+                            }
+                        }
+                    });
+            });
+        }
+        
+        // Apply assignments
+        for (filename, layer_type) in assignments_to_make {
+            if let Some(unassigned_idx) = app.unassigned_gerbers.iter().position(|u| u.filename == filename) {
+                let unassigned = app.unassigned_gerbers.remove(unassigned_idx);
+                
+                // Create layer info from unassigned gerber
+                let layer_info = crate::layers::LayerInfo::new(
+                    layer_type,
+                    Some(unassigned.parsed_layer),
+                    Some(unassigned.content),
+                    true,
+                );
+                
+                app.layers.insert(layer_type, layer_info);
+                app.layer_assignments.insert(filename.clone(), layer_type);
+                logger.log_info(&format!("Assigned {} to {:?}", filename, layer_type));
+                app.needs_initial_view = true;
+            }
+        }
+        
+        if !app.unassigned_gerbers.is_empty() {
+            ui.add_space(8.0);
+            if ui.button("Auto-detect All").clicked() {
+                let mut newly_assigned = Vec::new();
+                
+                for unassigned in &app.unassigned_gerbers {
+                    if let Some(detected_type) = app.layer_detector.detect_layer_type(&unassigned.filename) {
+                        if !app.layers.contains_key(&detected_type) {
+                            newly_assigned.push((unassigned.filename.clone(), detected_type));
+                        }
+                    }
+                }
+                
+                for (filename, layer_type) in &newly_assigned {
+                    if let Some(unassigned_idx) = app.unassigned_gerbers.iter().position(|u| &u.filename == filename) {
+                        let unassigned = app.unassigned_gerbers.remove(unassigned_idx);
+                        
+                        let layer_info = crate::layers::LayerInfo::new(
+                            *layer_type,
+                            Some(unassigned.parsed_layer),
+                            Some(unassigned.content),
+                            true,
+                        );
+                        
+                        app.layers.insert(*layer_type, layer_info);
+                        logger.log_info(&format!("Auto-detected {} as {:?}", filename, layer_type));
+                        app.layer_assignments.insert(filename.clone(), *layer_type);
+                    }
+                }
+                
+                if newly_assigned.is_empty() {
+                    logger.log_warning("Could not auto-detect any remaining files");
+                } else {
+                    app.needs_initial_view = true;
+                }
             }
         }
     }

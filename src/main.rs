@@ -35,446 +35,15 @@ mod layers;
 mod grid;
 mod ui;
 mod drc;
+mod layer_detection;
 
 use constants::*;
 use layers::{LayerType, LayerInfo};
 use grid::GridSettings;
-use drc::DrcSimple;
+use drc::{DrcRules, DrcViolation};
+use layer_detection::{LayerDetector, UnassignedGerber};
 
-/// Simple DRC Rules structure
-#[derive(Debug, Clone)]
-pub struct DrcRules {
-    pub min_trace_width: f32,      // mm
-    pub min_via_diameter: f32,     // mm  
-    pub min_drill_diameter: f32,   // mm
-    pub min_spacing: f32,          // mm
-    pub min_annular_ring: f32,     // mm
-    pub use_mils: bool,            // true = display in mils, false = mm
-}
-
-impl Default for DrcRules {
-    fn default() -> Self {
-        Self {
-            min_trace_width: 0.15,    // 0.15mm = ~6 mil
-            min_via_diameter: 0.3,    // 0.3mm = ~12 mil
-            min_drill_diameter: 0.2,  // 0.2mm = ~8 mil
-            min_spacing: 0.15,        // 0.15mm = ~6 mil
-            min_annular_ring: 0.1,    // 0.1mm = ~4 mil
-            use_mils: false,          // Default to mm
-        }
-    }
-}
-
-impl DrcRules {
-    /// Convert mm to mils (1 mm = 39.3701 mils)
-    fn mm_to_mils(mm: f32) -> f32 {
-        mm * 39.3701
-    }
-    
-    /// Convert mils to mm (1 mil = 0.0254 mm)
-    fn mils_to_mm(mils: f32) -> f32 {
-        mils * 0.0254
-    }
-    
-    /// Get display value (convert to mils if use_mils is true)
-    fn get_display_value(&self, mm_value: f32) -> f32 {
-        if self.use_mils {
-            Self::mm_to_mils(mm_value)
-        } else {
-            mm_value
-        }
-    }
-    
-    /// Set value from display (convert from mils if use_mils is true)
-    fn set_from_display(&self, display_value: f32) -> f32 {
-        if self.use_mils {
-            Self::mils_to_mm(display_value)
-        } else {
-            display_value
-        }
-    }
-    
-    /// Get unit suffix
-    fn unit_suffix(&self) -> &str {
-        if self.use_mils { " mils" } else { " mm" }
-    }
-}
-
-/// DRC violation result
-#[derive(Debug, Clone)]
-pub struct DrcViolation {
-    pub rule_name: String,
-    pub description: String,
-    pub layer: String,
-    pub measured_value: f32,  // mm
-    pub required_value: f32,  // mm
-    pub x: f32,              // mm
-    pub y: f32,              // mm
-}
-
-impl DrcViolation {
-    pub fn format_message(&self) -> String {
-        format!("{}: {} on {} - measured {:.3}mm, required {:.3}mm at ({:.1}, {:.1})",
-            self.rule_name,
-            self.description,
-            self.layer,
-            self.measured_value,
-            self.required_value,
-            self.x,
-            self.y
-        )
-    }
-}
-
-/// Simple DRC checker with OpenCV integration
-pub fn run_simple_drc_check(app: &mut DemoLensApp) -> Vec<DrcViolation> {
-    let mut violations = Vec::new();
-    
-    // Clear previous quality issues
-    app.trace_quality_issues.clear();
-    
-    // Get PCB boundary from mechanical outline layer
-    let pcb_boundary = if let Some(outline_info) = app.layers.get(&LayerType::MechanicalOutline) {
-        outline_info.gerber_layer.as_ref().map(|layer| layer.bounding_box())
-    } else {
-        None
-    };
-    
-    if pcb_boundary.is_none() {
-        println!("Warning: No mechanical outline found - cannot determine PCB boundary for DRC");
-        return violations;
-    }
-    
-    let boundary = pcb_boundary.unwrap();
-    println!("DRC boundary check: PCB area is {:.1} x {:.1} mm", boundary.width(), boundary.height());
-    
-    // Check each copper layer for trace width violations
-    for (layer_type, layer_info) in &app.layers {
-        // Only check copper layers
-        if !matches!(layer_type, LayerType::TopCopper | LayerType::BottomCopper) {
-            continue;
-        }
-        
-        // Use primitive-based DRC analysis
-        if let Some(gerber_layer) = &layer_info.gerber_layer {
-            println!("Running primitive-based trace detection on {}", layer_type.display_name());
-            
-            let drc = DrcSimple {
-                min_trace_width: app.drc_rules.min_trace_width,
-                lines_only: true,  // Only check Line primitives to avoid copper pour false positives
-                min_trace_length: 1.0,  // Only lines >= 1mm are considered traces (not pad connections)
-                ..DrcSimple::default()
-            };
-            
-            // Get mechanical outline bounds for filtering
-            let pcb_bounds = app.layers.get(&LayerType::MechanicalOutline)
-                .and_then(|outline| outline.gerber_layer.as_ref())
-                .map(|layer| layer.bounding_box());
-                
-            let primitive_violations = drc.run_trace_width_drc_with_bounds(gerber_layer, pcb_bounds);
-            
-            // Also analyze trace quality (corners, jogs, etc.)
-            let quality_issues = drc.analyze_trace_quality(gerber_layer);
-            println!("Found {} trace quality issues on {}", quality_issues.len(), layer_type.display_name());
-            
-            // Log corner issues specifically
-            for issue in &quality_issues {
-                if matches!(issue.issue_type, drc::TraceQualityType::SharpCorner) {
-                    println!("Corner issue at ({:.2}, {:.2}): {}", issue.location.0, issue.location.1, issue.description);
-                }
-            }
-            
-            // Store quality issues for this layer (extend the existing vector)
-            app.trace_quality_issues.extend(quality_issues);
-            
-            if let Some(bounds) = &pcb_bounds {
-                println!("PCB bounds: ({:.2}, {:.2}) to ({:.2}, {:.2})", 
-                    bounds.min.x, bounds.min.y, bounds.max.x, bounds.max.y);
-            }
-            
-            // Convert to DrcViolation format
-            for (i, violation) in primitive_violations.iter().enumerate() {
-                if i < 3 { // Debug first few violations
-                    println!("Violation {}: trace at ({:.2}, {:.2}), width {:.3}mm", 
-                        i, violation.trace.center_x, violation.trace.center_y, violation.trace.width);
-                }
-            }
-            
-            // Convert to DrcViolation format
-            for violation in primitive_violations {
-                violations.push(DrcViolation {
-                    rule_name: "Primitive Trace Width".to_string(),
-                    description: format!("Trace width {:.3}mm below minimum", violation.measured_width),
-                    layer: layer_type.display_name().to_string(),
-                    measured_value: violation.measured_width,
-                    required_value: violation.required_width,
-                    x: violation.trace.center_x,
-                    y: violation.trace.center_y,
-                });
-            }
-            
-            println!("Primitive analysis found {} violations on {}", violations.len(), layer_type.display_name());
-        } else if let Some(ref raw_gerber) = layer_info.raw_gerber_data {
-            // Use gerber parsing if no layer object available
-            let layer_violations = check_trace_width_in_gerber_data(
-                raw_gerber,
-                layer_type.display_name(),
-                app.drc_rules.min_trace_width,
-                &boundary
-            );
-            violations.extend(layer_violations);
-        }
-    }
-    
-    // Apply one-marker-per-trace clustering to reduce visual clutter
-    let clustered_violations = cluster_violations_per_trace(violations.clone(), 10.0); // 10mm clustering radius for trace grouping
-    println!("DRC clustering: {} violations reduced to {} markers (1 per trace)", violations.len(), clustered_violations.len());
-    
-    // Store clustered violations in app state for rendering
-    app.drc_violations = clustered_violations.clone();
-    
-    violations
-}
-
-
-/// Check trace width by parsing raw Gerber data
-fn check_trace_width_in_gerber_data(gerber_data: &str, layer_name: &str, min_width: f32, pcb_boundary: &BoundingBox) -> Vec<DrcViolation> {
-    let mut violations = Vec::new();
-    
-    println!("Parsing Gerber data for layer: {}", layer_name);
-    
-    // Parse the raw Gerber file using gerber_viewer's gerber_parser
-    let reader = BufReader::new(gerber_data.as_bytes());
-    match parse(reader) {
-        Ok(doc) => {
-            println!("Successfully parsed Gerber file for {}", layer_name);
-            
-            // Convert to commands like in the working code
-            let commands = doc.into_commands();
-            println!("Found {} commands in {}", commands.len(), layer_name);
-            
-            // Now parse for real DRC violations
-            println!("Analyzing {} commands for DRC violations in {}", commands.len(), layer_name);
-            
-            // Build a map of aperture codes to their diameters
-            let mut aperture_map = std::collections::HashMap::new();
-            let mut current_aperture: Option<i32> = None;
-            
-            for command in &commands {
-                // Extract aperture definitions and classify them
-                let command_str = format!("{:?}", command);
-                if command_str.contains("ApertureDefinition") {
-                    if let Some(code_start) = command_str.find("code: ") {
-                        if let Some(code_end) = command_str[code_start + 6..].find(',') {
-                            if let Ok(code) = command_str[code_start + 6..code_start + 6 + code_end].parse::<i32>() {
-                                // Extract diameter from circle apertures
-                                if let Some(diameter_start) = command_str.find("diameter: ") {
-                                    if let Some(diameter_end) = command_str[diameter_start + 10..].find(',') {
-                                        if let Ok(diameter) = command_str[diameter_start + 10..diameter_start + 10 + diameter_end].parse::<f32>() {
-                                            // Only include small apertures likely to be traces (not pads/pours)
-                                            if is_trace_aperture(diameter) {
-                                                aperture_map.insert(code, diameter);
-                                                println!("Found trace aperture {}: diameter {}mm", code, diameter);
-                                            } else {
-                                                println!("Ignored pad/pour aperture {}: diameter {}mm (too large)", code, diameter);
-                                            }
-                                        }
-                                    }
-                                }
-                                // Extract width from rectangular apertures
-                                if let Some(x_start) = command_str.find("x: ") {
-                                    if let Some(x_end) = command_str[x_start + 3..].find(',') {
-                                        if let Ok(width) = command_str[x_start + 3..x_start + 3 + x_end].parse::<f32>() {
-                                            // Only include small rectangular apertures likely to be traces
-                                            if is_trace_aperture(width) {
-                                                aperture_map.insert(code, width);
-                                                println!("Found trace aperture {}: width {}mm", code, width);
-                                            } else {
-                                                println!("Ignored pad/pour aperture {}: width {}mm (too large)", code, width);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                // Track aperture selections
-                if command_str.contains("SelectAperture") {
-                    if let Some(aperture_start) = command_str.find("SelectAperture(") {
-                        if let Some(aperture_end) = command_str[aperture_start + 15..].find(')') {
-                            if let Ok(aperture) = command_str[aperture_start + 15..aperture_start + 15 + aperture_end].parse::<i32>() {
-                                current_aperture = Some(aperture);
-                            }
-                        }
-                    }
-                }
-                
-                // Check interpolate operations (drawing lines - equivalent to D01)
-                // Ignore Flash operations (D03) which are used for pads/vias
-                if command_str.contains("Interpolate") && !command_str.contains("Flash") {
-                    if let Some(current_aperture_code) = current_aperture {
-                        if let Some(&diameter) = aperture_map.get(&current_aperture_code) {
-                            if diameter < min_width {
-                                // Extract coordinates from command string
-                                let (x, y) = extract_coordinates_from_command(&command_str);
-                                let x_mm = x / 1_000_000.0; // Convert from nanometers to mm
-                                let y_mm = y / 1_000_000.0;
-                                
-                                // Additional filtering: reject if coordinates suggest this is near a pad/component
-                                if is_within_pcb_boundary(x_mm, y_mm, pcb_boundary) && is_likely_trace_location(x_mm, y_mm, diameter) {
-                                    violations.push(DrcViolation {
-                                        rule_name: "Minimum Trace Width".to_string(),
-                                        description: format!("Trace width {:.3}mm below minimum", diameter),
-                                        layer: layer_name.to_string(),
-                                        measured_value: diameter,
-                                        required_value: min_width,
-                                        x: x_mm,
-                                        y: y_mm,
-                                    });
-                                    println!("DRC violation on trace at ({:.2}, {:.2})mm: {:.3}mm trace", x_mm, y_mm, diameter);
-                                } else {
-                                    println!("Rejected violation (likely pad/component) at ({:.2}, {:.2})mm: {:.3}mm", x_mm, y_mm, diameter);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            
-            println!("Found {} apertures and {} violations in {}", 
-                     aperture_map.len(), violations.len(), layer_name);
-        }
-        Err(e) => {
-            println!("Failed to parse Gerber data for {}: {:?}", layer_name, e);
-        }
-    }
-    
-    violations
-}
-
-/// Cluster violations to show only 1 marker per trace (aggressive clustering)
-fn cluster_violations_per_trace(violations: Vec<DrcViolation>, cluster_radius_mm: f32) -> Vec<DrcViolation> {
-    if violations.is_empty() {
-        return violations;
-    }
-    
-    let mut clustered = Vec::new();
-    let mut used = vec![false; violations.len()];
-    
-    for i in 0..violations.len() {
-        if used[i] {
-            continue;
-        }
-        
-        let center = &violations[i];
-        let mut cluster_violations = vec![center.clone()];
-        used[i] = true;
-        
-        // Find ALL violations within clustering radius (aggressive grouping)
-        for j in (i + 1)..violations.len() {
-            if used[j] {
-                continue;
-            }
-            
-            let distance = ((violations[j].x - center.x).powi(2) + (violations[j].y - center.y).powi(2)).sqrt();
-            
-            if distance <= cluster_radius_mm {
-                cluster_violations.push(violations[j].clone());
-                used[j] = true;
-            }
-        }
-        
-        // Always create one representative violation per trace cluster
-        let mut sum_x = 0.0;
-        let mut sum_y = 0.0;
-        let mut worst_violation = &cluster_violations[0];
-        
-        for violation in &cluster_violations {
-            sum_x += violation.x;
-            sum_y += violation.y;
-            
-            // Find worst violation (smallest measured value = worst)
-            if violation.measured_value < worst_violation.measured_value {
-                worst_violation = violation;
-            }
-        }
-        
-        let centroid_x = sum_x / cluster_violations.len() as f32;
-        let centroid_y = sum_y / cluster_violations.len() as f32;
-        
-        // Create single representative marker for this trace/area
-        clustered.push(DrcViolation {
-            rule_name: "Trace Width Violation".to_string(),
-            description: if cluster_violations.len() == 1 {
-                format!("Trace width {:.3}mm below minimum", worst_violation.measured_value)
-            } else {
-                format!("Trace area with {} violations (worst: {:.3}mm)", cluster_violations.len(), worst_violation.measured_value)
-            },
-            layer: worst_violation.layer.clone(),
-            measured_value: worst_violation.measured_value,
-            required_value: worst_violation.required_value,
-            x: centroid_x,
-            y: centroid_y,
-        });
-    }
-    
-    clustered
-}
-
-/// Determine if an aperture represents a trace vs pad/via/pour
-fn is_trace_aperture(width_mm: f32) -> bool {
-    // Be much more aggressive - only very narrow apertures are traces
-    // Typical traces: 0.1mm - 0.5mm (4-20 mils)
-    // Pads are typically > 0.8mm (30+ mils)
-    width_mm < 0.8 && width_mm > 0.05 // Between 0.05mm and 0.8mm only
-}
-
-/// Additional check to see if this location is likely a trace vs pad
-fn is_likely_trace_location(_x_mm: f32, _y_mm: f32, width_mm: f32) -> bool {
-    // For now, just use very conservative width filtering
-    // Real traces are typically < 0.5mm (20 mils)
-    // Anything larger is likely a pad or connector feature
-    width_mm < 0.5
-}
-
-/// Check if coordinates are within PCB boundary
-fn is_within_pcb_boundary(x_mm: f32, y_mm: f32, boundary: &BoundingBox) -> bool {
-    let x_f64 = x_mm as f64;
-    let y_f64 = y_mm as f64;
-    
-    x_f64 >= boundary.min.x && x_f64 <= boundary.max.x &&
-    y_f64 >= boundary.min.y && y_f64 <= boundary.max.y
-}
-
-/// Extract coordinates from Gerber command debug string
-fn extract_coordinates_from_command(command_str: &str) -> (f32, f32) {
-    let mut x = 0.0;
-    let mut y = 0.0;
-    
-    // Look for x coordinate pattern: "x: Some(CoordinateNumber { nano: 12345 }"
-    if let Some(x_start) = command_str.find("x: Some(CoordinateNumber { nano: ") {
-        let x_offset = x_start + 33; // Length of "x: Some(CoordinateNumber { nano: "
-        if let Some(x_end) = command_str[x_offset..].find(' ') {
-            if let Ok(x_nano) = command_str[x_offset..x_offset + x_end].parse::<f32>() {
-                x = x_nano;
-            }
-        }
-    }
-    
-    // Look for y coordinate pattern: "y: Some(CoordinateNumber { nano: 12345 }"
-    if let Some(y_start) = command_str.find("y: Some(CoordinateNumber { nano: ") {
-        let y_offset = y_start + 33; // Length of "y: Some(CoordinateNumber { nano: "
-        if let Some(y_end) = command_str[y_offset..].find(' ') {
-            if let Ok(y_nano) = command_str[y_offset..y_offset + y_end].parse::<f32>() {
-                y = y_nano;
-            }
-        }
-    }
-    
-    (x, y)
-}
+// DRC structures are now imported from the drc module
 
 /// Draw a red X marker for DRC violations
 fn draw_violation_marker(painter: &Painter, center: Pos2, size: f32, color: Color32) {
@@ -493,28 +62,6 @@ fn draw_violation_marker(painter: &Painter, center: Pos2, size: f32, color: Colo
     ], stroke);
 }
 
-/// Extract diameter from aperture definition - TODO: Fix when we understand the API
-fn get_aperture_diameter(_aperture: &str) -> Option<f32> {
-    // TODO: This needs to be implemented once we understand the correct API
-    None
-}
-
-/// Check trace width in a single gerber layer - updated to use raw parsing
-fn check_trace_width_in_layer(gerber_layer: &GerberLayer, layer_name: &str, _min_width: f32, _pcb_boundary: &BoundingBox) -> Vec<DrcViolation> {
-    // For now, we need to get the raw gerber data to parse it
-    // This is a placeholder until we can access the original gerber strings
-    let violations = Vec::new();
-    
-    let bbox = gerber_layer.bounding_box();
-    println!("Layer {} has bbox: {:.3}x{:.3}mm", layer_name, bbox.width(), bbox.height());
-    
-    // TODO: We need access to the original gerber file content to parse it
-    // The GerberLayer has already processed the data, so we need to either:
-    // 1. Store the raw gerber data alongside the GerberLayer
-    // 2. Parse the gerber files directly before creating GerberLayer
-    
-    violations
-}
 
 /// Define the tabs for the DockArea
 #[derive(Clone, Serialize, Deserialize)]
@@ -524,6 +71,7 @@ enum TabKind {
     GerberView,
     EventLog,
     Project,
+    Settings,
 }
 
 pub struct TabParams<'a> {
@@ -577,8 +125,8 @@ pub struct DemoLensApp {
     pub rounded_corner_primitives: Vec<gerber_viewer::GerberPrimitive>,
     pub corner_overlay_shapes: Vec<drc::CornerOverlayShape>,
     
-    // Mouse position tracking
-    pub mouse_pos_display_units: bool, // true = mils, false = mm
+    // Global units setting
+    pub global_units_mils: bool, // true = mils, false = mm
     
     // Grid Settings
     pub grid_settings: GridSettings,
@@ -597,6 +145,18 @@ pub struct DemoLensApp {
     // Dock state
     dock_state: DockState<Tab>,
     config_path: PathBuf,
+    
+    // Layer detection and unassigned gerbers
+    pub layer_detector: LayerDetector,
+    pub unassigned_gerbers: Vec<UnassignedGerber>,
+    pub layer_assignments: HashMap<String, LayerType>, // filename -> assigned layer type
+    
+    // Zoom window state
+    pub zoom_window_start: Option<Pos2>,
+    pub zoom_window_dragging: bool,
+    
+    // User preferences
+    pub user_timezone: Option<String>,
 }
 
 impl Tab {
@@ -615,6 +175,7 @@ impl Tab {
             TabKind::GerberView => "Gerber View".to_string(),
             TabKind::EventLog => "Event Log".to_string(),
             TabKind::Project => "Project".to_string(),
+            TabKind::Settings => "Settings".to_string(),
         }
     }
 
@@ -641,17 +202,6 @@ impl Tab {
                     
                     ui.add_space(20.0);
                     
-                    // Mouse Cursor Section
-                    ui.heading("Mouse Cursor");
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        ui.label("Coordinate Units:");
-                        ui.selectable_value(&mut params.app.mouse_pos_display_units, false, "mm");
-                        ui.selectable_value(&mut params.app.mouse_pos_display_units, true, "mils");
-                    });
-                    
-                    ui.add_space(20.0);
-                    
                     // Grid Settings Section
                     ui.heading("Grid Settings");
                     ui.separator();
@@ -674,6 +224,11 @@ impl Tab {
                 let logger_state_clone = params.app.logger_state.clone();
                 let log_colors_clone = params.app.log_colors.clone();
                 ui::show_project_panel(ui, params.app, &logger_state_clone, &log_colors_clone);
+            }
+            TabKind::Settings => {
+                let logger_state_clone = params.app.logger_state.clone();
+                let log_colors_clone = params.app.log_colors.clone();
+                ui::show_settings_panel(ui, params.app, &logger_state_clone, &log_colors_clone);
             }
         }
     }
@@ -702,6 +257,64 @@ impl Tab {
         
         // Get mouse position for cursor tracking
         let mouse_pos_screen = ui.input(|i| i.pointer.hover_pos());
+        
+        // Handle right-click drag zoom window
+        let right_button = egui::PointerButton::Secondary;
+        if response.contains_pointer() {
+            if ui.input(|i| i.pointer.button_pressed(right_button)) {
+                // Start zoom window
+                if let Some(pos) = mouse_pos_screen {
+                    app.zoom_window_start = Some(pos);
+                    app.zoom_window_dragging = true;
+                }
+            }
+        }
+        
+        if app.zoom_window_dragging && ui.input(|i| i.pointer.button_released(right_button)) {
+            // Complete zoom window
+            if let (Some(start), Some(end)) = (app.zoom_window_start, mouse_pos_screen) {
+                // Calculate zoom rectangle
+                let zoom_rect = Rect::from_two_pos(start, end);
+                
+                // Only zoom if the rectangle is large enough
+                if zoom_rect.width() > 10.0 && zoom_rect.height() > 10.0 {
+                    // Convert screen coordinates to gerber coordinates
+                    let gerber_start = app.view_state.screen_to_gerber_coords(zoom_rect.min);
+                    let gerber_end = app.view_state.screen_to_gerber_coords(zoom_rect.max);
+                    
+                    // Calculate new scale to fit the selected region
+                    let gerber_width = (gerber_end.x - gerber_start.x).abs() as f32;
+                    let gerber_height = (gerber_end.y - gerber_start.y).abs() as f32;
+                    
+                    let scale_x = viewport.width() / gerber_width;
+                    let scale_y = viewport.height() / gerber_height;
+                    let new_scale = scale_x.min(scale_y) * 0.9; // 90% to add some padding
+                    
+                    // Calculate center of zoom rectangle in gerber coordinates
+                    let gerber_center_x = (gerber_start.x + gerber_end.x) / 2.0;
+                    let gerber_center_y = (gerber_start.y + gerber_end.y) / 2.0;
+                    
+                    // Update view state
+                    app.view_state.scale = new_scale;
+                    
+                    // Calculate translation to center the zoomed region
+                    let viewport_center = viewport.center();
+                    app.view_state.translation = Vec2::new(
+                        viewport_center.x - (gerber_center_x * new_scale as f64) as f32,
+                        viewport_center.y + (gerber_center_y * new_scale as f64) as f32 // Y is flipped
+                    );
+                }
+            }
+            
+            app.zoom_window_dragging = false;
+            app.zoom_window_start = None;
+        }
+        
+        // Cancel zoom window on escape
+        if app.zoom_window_dragging && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            app.zoom_window_dragging = false;
+            app.zoom_window_start = None;
+        }
 
         // Fill the background with the panel color to ensure no black gaps
         let painter = ui.painter_at(viewport);
@@ -711,7 +324,10 @@ impl Tab {
             app.reset_view(viewport)
         }
         
-        app.ui_state.update(ui, &viewport, &response, &mut app.view_state);
+        // Only update normal mouse handling if not doing zoom window
+        if !app.zoom_window_dragging {
+            app.ui_state.update(ui, &viewport, &response, &mut app.view_state);
+        }
 
         let painter = ui.painter().with_clip_rect(viewport);
         
@@ -863,16 +479,21 @@ impl Tab {
             draw_violation_marker(&painter, screen_pos, marker_size, color);
         }
         
-        // Draw board dimensions in mils at the bottom
+        // Draw board dimensions at the bottom
         if let Some(layer_info) = app.layers.get(&LayerType::MechanicalOutline) {
             if let Some(ref outline_layer) = layer_info.gerber_layer {
                 let bbox = outline_layer.bounding_box();
                 let width_mm = bbox.width();
                 let height_mm = bbox.height();
-                let width_mils = width_mm / 0.0254;
-                let height_mils = height_mm / 0.0254;
                 
-                let dimension_text = format!("{:.0} x {:.0} mils", width_mils, height_mils);
+                let dimension_text = if app.global_units_mils {
+                    let width_mils = width_mm / 0.0254;
+                    let height_mils = height_mm / 0.0254;
+                    format!("{:.0} x {:.0} mils", width_mils, height_mils)
+                } else {
+                    format!("{:.1} x {:.1} mm", width_mm, height_mm)
+                };
+                
                 let text_pos = viewport.max - Vec2::new(10.0, 50.0);
                 painter.text(
                     text_pos,
@@ -881,6 +502,81 @@ impl Tab {
                     egui::FontId::default(),
                     Color32::from_rgb(200, 200, 200),
                 );
+            }
+        }
+        
+        // Draw zoom window rectangle if dragging
+        if app.zoom_window_dragging {
+            if let (Some(start), Some(current)) = (app.zoom_window_start, mouse_pos_screen) {
+                let zoom_rect = Rect::from_two_pos(start, current);
+                
+                // Draw semi-transparent fill
+                painter.rect_filled(
+                    zoom_rect,
+                    0.0,
+                    Color32::from_rgba_unmultiplied(100, 150, 255, 50)
+                );
+                
+                // Draw border with lines instead of rect_stroke
+                let stroke = Stroke::new(2.0, Color32::from_rgb(100, 150, 255));
+                painter.line_segment([zoom_rect.min, Pos2::new(zoom_rect.max.x, zoom_rect.min.y)], stroke);
+                painter.line_segment([Pos2::new(zoom_rect.max.x, zoom_rect.min.y), zoom_rect.max], stroke);
+                painter.line_segment([zoom_rect.max, Pos2::new(zoom_rect.min.x, zoom_rect.max.y)], stroke);
+                painter.line_segment([Pos2::new(zoom_rect.min.x, zoom_rect.max.y), zoom_rect.min], stroke);
+                
+                // Draw corner markers
+                let corner_size = 5.0;
+                let corners = [zoom_rect.min, 
+                              Pos2::new(zoom_rect.max.x, zoom_rect.min.y),
+                              zoom_rect.max,
+                              Pos2::new(zoom_rect.min.x, zoom_rect.max.y)];
+                
+                for corner in &corners {
+                    painter.circle_filled(*corner, corner_size, Color32::from_rgb(100, 150, 255));
+                }
+                
+                // Show dimensions of selection
+                if zoom_rect.width() > 50.0 && zoom_rect.height() > 30.0 {
+                    let gerber_start = app.view_state.screen_to_gerber_coords(zoom_rect.min);
+                    let gerber_end = app.view_state.screen_to_gerber_coords(zoom_rect.max);
+                    let width_mm = (gerber_end.x - gerber_start.x).abs() as f32;
+                    let height_mm = (gerber_end.y - gerber_start.y).abs() as f32;
+                    
+                    let dimension_text = if app.global_units_mils {
+                        let width_mils = width_mm / 0.0254;
+                        let height_mils = height_mm / 0.0254;
+                        format!("{:.0} x {:.0} mils", width_mils, height_mils)
+                    } else {
+                        format!("{:.1} x {:.1} mm", width_mm, height_mm)
+                    };
+                    
+                    let text_pos = zoom_rect.center() + Vec2::new(0.0, -20.0);
+                    
+                    // Background for text
+                    let text_galley = painter.layout_no_wrap(
+                        dimension_text.clone(),
+                        egui::FontId::default(),
+                        Color32::WHITE
+                    );
+                    let text_rect = egui::Rect::from_min_size(
+                        text_pos - text_galley.size() / 2.0 - Vec2::new(4.0, 2.0),
+                        text_galley.size() + Vec2::new(8.0, 4.0)
+                    );
+                    painter.rect_filled(
+                        text_rect,
+                        3.0,
+                        Color32::from_rgba_unmultiplied(0, 0, 0, 200)
+                    );
+                    
+                    // Draw text
+                    painter.text(
+                        text_pos,
+                        egui::Align2::CENTER_CENTER,
+                        dimension_text,
+                        egui::FontId::default(),
+                        Color32::WHITE
+                    );
+                }
             }
         }
         
@@ -898,7 +594,7 @@ impl Tab {
                 );
                 
                 // Format coordinates based on user preference
-                let cursor_text = if app.mouse_pos_display_units {
+                let cursor_text = if app.global_units_mils {
                     // Display in mils
                     let x_mils = adjusted_pos.x / 0.0254;
                     let y_mils = adjusted_pos.y / 0.0254;
@@ -962,7 +658,7 @@ impl Tab {
         
         // Add unit toggle in top-right corner
         let unit_toggle_pos = viewport.max - Vec2::new(10.0, 30.0);
-        let unit_text = if app.mouse_pos_display_units { "mils" } else { "mm" };
+        let unit_text = if app.global_units_mils { "mils" } else { "mm" };
         painter.text(
             unit_toggle_pos,
             egui::Align2::RIGHT_BOTTOM,
@@ -1076,16 +772,19 @@ impl DemoLensApp {
         details.get_os();
         
 
-        // Initialize dock state - try to load from saved config first
-        let dock_state = if let Some(saved_dock_state) = Self::load_dock_state() {
-            saved_dock_state
-        } else {
+        // Initialize dock state - force fresh layout for now to include Project tab
+        let dock_state = {
+            // Temporarily force fresh layout
+            // let dock_state = if let Some(saved_dock_state) = Self::load_dock_state() {
+            //     saved_dock_state
+            // } else {
             // Create default dock layout if no saved state exists
             let view_settings_tab = Tab::new(TabKind::ViewSettings, SurfaceIndex::main(), NodeIndex(0));
             let drc_tab = Tab::new(TabKind::DRC, SurfaceIndex::main(), NodeIndex(1));
             let project_tab = Tab::new(TabKind::Project, SurfaceIndex::main(), NodeIndex(2));
-            let gerber_tab = Tab::new(TabKind::GerberView, SurfaceIndex::main(), NodeIndex(3));
-            let log_tab = Tab::new(TabKind::EventLog, SurfaceIndex::main(), NodeIndex(4));
+            let settings_tab = Tab::new(TabKind::Settings, SurfaceIndex::main(), NodeIndex(3));
+            let gerber_tab = Tab::new(TabKind::GerberView, SurfaceIndex::main(), NodeIndex(4));
+            let log_tab = Tab::new(TabKind::EventLog, SurfaceIndex::main(), NodeIndex(5));
             
             // Create dock state with gerber view as the root
             let mut dock_state = DockState::new(vec![gerber_tab]);
@@ -1095,7 +794,7 @@ impl DemoLensApp {
             let [left, _right] = surface.split_left(
                 NodeIndex::root(),
                 0.3, // Left panel takes 30% of width
-                vec![view_settings_tab, drc_tab, project_tab],
+                vec![view_settings_tab, drc_tab, project_tab, settings_tab],
             );
             
             // Add event log to bottom of left panel
@@ -1106,6 +805,7 @@ impl DemoLensApp {
             );
             
             dock_state
+            // }
         };
 
         let mut app = Self {
@@ -1132,7 +832,7 @@ impl DemoLensApp {
             trace_quality_issues: Vec::new(),
             rounded_corner_primitives: Vec::new(),
             corner_overlay_shapes: Vec::new(),
-            mouse_pos_display_units: false, // Default to mm
+            global_units_mils: false, // Default to mm
             grid_settings: GridSettings::default(),
             project_config: ProjectConfig::default(),
             file_dialog: egui_file_dialog::FileDialog::new(),
@@ -1145,6 +845,12 @@ impl DemoLensApp {
             config_path: dirs::config_dir()
                 .map(|d| d.join("kiforge"))
                 .unwrap_or_default(),
+            layer_detector: LayerDetector::new(),
+            unassigned_gerbers: Vec::new(),
+            layer_assignments: HashMap::new(),
+            zoom_window_start: None,
+            zoom_window_dragging: false,
+            user_timezone: None,
         };
         
         // Load project config from disk
@@ -1303,6 +1009,52 @@ impl DemoLensApp {
         self.view_state.scale = scale;
         self.needs_initial_view = false;
     }
+    
+    
+    /// Show clock display in the upper right corner
+    fn show_clock_display(&self, ui: &mut egui::Ui) {
+        use chrono::{Local, Utc};
+        use chrono_tz::Tz;
+        
+        let clock_text = if let Some(tz_name) = &self.user_timezone {
+            if let Ok(tz) = tz_name.parse::<Tz>() {
+                let now = Utc::now().with_timezone(&tz);
+                format!("🕐 {} {}", now.format("%H:%M:%S"), tz.name())
+            } else {
+                let now = Local::now();
+                format!("🕐 {}", now.format("%H:%M:%S"))
+            }
+        } else {
+            let now = Local::now();
+            format!("🕐 {}", now.format("%H:%M:%S"))
+        };
+        
+        ui.label(egui::RichText::new(clock_text).color(egui::Color32::from_rgb(150, 150, 150)));
+    }
+    
+    /// Show the main content area (dock layout without Project tab)
+    fn show_main_content(&mut self, ui: &mut egui::Ui) {
+        // Clone the dock state but filter out the Project tab
+        let mut dock_state = self.dock_state.clone();
+        
+        // Create the dock layout and tab viewer
+        let mut tab_viewer = TabViewer { app: self };
+        
+        // Create custom style to match panel colors
+        let mut style = Style::from_egui(ui.ctx().style().as_ref());
+        style.dock_area_padding = None;
+        style.tab_bar.fill_tab_bar = true;
+        
+        // Show the dock area but filtered to exclude Project tab
+        DockArea::new(&mut dock_state)
+            .style(style)
+            .show_add_buttons(false)
+            .show_close_buttons(true)
+            .show(ui.ctx(), &mut tab_viewer);
+            
+        // Save the updated dock state back to the app
+        self.dock_state = dock_state;
+    }
 }
 
 impl DemoLensApp {
@@ -1320,8 +1072,23 @@ impl DemoLensApp {
     fn load_dock_state() -> Option<DockState<Tab>> {
         if let Some(config_dir) = dirs::config_dir() {
             let config_path = config_dir.join("kiforge").join("dock_state.json");
-            if let Ok(json) = fs::read_to_string(config_path) {
+            if let Ok(json) = fs::read_to_string(&config_path) {
                 if let Ok(dock_state) = serde_json::from_str::<DockState<Tab>>(&json) {
+                    // Check if Settings tab exists
+                    let mut has_settings = false;
+                    for (_, tab) in dock_state.iter_all_tabs() {
+                        if matches!(tab.kind, TabKind::Settings) {
+                            has_settings = true;
+                            break;
+                        }
+                    }
+                    
+                    // If Settings tab doesn't exist, delete the saved state to force a fresh layout
+                    if !has_settings {
+                        fs::remove_file(config_path).ok();
+                        return None;
+                    }
+                    
                     return Some(dock_state);
                 }
             }
@@ -1341,25 +1108,186 @@ impl DemoLensApp {
 /// 
 impl eframe::App for DemoLensApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Clone the dock state
+        // Handle system info button clicked
+        let show_system_info = ctx.memory(|mem| {
+            mem.data.get_temp::<bool>(egui::Id::new("show_system_info")).unwrap_or(false)
+        });
+        
+        if show_system_info {
+            // Clear the flag
+            ctx.memory_mut(|mem| {
+                mem.data.remove::<bool>(egui::Id::new("show_system_info"));
+            });
+            
+            // Create a temporary logger for system info output
+            let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
+            
+            // Display system details first
+            let details_text = self.details.format_os();
+            logger.log_info(&details_text);
+            
+            // Then display banner (so it appears above the details in the log)
+            logger.log_info(&self.banner.message);
+        }
+        
+        // Handle hotkeys first
+        ctx.input(|i| {
+            // F key - flip board view (top/bottom)
+            if i.key_pressed(egui::Key::F) {
+                self.showing_top = !self.showing_top;
+                let view_name = if self.showing_top { "top" } else { "bottom" };
+                let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
+                logger.log_info(&format!("Flipped to {} view (F key)", view_name));
+            }
+            
+            // U key - toggle units (mm/mils)
+            if i.key_pressed(egui::Key::U) {
+                self.global_units_mils = !self.global_units_mils;
+                let units_name = if self.global_units_mils { "mils" } else { "mm" };
+                let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
+                logger.log_info(&format!("Toggled units to {} (U key)", units_name));
+            }
+            
+            // R key - rotate board 90 degrees clockwise around PCB centroid
+            if i.key_pressed(egui::Key::R) {
+                // Calculate the centroid of all visible gerber layers
+                let mut combined_bbox: Option<gerber_viewer::BoundingBox> = None;
+                
+                for (layer_type, layer_info) in &self.layers {
+                    if layer_info.visible {
+                        if let Some(ref gerber_layer) = layer_info.gerber_layer {
+                            let layer_bbox = gerber_layer.bounding_box();
+                            combined_bbox = Some(match combined_bbox {
+                                None => layer_bbox.clone(),
+                                Some(existing) => gerber_viewer::BoundingBox {
+                                    min: gerber_viewer::position::Position::new(
+                                        existing.min.x.min(layer_bbox.min.x),
+                                        existing.min.y.min(layer_bbox.min.y),
+                                    ),
+                                    max: gerber_viewer::position::Position::new(
+                                        existing.max.x.max(layer_bbox.max.x),
+                                        existing.max.y.max(layer_bbox.max.y),
+                                    ),
+                                },
+                            });
+                        }
+                    }
+                }
+                
+                // Get the current center point that we're rotating around
+                let rotation_center = if let Some(bbox) = combined_bbox {
+                    bbox.center()
+                } else {
+                    // Fallback to current design offset if no layers
+                    self.design_offset.to_position()
+                };
+                
+                // To rotate around a specific point, we need to:
+                // 1. Translate so the rotation center is at origin (subtract center)
+                // 2. Rotate 90 degrees
+                // 3. Translate back (add rotated center)
+                
+                // Calculate what the rotation center will be after rotation
+                let angle_rad = 90.0_f32.to_radians();
+                let cos_a = angle_rad.cos() as f64;
+                let sin_a = angle_rad.sin() as f64;
+                
+                // Rotate the center point itself
+                let rotated_center_x = rotation_center.x * cos_a - rotation_center.y * sin_a;
+                let rotated_center_y = rotation_center.x * sin_a + rotation_center.y * cos_a;
+                
+                // Update rotation
+                self.rotation_degrees = (self.rotation_degrees + 90.0) % 360.0;
+                
+                // Adjust the design offset to account for the rotation around the centroid
+                // The offset difference keeps the same point at the center of rotation
+                let offset_adjustment = gerber_viewer::position::Vector::new(
+                    rotation_center.x - rotated_center_x,
+                    rotation_center.y - rotated_center_y
+                );
+                
+                // Apply the offset adjustment
+                self.design_offset = self.design_offset + offset_adjustment;
+                
+                let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
+                logger.log_custom(
+                    constants::LOG_TYPE_ROTATION,
+                    &format!("Rotated board to {:.0}° around PCB centroid (R key)", self.rotation_degrees)
+                );
+            }
+        });
+        
+        // Project Ribbon at the top
+        egui::TopBottomPanel::top("project_ribbon").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 10.0;
+                
+                // Project Ribbon with file selection
+                ui.group(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("📁 KiCad PCB File:");
+                        
+                        // Show current file or placeholder
+                        let current_file_text = match &self.project_config.state {
+                            project_state::ProjectState::NoProject => "No file selected".to_string(),
+                            project_state::ProjectState::Ready { pcb_path, .. } |
+                            project_state::ProjectState::PcbSelected { pcb_path } |
+                            project_state::ProjectState::GeneratingGerbers { pcb_path } |
+                            project_state::ProjectState::GerbersGenerated { pcb_path, .. } |
+                            project_state::ProjectState::LoadingGerbers { pcb_path, .. } => {
+                                pcb_path.file_name()
+                                    .map(|n| n.to_string_lossy().to_string())
+                                    .unwrap_or_else(|| "Unknown file".to_string())
+                            }
+                        };
+                        
+                        ui.label(egui::RichText::new(current_file_text).strong());
+                        
+                        if ui.button("Browse...").clicked() {
+                            self.file_dialog.pick_file();
+                        }
+                        
+                        // Handle file dialog
+                        if let Some(path) = self.file_dialog.update(ui.ctx()).picked() {
+                            let path_buf = path.to_path_buf();
+                            
+                            if self.last_picked_file.as_ref() != Some(&path_buf) {
+                                self.last_picked_file = Some(path_buf.clone());
+                                
+                                if path.extension().and_then(|s| s.to_str()) == Some("kicad_pcb") {
+                                    self.project_config.state = project_state::ProjectState::PcbSelected { pcb_path: path_buf.clone() };
+                                    self.selected_pcb_file = Some(path_buf);
+                                    let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
+                                    logger.log_info(&format!("Selected PCB file: {}", path.display()));
+                                } else {
+                                    let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
+                                    logger.log_error("Please select a .kicad_pcb file");
+                                }
+                            }
+                        }
+                    });
+                });
+                
+                // Clock in the upper right
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    self.show_clock_display(ui);
+                });
+            });
+        });
+        
+        // Main dock area below the ribbon
         let mut dock_state = self.dock_state.clone();
-        
-        // Create the dock layout and tab viewer
         let mut tab_viewer = TabViewer { app: self };
-        
-        // Create custom style to match panel colors
         let mut style = Style::from_egui(ctx.style().as_ref());
         style.dock_area_padding = None;
         style.tab_bar.fill_tab_bar = true;
         
-        // Show the dock area directly on the context
         DockArea::new(&mut dock_state)
             .style(style)
             .show_add_buttons(false)
             .show_close_buttons(true)
             .show(ctx, &mut tab_viewer);
             
-        // Save the updated dock state back to the app
         self.dock_state = dock_state;
         
         // Save dock state to disk periodically
