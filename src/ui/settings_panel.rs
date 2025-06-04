@@ -102,7 +102,7 @@ pub fn show_settings_panel<'a>(
             egui::ComboBox::from_id_salt("language_selector")
                 .selected_text("English")
                 .show_ui(ui, |ui| {
-                    ui.selectable_label(true, "English");
+                    let _ = ui.selectable_label(true, "English");
                     ui.add_enabled(false, egui::SelectableLabel::new(false, "Français (coming soon)"));
                     ui.add_enabled(false, egui::SelectableLabel::new(false, "Deutsch (coming soon)"));
                     ui.add_enabled(false, egui::SelectableLabel::new(false, "中文 (coming soon)"));

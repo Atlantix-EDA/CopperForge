@@ -6,6 +6,7 @@ use crate::DemoLensApp;
 use crate::ui;
 
 /// View Settings Panel following the diskforge pattern with explicit lifetimes
+#[allow(dead_code)]
 pub struct ViewSettingsPanel<'a> {
     app: &'a mut DemoLensApp,
     logger_state: &'a Dynamic<ReactiveEventLoggerState>,
@@ -14,6 +15,7 @@ pub struct ViewSettingsPanel<'a> {
 
 impl<'a> ViewSettingsPanel<'a> {
     /// Create a new ViewSettingsPanel instance
+    #[allow(dead_code)]
     pub fn render(
         app: &'a mut DemoLensApp,
         logger_state: &'a Dynamic<ReactiveEventLoggerState>,
@@ -27,6 +29,7 @@ impl<'a> ViewSettingsPanel<'a> {
     }
 
     /// Render the UI for the view settings panel
+    #[allow(dead_code)]
     pub fn ui(self, ui: &mut egui::Ui) {
         ui.vertical(|ui| {
             // Layer Controls Section

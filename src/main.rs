@@ -85,8 +85,10 @@ pub struct TabParams<'a> {
 struct Tab {
     kind: TabKind,
     #[serde(skip)]
+    #[allow(dead_code)]
     surface: Option<SurfaceIndex>,
     #[serde(skip)]
+    #[allow(dead_code)]
     node: Option<NodeIndex>,
 }
 
@@ -1034,6 +1036,7 @@ impl DemoLensApp {
     }
     
     /// Show the main content area (dock layout without Project tab)
+    #[allow(dead_code)]
     fn show_main_content(&mut self, ui: &mut egui::Ui) {
         // Clone the dock state but filter out the Project tab
         let mut dock_state = self.dock_state.clone();
@@ -1070,6 +1073,7 @@ impl DemoLensApp {
         }
     }
 
+    #[allow(dead_code)]
     fn load_dock_state() -> Option<DockState<Tab>> {
         if let Some(config_dir) = dirs::config_dir() {
             let config_path = config_dir.join("kiforge").join("dock_state.json");
@@ -1154,7 +1158,7 @@ impl eframe::App for DemoLensApp {
                 // Calculate the centroid of all visible gerber layers
                 let mut combined_bbox: Option<gerber_viewer::BoundingBox> = None;
                 
-                for (layer_type, layer_info) in &self.layers {
+                for (_layer_type, layer_info) in &self.layers {
                     if layer_info.visible {
                         if let Some(ref gerber_layer) = layer_info.gerber_layer {
                             let layer_bbox = gerber_layer.bounding_box();

@@ -7,8 +7,11 @@ use gerber_viewer::gerber_parser::parse;
 #[derive(Debug, Clone)]
 pub struct DrcSimple {
     pub min_trace_width: f32,   // mm
+    #[allow(dead_code)]
     pub min_via_diameter: f32,  // mm
+    #[allow(dead_code)]
     pub min_hole_diameter: f32, // mm
+    #[allow(dead_code)]
     pub min_spacing: f32,       // mm
     pub lines_only: bool,       // Only analyze Line primitives (skip rectangles)
     pub min_trace_length: f32,  // mm - minimum length to be considered a trace
@@ -30,9 +33,11 @@ impl Default for DrcSimple {
 #[derive(Debug, Clone)]
 pub struct Trace {
     pub width: f32,
+    #[allow(dead_code)]
     pub length: f32,
     pub center_x: f32,
     pub center_y: f32,
+    #[allow(dead_code)]
     pub trace_type: TraceType,
 }
 
@@ -46,7 +51,9 @@ pub enum TraceType {
 pub struct TraceViolation {
     pub trace: Trace,
     pub measured_width: f32,
+    #[allow(dead_code)]
     pub required_width: f32,
+    #[allow(dead_code)]
     pub violation_type: String,
 }
 
@@ -248,6 +255,7 @@ impl DrcSimple {
             .collect()
     }
     
+    #[allow(dead_code)]
     pub fn run_trace_width_drc(&self, layer: &GerberLayer) -> Vec<TraceViolation> {
         let traces = self.find_traces(layer);
         self.find_trace_width_violations(&traces)
@@ -504,12 +512,14 @@ impl DrcSimple {
     }
     
     /// Clone a GerberLayer (since it doesn't implement Clone)
+    #[allow(dead_code)]
     fn clone_layer(&self, layer: &GerberLayer) -> GerberLayer {
         let primitives = layer.primitives().to_vec();
         self.create_layer_from_primitives(primitives)
     }
     
     /// Create a new GerberLayer from a vector of primitives
+    #[allow(dead_code)]
     fn create_layer_from_primitives(&self, _primitives: Vec<GerberPrimitive>) -> GerberLayer {
         // Since we can't construct a GerberLayer directly from primitives,
         // we need to create empty commands and then build the layer
@@ -530,12 +540,14 @@ impl DrcSimple {
     }
     
     /// Modify line segments to connect properly to the rounded arc
+    #[allow(dead_code)]
     fn modify_lines_for_arc(&self, _line1: &GerberPrimitive, _line2: &GerberPrimitive, _corner_pos: Position, _arc_radius: f32, _tolerance: f64) -> Vec<GerberPrimitive> {
         // TODO: Update to use new tuple-style GerberPrimitive::Line API
         Vec::new()
     }
     
     /// Calculate optimal shortening amount based on KiCad algorithm
+    #[allow(dead_code)]
     fn calculate_shortening_amount(&self, corner_angle: f64, track_length: f32, radius: f32) -> f32 {
         // KiCad approach: theta = π/2 - half_track_angle
         let half_angle = corner_angle / 2.0;
@@ -600,8 +612,9 @@ impl DrcSimple {
     }
     
     /// Generate arc segments to replace a sharp corner using KiCad-style midpoint calculation
+    #[allow(dead_code)]
     fn generate_corner_arc(&self, corner_pos: Position, dir1: Position, dir2: Position, corner_angle: f64, radius: f32, trace_width: f32) -> Vec<GerberPrimitive> {
-        let mut arc_segments = Vec::new();
+        let arc_segments = Vec::new();
         
         // Use KiCad-style midpoint calculation for smoother arc generation
         let half_angle = corner_angle / 2.0;
@@ -637,11 +650,11 @@ impl DrcSimple {
             let t2 = (i + 1) as f64 / num_segments as f64;
             
             // Use quadratic Bezier curve interpolation
-            let seg_start = self.bezier_interpolate(start_point, midpoint, end_point, t1);
-            let seg_end = self.bezier_interpolate(start_point, midpoint, end_point, t2);
+            let _seg_start = self.bezier_interpolate(start_point, midpoint, end_point, t1);
+            let _seg_end = self.bezier_interpolate(start_point, midpoint, end_point, t2);
             
             // Make line segments slightly wider for better overlap
-            let wider_width = trace_width * 1.1; // 10% wider for overlap
+            let _wider_width = trace_width * 1.1; // 10% wider for overlap
             
             // TODO: Update to use new tuple-style GerberPrimitive::Line API
             // arc_segments.push(GerberPrimitive::Line(...));
