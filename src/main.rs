@@ -7,8 +7,8 @@ use egui::ViewportBuilder;
 use egui_dock::{DockArea, DockState, NodeIndex, Style, SurfaceIndex};
 use serde::{Serialize, Deserialize};
 
-mod project_state;
-use project_state::{ProjectConfig, ProjectState};
+mod managers;
+use managers::{ProjectManager, ProjectState};
 
 /// egui_lens imports
 use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
@@ -20,11 +20,12 @@ use std::collections::HashMap;
 use gerber_viewer::gerber_parser::parse;
 use log;
 use gerber_viewer::{
-    draw_arrow, draw_outline, draw_crosshair, BoundingBox, GerberLayer, GerberRenderer, 
-    ViewState, Mirroring, draw_marker, UiState
+   draw_arrow, draw_outline, draw_crosshair, BoundingBox, GerberLayer, GerberRenderer, 
+   ViewState, Mirroring, draw_marker, UiState
 };
 use egui::{Painter, Pos2, Stroke};
 use gerber_viewer::position::Vector;
+
 
 // Import platform modules
 mod platform;
@@ -135,9 +136,7 @@ pub struct DemoLensApp {
     pub grid_settings: GridSettings,
     
     // Project management
-    pub project_config: ProjectConfig,
-    pub file_dialog: egui_file_dialog::FileDialog,
-    pub last_picked_file: Option<PathBuf>,
+    pub project_manager: ProjectManager,
     
     // Legacy fields for compatibility (will be removed later)
     pub selected_pcb_file: Option<PathBuf>,
@@ -697,7 +696,7 @@ impl Drop for DemoLensApp {
         // Save dock state when application closes
         self.save_dock_state();
         // Save project config
-        if let Err(e) = self.project_config.save_to_file(&self.config_path) {
+        if let Err(e) = self.project_manager.save_to_file(&self.config_path) {
             eprintln!("Failed to save project config: {}", e);
         }
     }
@@ -837,9 +836,7 @@ impl DemoLensApp {
             corner_overlay_shapes: Vec::new(),
             global_units_mils: false, // Default to mm
             grid_settings: GridSettings::default(),
-            project_config: ProjectConfig::default(),
-            file_dialog: egui_file_dialog::FileDialog::new(),
-            last_picked_file: None,
+            project_manager: ProjectManager::new(),
             selected_pcb_file: None,
             generated_gerber_dir: None,
             generating_gerbers: false,
@@ -857,11 +854,11 @@ impl DemoLensApp {
         };
         
         // Load project config from disk
-        if let Ok(config) = ProjectConfig::load_from_file(&app.config_path) {
-            app.project_config = config;
+        if let Ok(project_manager) = ProjectManager::load_from_file(&app.config_path) {
+            app.project_manager = project_manager;
             
             // Sync legacy fields with project state
-            match &app.project_config.state {
+            match &app.project_manager.state {
                 ProjectState::NoProject => {},
                 ProjectState::PcbSelected { pcb_path } |
                 ProjectState::GeneratingGerbers { pcb_path } => {
@@ -888,20 +885,20 @@ impl DemoLensApp {
     fn initialize_project(&mut self) {
         let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
         
-        match &self.project_config.state.clone() {
+        match &self.project_manager.state.clone() {
             ProjectState::NoProject => {
                 logger.log_info("No previous project found. Please select a PCB file.");
             },
             ProjectState::PcbSelected { pcb_path } => {
                 if pcb_path.exists() {
                     logger.log_info(&format!("Restored PCB file: {}", pcb_path.display()));
-                    if self.project_config.auto_generate_on_startup {
+                    if self.project_manager.auto_generate_on_startup {
                         logger.log_info("Auto-generating gerbers...");
                         self.generating_gerbers = true;
                     }
                 } else {
                     logger.log_error(&format!("PCB file not found: {}", pcb_path.display()));
-                    self.project_config.state = ProjectState::NoProject;
+                    self.project_manager.state = ProjectState::NoProject;
                 }
             },
             ProjectState::GeneratingGerbers { pcb_path } => {
@@ -910,19 +907,19 @@ impl DemoLensApp {
                     logger.log_info("Resuming gerber generation...");
                     self.generating_gerbers = true;
                 } else {
-                    self.project_config.state = ProjectState::NoProject;
+                    self.project_manager.state = ProjectState::NoProject;
                 }
             },
             ProjectState::GerbersGenerated { pcb_path, gerber_dir } => {
                 if pcb_path.exists() && gerber_dir.exists() {
                     logger.log_info(&format!("Found generated gerbers at: {}", gerber_dir.display()));
-                    if self.project_config.auto_generate_on_startup {
+                    if self.project_manager.auto_generate_on_startup {
                         logger.log_info("Auto-loading gerbers...");
                         self.loading_gerbers = true;
                     }
                 } else {
                     logger.log_error("PCB or gerber files not found");
-                    self.project_config.state = ProjectState::NoProject;
+                    self.project_manager.state = ProjectState::NoProject;
                 }
             },
             ProjectState::LoadingGerbers { pcb_path, gerber_dir } => {
@@ -931,7 +928,7 @@ impl DemoLensApp {
                     logger.log_info("Resuming gerber loading...");
                     self.loading_gerbers = true;
                 } else {
-                    self.project_config.state = ProjectState::NoProject;
+                    self.project_manager.state = ProjectState::NoProject;
                 }
             },
             ProjectState::Ready { pcb_path, gerber_dir, .. } => {
@@ -941,7 +938,7 @@ impl DemoLensApp {
                     self.loading_gerbers = true;
                 } else {
                     logger.log_error("Project files not found");
-                    self.project_config.state = ProjectState::NoProject;
+                    self.project_manager.state = ProjectState::NoProject;
                 }
             },
         }
@@ -1233,13 +1230,13 @@ impl eframe::App for DemoLensApp {
                         ui.label("📁 KiCad PCB File:");
                         
                         // Show current file or placeholder
-                        let current_file_text = match &self.project_config.state {
-                            project_state::ProjectState::NoProject => "No file selected".to_string(),
-                            project_state::ProjectState::Ready { pcb_path, .. } |
-                            project_state::ProjectState::PcbSelected { pcb_path } |
-                            project_state::ProjectState::GeneratingGerbers { pcb_path } |
-                            project_state::ProjectState::GerbersGenerated { pcb_path, .. } |
-                            project_state::ProjectState::LoadingGerbers { pcb_path, .. } => {
+                        let current_file_text = match &self.project_manager.state {
+                            ProjectState::NoProject => "No file selected".to_string(),
+                            ProjectState::Ready { pcb_path, .. } |
+                            ProjectState::PcbSelected { pcb_path } |
+                            ProjectState::GeneratingGerbers { pcb_path } |
+                            ProjectState::GerbersGenerated { pcb_path, .. } |
+                            ProjectState::LoadingGerbers { pcb_path, .. } => {
                                 pcb_path.file_name()
                                     .map(|n| n.to_string_lossy().to_string())
                                     .unwrap_or_else(|| "Unknown file".to_string())
@@ -1249,26 +1246,14 @@ impl eframe::App for DemoLensApp {
                         ui.label(egui::RichText::new(current_file_text).strong());
                         
                         if ui.button("Browse...").clicked() {
-                            self.file_dialog.pick_file();
+                            self.project_manager.open_file_dialog();
                         }
                         
                         // Handle file dialog
-                        if let Some(path) = self.file_dialog.update(ui.ctx()).picked() {
-                            let path_buf = path.to_path_buf();
-                            
-                            if self.last_picked_file.as_ref() != Some(&path_buf) {
-                                self.last_picked_file = Some(path_buf.clone());
-                                
-                                if path.extension().and_then(|s| s.to_str()) == Some("kicad_pcb") {
-                                    self.project_config.state = project_state::ProjectState::PcbSelected { pcb_path: path_buf.clone() };
-                                    self.selected_pcb_file = Some(path_buf);
-                                    let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
-                                    logger.log_info(&format!("Selected PCB file: {}", path.display()));
-                                } else {
-                                    let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
-                                    logger.log_error("Please select a .kicad_pcb file");
-                                }
-                            }
+                        if let Some(path_buf) = self.project_manager.update_file_dialog(ui.ctx()) {
+                            self.selected_pcb_file = Some(path_buf.clone());
+                            let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
+                            logger.log_info(&format!("Selected PCB file: {}", path_buf.display()));
                         }
                     });
                 });
