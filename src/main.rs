@@ -18,6 +18,7 @@ use egui_mobius_reactive::Dynamic;
 use std::collections::HashMap;
 
 use gerber_viewer::gerber_parser::parse;
+use log;
 use gerber_viewer::{
     draw_arrow, draw_outline, draw_crosshair, BoundingBox, GerberLayer, GerberRenderer, 
     ViewState, Mirroring, draw_marker, UiState
@@ -1302,7 +1303,10 @@ impl eframe::App for DemoLensApp {
 /// It initializes the logger, sets up the native window options,
 /// and runs the application using the `eframe` framework.
 fn main() -> eframe::Result<()> {
-    env_logger::init(); // Log to stderr (optional).
+    // Configure env_logger to filter out gerber_parser warnings
+    env_logger::Builder::from_default_env()
+        .filter_module("gerber_parser::parser", log::LevelFilter::Off)
+        .init();
     eframe::run_native(
         "KiForge - PCB & CAM for KiCad",
         eframe::NativeOptions {

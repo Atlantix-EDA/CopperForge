@@ -254,6 +254,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "anyhow"
+version = "1.0.98"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e16d2d3311acee920a9eb8d33b8cbc1787ce4a264e85f964c2404b969bdcd487"
+
+[[package]]
 name = "arboard"
 version = "3.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1760,9 +1766,35 @@ dependencies = [
 ]
 
 [[package]]
-name = "gerber-types"
+name = "gerber_parser"
+version = "0.2.0"
+source = "git+https://github.com/makerpnp/gerber-parser.git?rev=c8a86362b7cf68964dedce3fb7339d7a5feb9106#c8a86362b7cf68964dedce3fb7339d7a5feb9106"
+dependencies = [
+ "anyhow",
+ "gerber_types 0.4.0 (git+https://github.com/MakerPnP/gerber-types.git?rev=7641a4c92482411b6a05a5dc36793151763b40e6)",
+ "lazy-regex",
+ "log",
+ "regex 1.11.1",
+ "thiserror 2.0.12",
+]
+
+[[package]]
+name = "gerber_parser"
+version = "0.2.0"
+source = "git+https://github.com/MakerPnP/gerber-parser#e8139470cabe0fae5bdde909a1d7c4256f23f593"
+dependencies = [
+ "anyhow",
+ "gerber_types 0.4.0 (git+https://github.com/MakerPnP/gerber-types.git?rev=7641a4c92482411b6a05a5dc36793151763b40e6)",
+ "lazy-regex",
+ "log",
+ "regex 1.11.1",
+ "thiserror 2.0.12",
+]
+
+[[package]]
+name = "gerber_types"
 version = "0.4.0"
-source = "git+https://github.com/makerpnp/gerber-types-rs.git?rev=351ef9150fdc4be735ce0d22542f0c333c3aefd2#351ef9150fdc4be735ce0d22542f0c333c3aefd2"
+source = "git+https://github.com/MakerPnP/gerber-types.git?rev=7641a4c92482411b6a05a5dc36793151763b40e6#7641a4c92482411b6a05a5dc36793151763b40e6"
 dependencies = [
  "chrono",
  "num-rational",
@@ -1771,27 +1803,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "gerber_parser"
-version = "0.2.0"
-source = "git+https://github.com/makerpnp/gerber-parser-makerpnp.git?rev=81f166bc729d7a3e1bc9631731b8e5c36307743a#81f166bc729d7a3e1bc9631731b8e5c36307743a"
+name = "gerber_types"
+version = "0.4.0"
+source = "git+https://github.com/MakerPnP/gerber-types#2a3f9eada06ffaedd39558eb8aa50786d9118b39"
 dependencies = [
- "gerber-types",
- "lazy-regex",
- "log",
- "regex 1.11.1",
+ "chrono",
+ "num-rational",
  "thiserror 2.0.12",
+ "uuid",
 ]
 
 [[package]]
 name = "gerber_viewer"
 version = "0.1.0"
-source = "git+https://github.com/MakerPnP/gerber_viewer#67f753a751f64ce3258c61ab693e9037f65dd63a"
+source = "git+https://github.com/MakerPnP/gerber-viewer#452a58f656565657f45fbadd7cbe6046a8adb24e"
 dependencies = [
  "egui",
- "gerber-types",
- "gerber_parser",
+ "gerber_parser 0.2.0 (git+https://github.com/makerpnp/gerber-parser.git?rev=c8a86362b7cf68964dedce3fb7339d7a5feb9106)",
+ "gerber_types 0.4.0 (git+https://github.com/MakerPnP/gerber-types.git?rev=7641a4c92482411b6a05a5dc36793151763b40e6)",
  "log",
  "lyon",
+ "profiling",
  "rand 0.9.1",
  "thiserror 2.0.12",
 ]
@@ -2361,15 +2393,18 @@ dependencies = [
  "egui_mobius",
  "egui_mobius_reactive",
  "env_logger",
+ "gerber_parser 0.2.0 (git+https://github.com/MakerPnP/gerber-parser)",
+ "gerber_types 0.4.0 (git+https://github.com/MakerPnP/gerber-types)",
  "gerber_viewer",
  "local-ip",
  "local-ip-address",
+ "log",
  "notify",
  "regex 1.11.1",
  "rfd 0.15.3",
  "serde",
  "serde_json",
- "sysinfo 0.35.1",
+ "sysinfo 0.35.2",
 ]
 
 [[package]]
@@ -3559,6 +3594,19 @@ name = "profiling"
 version = "1.0.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "afbdc74edc00b6f6a218ca6a5364d6226a259d4b8ea1af4a0ea063f27e179f4d"
+dependencies = [
+ "profiling-procmacros",
+]
+
+[[package]]
+name = "profiling-procmacros"
+version = "1.0.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a65f2e60fbf1063868558d69c6beacf412dc755f9fc020f514b7955fc914fe30"
+dependencies = [
+ "quote",
+ "syn 2.0.101",
+]
 
 [[package]]
 name = "qoi"
@@ -4202,9 +4250,9 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.35.1"
+version = "0.35.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "79251336d17c72d9762b8b54be4befe38d2db56fbbc0241396d70f173c39d47a"
+checksum = "3c3ffa3e4ff2b324a57f7aeb3c349656c7b127c3c189520251a648102a92496e"
 dependencies = [
  "libc",
  "memchr 2.7.4",
