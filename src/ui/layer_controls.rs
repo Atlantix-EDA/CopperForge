@@ -10,7 +10,7 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
     let logger = ReactiveEventLogger::with_colors(logger_state, log_colors);
     
     // Layer visibility controls
-    ui.label(&format!("Visible Layers (Showing {} side):", if app.showing_top { "TOP" } else { "BOTTOM" }));
+    ui.label(&format!("Visible Layers (Showing {} side):", if app.display_manager.showing_top { "TOP" } else { "BOTTOM" }));
     ui.add_space(4.0);
     
     // Quick controls
@@ -33,7 +33,7 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
     for layer_type in LayerType::all() {
         if let Some(layer_info) = app.layers.get_mut(&layer_type) {
             // Only show relevant layers based on showing_top
-            let show_control = layer_type.should_render(app.showing_top) || 
+            let show_control = layer_type.should_render(app.display_manager.showing_top) || 
                               layer_type == LayerType::MechanicalOutline;
             
             if show_control {

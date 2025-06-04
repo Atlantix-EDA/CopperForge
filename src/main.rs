@@ -8,7 +8,7 @@ use egui_dock::{DockArea, DockState, NodeIndex, Style, SurfaceIndex};
 use serde::{Serialize, Deserialize};
 
 mod managers;
-use managers::{ProjectManager, ProjectState};
+use managers::{ProjectManager, ProjectState, DisplayManager};
 
 /// egui_lens imports
 use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
@@ -21,10 +21,9 @@ use gerber_viewer::gerber_parser::parse;
 use log;
 use gerber_viewer::{
    draw_arrow, draw_outline, draw_crosshair, BoundingBox, GerberLayer, GerberRenderer, 
-   ViewState, Mirroring, draw_marker, UiState
+   ViewState, draw_marker, UiState
 };
 use egui::{Painter, Pos2, Stroke};
-use gerber_viewer::position::Vector;
 
 
 // Import platform modules
@@ -113,13 +112,8 @@ pub struct DemoLensApp {
     pub banner       : banner::Banner,
     pub details      : details::Details,
     
-    // Properties
-    pub enable_unique_colors: bool,
-    pub enable_polygon_numbering: bool,
-    pub mirroring: Mirroring,
-    pub center_offset: Vector,
-    pub design_offset: Vector,
-    pub showing_top: bool,  // true = top layers, false = bottom layers
+    // Display settings
+    pub display_manager: DisplayManager,
     
     // DRC Properties
     pub current_drc_ruleset: Option<String>,
@@ -252,8 +246,8 @@ impl Tab {
         // Handle double-click to center (same as Center button)
         if response.double_clicked() {
             // Apply the same logic as the "Center" button in orientation panel
-            app.center_offset = gerber_viewer::position::Vector::new(0.0, 0.0);
-            app.design_offset = gerber_viewer::position::Vector::new(0.0, 0.0);
+            app.display_manager.center_offset = managers::display::VectorOffset { x: 0.0, y: 0.0 };
+            app.display_manager.design_offset = managers::display::VectorOffset { x: 0.0, y: 0.0 };
             app.needs_initial_view = true;
         }
         
@@ -344,7 +338,7 @@ impl Tab {
             if let Some(layer_info) = app.layers.get(&layer_type) {
                 if layer_info.visible {
                     // Filter based on showing_top
-                    let should_render = layer_type.should_render(app.showing_top);
+                    let should_render = layer_type.should_render(app.display_manager.showing_top);
                     
                     if should_render {
                         // Use the layer's specific gerber data if available, otherwise fall back to demo
@@ -359,9 +353,9 @@ impl Tab {
                             false, // Don't use unique colors for multi-layer view
                             false, // Don't show polygon numbering
                             app.rotation_degrees.to_radians(),
-                            app.mirroring,
-                            app.center_offset.into(),
-                            app.design_offset.into(),
+                            app.display_manager.mirroring.clone().into(),
+                            app.display_manager.center_offset.clone().into(),
+                            app.display_manager.design_offset.clone().into(),
                         );
                     }
                 }
@@ -370,7 +364,9 @@ impl Tab {
 
         // Get bounding box and outline vertices
         let bbox = app.gerber_layer.bounding_box();
-        let origin = app.center_offset - app.design_offset;
+        let center_vec: gerber_viewer::position::Vector = app.display_manager.center_offset.clone().into();
+        let design_vec: gerber_viewer::position::Vector = app.display_manager.design_offset.clone().into();
+        let origin = center_vec - design_vec;
         let bbox_vertices = bbox.vertices();  
         let outline_vertices = bbox.vertices();  
         
@@ -388,11 +384,14 @@ impl Tab {
 
         let screen_radius = MARKER_RADIUS * app.view_state.scale;
 
-        let design_offset_screen_position = app.view_state.gerber_to_screen_coords(app.design_offset.to_position());
+        let design_offset_vec: gerber_viewer::position::Vector = app.display_manager.design_offset.clone().into();
+        let design_offset_screen_position = app.view_state.gerber_to_screen_coords(design_offset_vec.to_position());
         draw_arrow(&painter, design_offset_screen_position, app.ui_state.origin_screen_pos, Color32::ORANGE);
         draw_marker(&painter, design_offset_screen_position, Color32::ORANGE, Color32::YELLOW, screen_radius);
 
-        let design_origin_screen_position = app.view_state.gerber_to_screen_coords((app.center_offset - app.design_offset).to_position());
+        let center_offset_vec: gerber_viewer::position::Vector = app.display_manager.center_offset.clone().into();
+        let design_offset_vec2: gerber_viewer::position::Vector = app.display_manager.design_offset.clone().into();
+        let design_origin_screen_position = app.view_state.gerber_to_screen_coords((center_offset_vec - design_offset_vec2).to_position());
         draw_marker(&painter, design_origin_screen_position, Color32::PURPLE, Color32::MAGENTA, screen_radius);
         
         // Render corner overlay shapes (rounded corners)
@@ -418,15 +417,17 @@ impl Tab {
                     }
                     
                     // Apply mirroring if any
-                    if app.mirroring.x {
+                    if app.display_manager.mirroring.x {
                         vertex_pos = vertex_pos.invert_x();
                     }
-                    if app.mirroring.y {
+                    if app.display_manager.mirroring.y {
                         vertex_pos = vertex_pos.invert_y();
                     }
                     
                     // Apply center and design offsets
-                    let origin = app.center_offset - app.design_offset;
+                    let center_vec: gerber_viewer::position::Vector = app.display_manager.center_offset.clone().into();
+                    let design_vec: gerber_viewer::position::Vector = app.display_manager.design_offset.clone().into();
+                    let origin = center_vec - design_vec;
                     vertex_pos = vertex_pos + origin.to_position();
                     
                     let vertex_screen = app.view_state.gerber_to_screen_coords(vertex_pos);
@@ -461,10 +462,10 @@ impl Tab {
             }
             
             // Apply mirroring if any
-            if app.mirroring.x { // X mirroring
+            if app.display_manager.mirroring.x { // X mirroring
                 transformed_pos = transformed_pos.invert_x();
             }
-            if app.mirroring.y { // Y mirroring
+            if app.display_manager.mirroring.y { // Y mirroring
                 transformed_pos = transformed_pos.invert_y();
             }
             
@@ -589,7 +590,9 @@ impl Tab {
                 let gerber_pos = app.view_state.screen_to_gerber_coords(mouse_screen_pos);
                 
                 // Apply the same transformation as other elements for consistency
-                let origin = app.center_offset - app.design_offset;
+                let center_vec: gerber_viewer::position::Vector = app.display_manager.center_offset.clone().into();
+                let design_vec: gerber_viewer::position::Vector = app.display_manager.design_offset.clone().into();
+                let origin = center_vec - design_vec;
                 let adjusted_pos = gerber_viewer::position::Position::new(
                     gerber_pos.x - origin.to_position().x,
                     gerber_pos.y - origin.to_position().y
@@ -822,12 +825,7 @@ impl DemoLensApp {
             log_colors,
             banner,
             details,
-            enable_unique_colors: ENABLE_UNIQUE_SHAPE_COLORS,
-            enable_polygon_numbering: ENABLE_POLYGON_NUMBERING,
-            mirroring: MIRRORING.into(),
-            center_offset: CENTER_OFFSET,
-            design_offset: DESIGN_OFFSET,
-            showing_top: true,
+            display_manager: DisplayManager::new(),
             current_drc_ruleset: None,
             drc_rules: DrcRules::default(),
             drc_violations: Vec::new(),
@@ -1136,8 +1134,8 @@ impl eframe::App for DemoLensApp {
         ctx.input(|i| {
             // F key - flip board view (top/bottom)
             if i.key_pressed(egui::Key::F) {
-                self.showing_top = !self.showing_top;
-                let view_name = if self.showing_top { "top" } else { "bottom" };
+                self.display_manager.showing_top = !self.display_manager.showing_top;
+                let view_name = if self.display_manager.showing_top { "top" } else { "bottom" };
                 let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
                 logger.log_info(&format!("Flipped to {} view (F key)", view_name));
             }
@@ -1181,7 +1179,10 @@ impl eframe::App for DemoLensApp {
                     bbox.center()
                 } else {
                     // Fallback to current design offset if no layers
-                    self.design_offset.to_position()
+                    {
+                        let design_vec: gerber_viewer::position::Vector = self.display_manager.design_offset.clone().into();
+                        design_vec.to_position()
+                    }
                 };
                 
                 // To rotate around a specific point, we need to:
@@ -1209,7 +1210,11 @@ impl eframe::App for DemoLensApp {
                 );
                 
                 // Apply the offset adjustment
-                self.design_offset = self.design_offset + offset_adjustment;
+                {
+                    let current_offset: gerber_viewer::position::Vector = self.display_manager.design_offset.clone().into();
+                    let new_offset = current_offset + offset_adjustment;
+                    self.display_manager.design_offset = managers::display::VectorOffset { x: new_offset.x, y: new_offset.y };
+                }
                 
                 let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
                 logger.log_custom(
