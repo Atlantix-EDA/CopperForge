@@ -777,12 +777,10 @@ impl DemoLensApp {
         details.get_os();
         
 
-        // Initialize dock state - force fresh layout for now to include Project tab
-        let dock_state = {
-            // Temporarily force fresh layout
-            // let dock_state = if let Some(saved_dock_state) = Self::load_dock_state() {
-            //     saved_dock_state
-            // } else {
+        // Initialize dock state - load from saved state or create default
+        let dock_state = if let Some(saved_dock_state) = Self::load_dock_state() {
+            saved_dock_state
+        } else {
             // Create default dock layout if no saved state exists
             let view_settings_tab = Tab::new(TabKind::ViewSettings, SurfaceIndex::main(), NodeIndex(0));
             let drc_tab = Tab::new(TabKind::DRC, SurfaceIndex::main(), NodeIndex(1));
@@ -810,7 +808,6 @@ impl DemoLensApp {
             );
             
             dock_state
-            // }
         };
 
         let mut app = Self {
@@ -1060,36 +1057,38 @@ impl DemoLensApp {
     fn save_dock_state(&self) {
         if let Some(config_dir) = dirs::config_dir() {
             let kiforge_dir = config_dir.join("kiforge");
-            fs::create_dir_all(&kiforge_dir).ok();
+            if let Err(e) = fs::create_dir_all(&kiforge_dir) {
+                eprintln!("Failed to create config directory: {}", e);
+                return;
+            }
             let config_path = kiforge_dir.join("dock_state.json");
-            if let Ok(json) = serde_json::to_string_pretty(&self.dock_state) {
-                fs::write(config_path, json).ok();
+            match serde_json::to_string_pretty(&self.dock_state) {
+                Ok(json) => {
+                    if let Err(e) = fs::write(&config_path, json) {
+                        eprintln!("Failed to write dock state: {}", e);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Failed to serialize dock state: {}", e);
+                }
             }
         }
     }
 
-    #[allow(dead_code)]
     fn load_dock_state() -> Option<DockState<Tab>> {
         if let Some(config_dir) = dirs::config_dir() {
             let config_path = config_dir.join("kiforge").join("dock_state.json");
             if let Ok(json) = fs::read_to_string(&config_path) {
-                if let Ok(dock_state) = serde_json::from_str::<DockState<Tab>>(&json) {
-                    // Check if Settings tab exists
-                    let mut has_settings = false;
-                    for (_, tab) in dock_state.iter_all_tabs() {
-                        if matches!(tab.kind, TabKind::Settings) {
-                            has_settings = true;
-                            break;
-                        }
+                match serde_json::from_str::<DockState<Tab>>(&json) {
+                    Ok(dock_state) => {
+                        // Successfully loaded dock state
+                        return Some(dock_state);
                     }
-                    
-                    // If Settings tab doesn't exist, delete the saved state to force a fresh layout
-                    if !has_settings {
+                    Err(e) => {
+                        eprintln!("Failed to deserialize dock state: {}", e);
+                        // Delete corrupted file
                         fs::remove_file(config_path).ok();
-                        return None;
                     }
-                    
-                    return Some(dock_state);
                 }
             }
         }
