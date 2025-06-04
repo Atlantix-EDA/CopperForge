@@ -2,7 +2,6 @@ use crate::DemoLensApp;
 use crate::constants::*;
 use crate::ui;
 
-use std::collections::HashMap;
 use eframe::emath::{Rect, Vec2};
 use eframe::epaint::Color32;
 use egui::{Painter, Pos2, Stroke};
@@ -11,8 +10,8 @@ use serde::{Serialize, Deserialize};
 
 use egui_lens::ReactiveEventLogger;
 use gerber_viewer::{
-    draw_arrow, draw_outline, draw_crosshair, BoundingBox, GerberLayer, GerberRenderer, 
-    ViewState, Mirroring, draw_marker, UiState
+    draw_arrow, draw_outline, draw_crosshair, GerberRenderer, 
+    draw_marker
 };
 use gerber_viewer::position::Vector;
 
@@ -277,11 +276,11 @@ impl Tab {
         draw_marker(&painter, design_origin_screen_position, Color32::PURPLE, Color32::MAGENTA, screen_radius);
         
         // Render corner overlay shapes (rounded corners)
-        if !app.corner_overlay_shapes.is_empty() {
+        if !app.drc_manager.corner_overlay_shapes.is_empty() {
             // Use a different color for the overlay (bright green for visibility)
             let overlay_color = Color32::from_rgb(0, 255, 0); // Bright green
             
-            for shape in &app.corner_overlay_shapes {
+            for shape in &app.drc_manager.corner_overlay_shapes {
                 // Transform all polygon vertices
                 let mut transformed_vertices = Vec::new();
                 
@@ -326,7 +325,7 @@ impl Tab {
         }
         
         // Draw DRC violation markers
-        for violation in &app.drc_violations {
+        for violation in &app.drc_manager.violations {
             let violation_pos = gerber_viewer::position::Position::new(violation.x as f64, violation.y as f64);
             
             // Apply the same transformation pipeline as GerberRenderer::paint_layer()

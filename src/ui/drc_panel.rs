@@ -17,7 +17,7 @@ pub fn show_drc_panel<'a>(
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.button("🔍 Run DRC").clicked() {
                 // Check if a ruleset is loaded
-                if let Some(ref ruleset) = app.current_drc_ruleset {
+                if let Some(ref ruleset) = app.drc_manager.current_ruleset {
                     // Run actual DRC analysis
                     logger.log_info("Starting Design Rule Check");
                     logger.log_info(&format!("Using {} ruleset", ruleset));
@@ -26,8 +26,8 @@ pub fn show_drc_panel<'a>(
                     // Run the actual DRC check (now includes OpenCV)
                     let violations = crate::drc::run_simple_drc_check(
                         &app.layers,
-                        &app.drc_rules,
-                        &mut app.trace_quality_issues
+                        &app.drc_manager.rules,
+                        &mut app.drc_manager.trace_quality_issues
                     );
                     
                     logger.log_info("Running imageproc edge detection and morphological analysis");
@@ -65,83 +65,83 @@ pub fn show_drc_panel<'a>(
             // Unit toggle
             ui.horizontal(|ui| {
                 ui.label("Units:");
-                ui.selectable_value(&mut app.drc_rules.use_mils, false, "mm");
-                ui.selectable_value(&mut app.drc_rules.use_mils, true, "mils");
+                ui.selectable_value(&mut app.drc_manager.rules.use_mils, false, "mm");
+                ui.selectable_value(&mut app.drc_manager.rules.use_mils, true, "mils");
             });
             ui.add_space(4.0);
             
             // Trace Width
             ui.horizontal(|ui| {
                 ui.label("Min Trace Width:");
-                let mut display_value = app.drc_rules.get_display_value(app.drc_rules.min_trace_width);
-                let range = if app.drc_rules.use_mils { 2.0..=80.0 } else { 0.05..=2.0 };
-                let speed = if app.drc_rules.use_mils { 0.1 } else { 0.01 };
+                let mut display_value = app.drc_manager.rules.get_display_value(app.drc_manager.rules.min_trace_width);
+                let range = if app.drc_manager.rules.use_mils { 2.0..=80.0 } else { 0.05..=2.0 };
+                let speed = if app.drc_manager.rules.use_mils { 0.1 } else { 0.01 };
                 
                 if ui.add(egui::DragValue::new(&mut display_value)
                     .speed(speed)
                     .range(range)
-                    .suffix(app.drc_rules.unit_suffix())).changed() {
-                    app.drc_rules.min_trace_width = app.drc_rules.set_from_display(display_value);
+                    .suffix(app.drc_manager.rules.unit_suffix())).changed() {
+                    app.drc_manager.rules.min_trace_width = app.drc_manager.rules.set_from_display(display_value);
                 }
             });
             
             // Via Diameter  
             ui.horizontal(|ui| {
                 ui.label("Min Via Diameter:");
-                let mut display_value = app.drc_rules.get_display_value(app.drc_rules.min_via_diameter);
-                let range = if app.drc_rules.use_mils { 4.0..=200.0 } else { 0.1..=5.0 };
-                let speed = if app.drc_rules.use_mils { 0.1 } else { 0.01 };
+                let mut display_value = app.drc_manager.rules.get_display_value(app.drc_manager.rules.min_via_diameter);
+                let range = if app.drc_manager.rules.use_mils { 4.0..=200.0 } else { 0.1..=5.0 };
+                let speed = if app.drc_manager.rules.use_mils { 0.1 } else { 0.01 };
                 
                 if ui.add(egui::DragValue::new(&mut display_value)
                     .speed(speed)
                     .range(range)
-                    .suffix(app.drc_rules.unit_suffix())).changed() {
-                    app.drc_rules.min_via_diameter = app.drc_rules.set_from_display(display_value);
+                    .suffix(app.drc_manager.rules.unit_suffix())).changed() {
+                    app.drc_manager.rules.min_via_diameter = app.drc_manager.rules.set_from_display(display_value);
                 }
             });
             
             // Drill Diameter
             ui.horizontal(|ui| {
                 ui.label("Min Drill Diameter:");
-                let mut display_value = app.drc_rules.get_display_value(app.drc_rules.min_drill_diameter);
-                let range = if app.drc_rules.use_mils { 2.0..=120.0 } else { 0.05..=3.0 };
-                let speed = if app.drc_rules.use_mils { 0.1 } else { 0.01 };
+                let mut display_value = app.drc_manager.rules.get_display_value(app.drc_manager.rules.min_drill_diameter);
+                let range = if app.drc_manager.rules.use_mils { 2.0..=120.0 } else { 0.05..=3.0 };
+                let speed = if app.drc_manager.rules.use_mils { 0.1 } else { 0.01 };
                 
                 if ui.add(egui::DragValue::new(&mut display_value)
                     .speed(speed)
                     .range(range)
-                    .suffix(app.drc_rules.unit_suffix())).changed() {
-                    app.drc_rules.min_drill_diameter = app.drc_rules.set_from_display(display_value);
+                    .suffix(app.drc_manager.rules.unit_suffix())).changed() {
+                    app.drc_manager.rules.min_drill_diameter = app.drc_manager.rules.set_from_display(display_value);
                 }
             });
             
             // Spacing
             ui.horizontal(|ui| {
                 ui.label("Min Spacing:");
-                let mut display_value = app.drc_rules.get_display_value(app.drc_rules.min_spacing);
-                let range = if app.drc_rules.use_mils { 2.0..=80.0 } else { 0.05..=2.0 };
-                let speed = if app.drc_rules.use_mils { 0.1 } else { 0.01 };
+                let mut display_value = app.drc_manager.rules.get_display_value(app.drc_manager.rules.min_spacing);
+                let range = if app.drc_manager.rules.use_mils { 2.0..=80.0 } else { 0.05..=2.0 };
+                let speed = if app.drc_manager.rules.use_mils { 0.1 } else { 0.01 };
                 
                 if ui.add(egui::DragValue::new(&mut display_value)
                     .speed(speed)
                     .range(range)
-                    .suffix(app.drc_rules.unit_suffix())).changed() {
-                    app.drc_rules.min_spacing = app.drc_rules.set_from_display(display_value);
+                    .suffix(app.drc_manager.rules.unit_suffix())).changed() {
+                    app.drc_manager.rules.min_spacing = app.drc_manager.rules.set_from_display(display_value);
                 }
             });
             
             // Annular Ring
             ui.horizontal(|ui| {
                 ui.label("Min Annular Ring:");
-                let mut display_value = app.drc_rules.get_display_value(app.drc_rules.min_annular_ring);
-                let range = if app.drc_rules.use_mils { 2.0..=40.0 } else { 0.05..=1.0 };
-                let speed = if app.drc_rules.use_mils { 0.1 } else { 0.01 };
+                let mut display_value = app.drc_manager.rules.get_display_value(app.drc_manager.rules.min_annular_ring);
+                let range = if app.drc_manager.rules.use_mils { 2.0..=40.0 } else { 0.05..=1.0 };
+                let speed = if app.drc_manager.rules.use_mils { 0.1 } else { 0.01 };
                 
                 if ui.add(egui::DragValue::new(&mut display_value)
                     .speed(speed)
                     .range(range)
-                    .suffix(app.drc_rules.unit_suffix())).changed() {
-                    app.drc_rules.min_annular_ring = app.drc_rules.set_from_display(display_value);
+                    .suffix(app.drc_manager.rules.unit_suffix())).changed() {
+                    app.drc_manager.rules.min_annular_ring = app.drc_manager.rules.set_from_display(display_value);
                 }
             });
             
@@ -150,24 +150,24 @@ pub fn show_drc_panel<'a>(
             // Preset buttons
             ui.horizontal(|ui| {
                 if ui.button("🏭 JLC PCB Defaults").clicked() {
-                    app.drc_rules.min_trace_width = 0.15;   // 6 mil
-                    app.drc_rules.min_via_diameter = 0.3;   // 12 mil  
-                    app.drc_rules.min_drill_diameter = 0.2; // 8 mil
-                    app.drc_rules.min_spacing = 0.15;       // 6 mil
-                    app.drc_rules.min_annular_ring = 0.1;   // 4 mil
-                    app.drc_rules.use_mils = false;         // JLC uses metric
-                    app.current_drc_ruleset = Some("JLC PCB".to_string());
+                    app.drc_manager.rules.min_trace_width = 0.15;   // 6 mil
+                    app.drc_manager.rules.min_via_diameter = 0.3;   // 12 mil  
+                    app.drc_manager.rules.min_drill_diameter = 0.2; // 8 mil
+                    app.drc_manager.rules.min_spacing = 0.15;       // 6 mil
+                    app.drc_manager.rules.min_annular_ring = 0.1;   // 4 mil
+                    app.drc_manager.rules.use_mils = false;         // JLC uses metric
+                    app.drc_manager.current_ruleset = Some("JLC PCB".to_string());
                     logger.log_info("Loaded JLC PCB design rules (0.15mm/6mil trace/space)");
                 }
                 
                 if ui.button("🔧 Conservative").clicked() {
-                    app.drc_rules.min_trace_width = 0.2;    // 8 mil
-                    app.drc_rules.min_via_diameter = 0.4;   // 16 mil
-                    app.drc_rules.min_drill_diameter = 0.25; // 10 mil
-                    app.drc_rules.min_spacing = 0.2;        // 8 mil
-                    app.drc_rules.min_annular_ring = 0.15;  // 6 mil
-                    app.drc_rules.use_mils = false;         // Conservative uses metric
-                    app.current_drc_ruleset = Some("Conservative".to_string());
+                    app.drc_manager.rules.min_trace_width = 0.2;    // 8 mil
+                    app.drc_manager.rules.min_via_diameter = 0.4;   // 16 mil
+                    app.drc_manager.rules.min_drill_diameter = 0.25; // 10 mil
+                    app.drc_manager.rules.min_spacing = 0.2;        // 8 mil
+                    app.drc_manager.rules.min_annular_ring = 0.15;  // 6 mil
+                    app.drc_manager.rules.use_mils = false;         // Conservative uses metric
+                    app.drc_manager.current_ruleset = Some("Conservative".to_string());
                     logger.log_info("Loaded conservative design rules (0.2mm/8mil trace/space)");
                 }
             });
@@ -178,22 +178,22 @@ pub fn show_drc_panel<'a>(
             ui.horizontal(|ui| {
                 if ui.button("✅ Load Current Settings & Run DRC").clicked() {
                     // Create custom ruleset name from current values
-                    let unit_str = if app.drc_rules.use_mils { "mils" } else { "mm" };
-                    let trace_val = app.drc_rules.get_display_value(app.drc_rules.min_trace_width);
-                    let space_val = app.drc_rules.get_display_value(app.drc_rules.min_spacing);
+                    let unit_str = if app.drc_manager.rules.use_mils { "mils" } else { "mm" };
+                    let trace_val = app.drc_manager.rules.get_display_value(app.drc_manager.rules.min_trace_width);
+                    let space_val = app.drc_manager.rules.get_display_value(app.drc_manager.rules.min_spacing);
                     
                     let ruleset_name = format!("Custom ({:.1}/{:.1} {unit_str} trace/space)", 
                         trace_val, space_val);
                     
-                    app.current_drc_ruleset = Some(ruleset_name.clone());
+                    app.drc_manager.current_ruleset = Some(ruleset_name.clone());
                     
                     // Log the loaded settings
                     logger.log_info(&format!("Loaded custom design rules: {}", ruleset_name));
-                    logger.log_info(&format!("  Min Trace Width: {:.3}mm", app.drc_rules.min_trace_width));
-                    logger.log_info(&format!("  Min Via Diameter: {:.3}mm", app.drc_rules.min_via_diameter));
-                    logger.log_info(&format!("  Min Drill Diameter: {:.3}mm", app.drc_rules.min_drill_diameter));
-                    logger.log_info(&format!("  Min Spacing: {:.3}mm", app.drc_rules.min_spacing));
-                    logger.log_info(&format!("  Min Annular Ring: {:.3}mm", app.drc_rules.min_annular_ring));
+                    logger.log_info(&format!("  Min Trace Width: {:.3}mm", app.drc_manager.rules.min_trace_width));
+                    logger.log_info(&format!("  Min Via Diameter: {:.3}mm", app.drc_manager.rules.min_via_diameter));
+                    logger.log_info(&format!("  Min Drill Diameter: {:.3}mm", app.drc_manager.rules.min_drill_diameter));
+                    logger.log_info(&format!("  Min Spacing: {:.3}mm", app.drc_manager.rules.min_spacing));
+                    logger.log_info(&format!("  Min Annular Ring: {:.3}mm", app.drc_manager.rules.min_annular_ring));
                     
                     // Run actual DRC analysis with current settings
                     logger.log_info("Starting Design Rule Check with custom settings");
@@ -202,8 +202,8 @@ pub fn show_drc_panel<'a>(
                     // Run the actual DRC check (now includes OpenCV)
                     let violations = crate::drc::run_simple_drc_check(
                         &app.layers,
-                        &app.drc_rules,
-                        &mut app.trace_quality_issues
+                        &app.drc_manager.rules,
+                        &mut app.drc_manager.trace_quality_issues
                     );
                     
                     logger.log_info("Running imageproc edge detection and morphological analysis");
@@ -236,7 +236,7 @@ pub fn show_drc_panel<'a>(
             ui.add_space(4.0);
             
             // Current ruleset display
-            if let Some(ref ruleset) = app.current_drc_ruleset {
+            if let Some(ref ruleset) = app.drc_manager.current_ruleset {
                 ui.horizontal(|ui| {
                     ui.label("Current ruleset:");
                     ui.label(egui::RichText::new(ruleset).strong().color(egui::Color32::from_rgb(46, 204, 113)));
@@ -250,7 +250,7 @@ pub fn show_drc_panel<'a>(
             // PCB Manufacturer buttons
             ui.vertical(|ui| {
                 if ui.button("🏭 JLC PCB Rules").clicked() {
-                    app.current_drc_ruleset = Some("JLC PCB".to_string());
+                    app.drc_manager.current_ruleset = Some("JLC PCB".to_string());
                     logger.log_custom(
                         LOG_TYPE_DRC,
                         "Loaded JLC PCB Design Rule Check ruleset"
@@ -258,7 +258,7 @@ pub fn show_drc_panel<'a>(
                 }
                 
                 if ui.button("🏭 PCB WAY Rules").clicked() {
-                    app.current_drc_ruleset = Some("PCB WAY".to_string());
+                    app.drc_manager.current_ruleset = Some("PCB WAY".to_string());
                     logger.log_custom(
                         LOG_TYPE_DRC,
                         "Loaded PCB WAY Design Rule Check ruleset"
@@ -266,7 +266,7 @@ pub fn show_drc_panel<'a>(
                 }
                 
                 if ui.button("🏭 Advanced Circuits Rules").clicked() {
-                    app.current_drc_ruleset = Some("Advanced Circuits".to_string());
+                    app.drc_manager.current_ruleset = Some("Advanced Circuits".to_string());
                     logger.log_custom(
                         LOG_TYPE_DRC,
                         "Loaded Advanced Circuits Design Rule Check ruleset"
@@ -276,15 +276,15 @@ pub fn show_drc_panel<'a>(
                 ui.add_space(4.0);
                 
                 // Clear ruleset button
-                if app.current_drc_ruleset.is_some() {
+                if app.drc_manager.current_ruleset.is_some() {
                     if ui.button("🗑 Clear Ruleset").clicked() {
-                        if let Some(ref ruleset) = app.current_drc_ruleset {
+                        if let Some(ref ruleset) = app.drc_manager.current_ruleset {
                             logger.log_custom(
                                 LOG_TYPE_DRC,
                                 &format!("Cleared {} Design Rule Check ruleset", ruleset)
                             );
                         }
-                        app.current_drc_ruleset = None;
+                        app.drc_manager.current_ruleset = None;
                     }
                 }
             });
@@ -299,11 +299,11 @@ pub fn show_drc_panel<'a>(
             ui.add_space(4.0);
             
             // Show corner analysis results
-            let corner_count = app.trace_quality_issues.iter()
+            let corner_count = app.drc_manager.trace_quality_issues.iter()
                 .filter(|issue| matches!(issue.issue_type, TraceQualityType::SharpCorner))
                 .count();
                 
-            let jog_count = app.trace_quality_issues.iter()
+            let jog_count = app.drc_manager.trace_quality_issues.iter()
                 .filter(|issue| matches!(issue.issue_type, TraceQualityType::UnnecessaryJog))
                 .count();
             
@@ -338,15 +338,15 @@ pub fn show_drc_panel<'a>(
                     // Run the DRC check which includes quality analysis
                     let _violations = crate::drc::run_simple_drc_check(
                         &app.layers,
-                        &app.drc_rules,
-                        &mut app.trace_quality_issues
+                        &app.drc_manager.rules,
+                        &mut app.drc_manager.trace_quality_issues
                     );
                     
-                    let corner_issues = app.trace_quality_issues.iter()
+                    let corner_issues = app.drc_manager.trace_quality_issues.iter()
                         .filter(|issue| matches!(issue.issue_type, TraceQualityType::SharpCorner))
                         .count();
                         
-                    let jog_issues = app.trace_quality_issues.iter()
+                    let jog_issues = app.drc_manager.trace_quality_issues.iter()
                         .filter(|issue| matches!(issue.issue_type, TraceQualityType::UnnecessaryJog))
                         .count();
                     
@@ -354,7 +354,7 @@ pub fn show_drc_panel<'a>(
                     logger.log_info(&format!("Found {} unnecessary jogs that could be simplified", jog_issues));
                     
                     // Log details of corner issues
-                    for issue in &app.trace_quality_issues {
+                    for issue in &app.drc_manager.trace_quality_issues {
                         if matches!(issue.issue_type, TraceQualityType::SharpCorner) {
                             logger.log_warning(&format!("🔧 Corner at ({:.2}, {:.2}): {}", 
                                 issue.location.0, issue.location.1, issue.description));
@@ -370,14 +370,14 @@ pub fn show_drc_panel<'a>(
                     if ui.button("🔧 Fix Corners").clicked() {
                         logger.log_info("Starting corner rounding optimization...");
                         
-                        let corners_to_fix = app.trace_quality_issues.iter()
+                        let corners_to_fix = app.drc_manager.trace_quality_issues.iter()
                             .filter(|issue| matches!(issue.issue_type, TraceQualityType::SharpCorner))
                             .count();
                             
                         logger.log_info(&format!("Identified {} corners for rounding", corners_to_fix));
                         
                         // Clear any existing overlay
-                        app.corner_overlay_shapes.clear();
+                        app.drc_manager.corner_overlay_shapes.clear();
                         
                         // Generate corner overlay on each copper layer using KiCad-style algorithm
                         let drc = crate::drc::DrcSimple::default();
@@ -392,7 +392,7 @@ pub fn show_drc_panel<'a>(
                                 logger.log_info(&format!("Generated overlay for {} corners on top copper", fixed_count));
                                 
                                 // Add overlay shapes to app state for rendering
-                                app.corner_overlay_shapes.extend(overlay_shapes);
+                                app.drc_manager.corner_overlay_shapes.extend(overlay_shapes);
                                 total_fixed += fixed_count;
                                 
                                 logger.log_info("✅ Corner overlay generated for top copper");
@@ -407,7 +407,7 @@ pub fn show_drc_panel<'a>(
                                 logger.log_info(&format!("Generated overlay for {} corners on bottom copper", fixed_count));
                                 
                                 // Add overlay shapes to app state for rendering
-                                app.corner_overlay_shapes.extend(overlay_shapes);
+                                app.drc_manager.corner_overlay_shapes.extend(overlay_shapes);
                                 total_fixed += fixed_count;
                                 
                                 logger.log_info("✅ Corner overlay generated for bottom copper");
@@ -441,7 +441,7 @@ pub fn show_drc_panel<'a>(
                         }
                         
                         // Clear the quality issues as they've been processed
-                        app.trace_quality_issues.retain(|issue| !matches!(issue.issue_type, TraceQualityType::SharpCorner));
+                        app.drc_manager.trace_quality_issues.retain(|issue| !matches!(issue.issue_type, TraceQualityType::SharpCorner));
                         logger.log_info("✅ Corner analysis completed");
                     }
                 }
@@ -449,26 +449,26 @@ pub fn show_drc_panel<'a>(
             
             // Clear overlay button
             ui.horizontal(|ui| {
-                if !app.corner_overlay_shapes.is_empty() {
+                if !app.drc_manager.corner_overlay_shapes.is_empty() {
                     if ui.button("🗑 Clear Corner Overlay").clicked() {
-                        app.corner_overlay_shapes.clear();
+                        app.drc_manager.corner_overlay_shapes.clear();
                         logger.log_info("Cleared corner overlay visualization");
                     }
-                    ui.label(format!("({} overlay shapes)", app.corner_overlay_shapes.len()));
+                    ui.label(format!("({} overlay shapes)", app.drc_manager.corner_overlay_shapes.len()));
                 }
             });
             
             ui.add_space(4.0);
             
             // Show detailed issues if any exist
-            if !app.trace_quality_issues.is_empty() {
+            if !app.drc_manager.trace_quality_issues.is_empty() {
                 ui.separator();
                 ui.label("Quality Issues:");
                 
                 egui::ScrollArea::vertical()
                     .max_height(150.0)
                     .show(ui, |ui| {
-                        for (i, issue) in app.trace_quality_issues.iter().enumerate() {
+                        for (i, issue) in app.drc_manager.trace_quality_issues.iter().enumerate() {
                             ui.horizontal(|ui| {
                                 let icon = match issue.issue_type {
                                     TraceQualityType::SharpCorner => "🔧",
@@ -483,7 +483,7 @@ pub fn show_drc_panel<'a>(
                                     .color(egui::Color32::GRAY));
                             });
                             
-                            if i < app.trace_quality_issues.len() - 1 {
+                            if i < app.drc_manager.trace_quality_issues.len() - 1 {
                                 ui.separator();
                             }
                         }

@@ -7,7 +7,7 @@ use egui::ViewportBuilder;
 use egui_dock::{DockArea, DockState, NodeIndex, Style, SurfaceIndex};
 
 mod managers;
-use managers::{ProjectManager, ProjectState, DisplayManager};
+use managers::{ProjectManager, ProjectState, DisplayManager, DrcManager};
 
 /// egui_lens imports
 use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
@@ -39,7 +39,6 @@ mod layer_detection;
 
 use layers::{LayerType, LayerInfo};
 use grid::GridSettings;
-use drc::{DrcRules, DrcViolation};
 use layer_detection::{LayerDetector, UnassignedGerber};
 
 // DRC structures are now imported from the drc module
@@ -72,13 +71,8 @@ pub struct DemoLensApp {
     // Display settings
     pub display_manager: DisplayManager,
     
-    // DRC Properties
-    pub current_drc_ruleset: Option<String>,
-    pub drc_rules: DrcRules,
-    pub drc_violations: Vec<DrcViolation>,
-    pub trace_quality_issues: Vec<drc::TraceQualityIssue>,
-    pub rounded_corner_primitives: Vec<gerber_viewer::GerberPrimitive>,
-    pub corner_overlay_shapes: Vec<drc::CornerOverlayShape>,
+    // DRC management
+    pub drc_manager: DrcManager,
     
     // Global units setting
     pub global_units_mils: bool, // true = mils, false = mm
@@ -243,12 +237,7 @@ impl DemoLensApp {
             banner,
             details,
             display_manager: DisplayManager::new(),
-            current_drc_ruleset: None,
-            drc_rules: DrcRules::default(),
-            drc_violations: Vec::new(),
-            trace_quality_issues: Vec::new(),
-            rounded_corner_primitives: Vec::new(),
-            corner_overlay_shapes: Vec::new(),
+            drc_manager: DrcManager::new(),
             global_units_mils: false, // Default to mm
             grid_settings: GridSettings::default(),
             project_manager: ProjectManager::new(),

@@ -57,7 +57,7 @@ pub struct TraceViolation {
     pub violation_type: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TraceQualityIssue {
     pub issue_type: TraceQualityType,
     pub location: (f32, f32),
@@ -65,7 +65,7 @@ pub struct TraceQualityIssue {
     pub description: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum TraceQualityType {
     UnnecessaryJog,      // Sharp turns that could be simplified
     IneffientRouting,    // Longer path than necessary  
@@ -80,7 +80,7 @@ pub struct CornerOverlayShape {
 }
 
 /// DRC Rules structure with unit conversion support
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DrcRules {
     pub min_trace_width: f32,      // mm
     pub min_via_diameter: f32,     // mm  
@@ -139,7 +139,7 @@ impl DrcRules {
 }
 
 /// DRC violation result
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DrcViolation {
     pub rule_name: String,
     pub description: String,
