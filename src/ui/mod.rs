@@ -6,6 +6,7 @@ pub mod view_settings_panel;
 pub mod project_panel;
 pub mod settings_panel;
 pub mod tabs;
+pub mod selection;
 
 // Re-export the show functions for each panel
 pub use layer_controls::show_layers_panel;
@@ -17,3 +18,6 @@ pub use settings_panel::show_settings_panel;
 
 // Re-export tab-related types
 pub use tabs::{Tab, TabKind, TabViewer};
+
+// Re-export selection functions
+pub use selection::{initialize_and_show_banner, show_system_info};

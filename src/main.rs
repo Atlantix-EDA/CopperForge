@@ -1,4 +1,3 @@
-use std::io::BufReader;
 use std::{fs, path::PathBuf};
 
 use eframe::emath::{Rect, Vec2};
@@ -15,7 +14,6 @@ use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 /// Use of prelude for egui_mobius_reactive
 use egui_mobius_reactive::Dynamic;  
 
-use gerber_viewer::gerber_parser::parse;
 use log;
 use gerber_viewer::{
    BoundingBox, GerberLayer, 
@@ -25,14 +23,14 @@ use gerber_viewer::{
 
 // Import platform modules
 mod platform;
-use platform::{banner, details};
 
 // Import new modules
 mod constants;
 mod layers;
 mod grid;
 mod ui;
-use ui::{Tab, TabKind, TabViewer};
+use ui::{Tab, TabKind, TabViewer, initialize_and_show_banner, show_system_info};
+mod defaults;
 mod drc;
 mod layer_detection;
 
@@ -59,11 +57,9 @@ pub struct DemoLensApp {
 
     pub rotation_degrees: f32,
     
-    // Logger state, colors, banner, details
+    // Logger state and colors
     pub logger_state : Dynamic<ReactiveEventLoggerState>,
     pub log_colors   : Dynamic<LogColors>,
-    pub banner       : banner::Banner,
-    pub details      : details::Details,
     
     // Display settings
     pub display_manager: DisplayManager,
@@ -120,68 +116,13 @@ impl DemoLensApp {
     /// and adds platform details to the app. The function returns a new instance of the DemoLensApp.
     ///
     pub fn new() -> Self {
-        // Load the demo gerber for legacy compatibility
-        let demo_str = include_str!("../assets/demo.gbr").as_bytes();
-        let reader = BufReader::new(demo_str);
-        let doc = parse(reader).unwrap();
-        let commands = doc.into_commands();
-        let gerber_layer = GerberLayer::new(commands);
+        // Load default gerbers and demo layer
+        let gerber_layer = defaults::load_demo_gerber();
+        let layer_manager = defaults::load_default_gerbers();
         
-        // Initialize layer manager
-        let mut layer_manager = LayerManager::new();
-        
-        // Map layer types to their corresponding gerber files
-        let layer_files = [
-            (LayerType::TopCopper, "cmod_s7-F_Cu.gbr"),
-            (LayerType::BottomCopper, "cmod_s7-B_Cu.gbr"),
-            (LayerType::TopSilk, "cmod_s7-F_SilkS.gbr"),
-            (LayerType::BottomSilk, "cmod_s7-B_SilkS.gbr"),
-            (LayerType::TopSoldermask, "cmod_s7-F_Mask.gbr"),
-            (LayerType::BottomSoldermask, "cmod_s7-B_Mask.gbr"),
-            (LayerType::MechanicalOutline, "cmod_s7-Edge_Cuts.gbr"),
-        ];
-        
-        // Load each layer's gerber file
-        for (layer_type, filename) in layer_files {
-            let gerber_data = match filename {
-                "cmod_s7-F_Cu.gbr" => include_str!("../assets/cmod_s7-F_Cu.gbr"),
-                "cmod_s7-B_Cu.gbr" => include_str!("../assets/cmod_s7-B_Cu.gbr"),
-                "cmod_s7-F_SilkS.gbr" => include_str!("../assets/cmod_s7-F_SilkS.gbr"),
-                "cmod_s7-B_SilkS.gbr" => include_str!("../assets/cmod_s7-B_SilkS.gbr"),
-                "cmod_s7-F_Mask.gbr" => include_str!("../assets/cmod_s7-F_Mask.gbr"),
-                "cmod_s7-B_Mask.gbr" => include_str!("../assets/cmod_s7-B_Mask.gbr"),
-                "cmod_s7-Edge_Cuts.gbr" => include_str!("../assets/cmod_s7-Edge_Cuts.gbr"),
-                _ => include_str!("../assets/demo.gbr"), // Fallback
-            };
-            
-            let reader = BufReader::new(gerber_data.as_bytes());
-            let layer_gerber = match parse(reader) {
-                Ok(doc) => {
-                    let commands = doc.into_commands();
-                    Some(GerberLayer::new(commands))
-                }
-                Err(e) => {
-                    eprintln!("Failed to parse {}: {:?}", filename, e);
-                    None
-                }
-            };
-            
-            let layer_info = LayerInfo::new(
-                layer_type,
-                layer_gerber,
-                Some(gerber_data.to_string()),  // Store raw Gerber data for DRC
-                matches!(layer_type, LayerType::TopCopper | LayerType::MechanicalOutline),
-            );
-            layer_manager.add_layer(layer_type, layer_info);
-        }
-        
-        // Create logger state, colors, banner, and details
+        // Create logger state and colors
         let logger_state = Dynamic::new(ReactiveEventLoggerState::new());
         let log_colors = Dynamic::new(LogColors::default());
-        let mut banner = banner::Banner::new(); 
-        banner.format(); 
-        let mut details = details::Details::new(); 
-        details.get_os();
         
 
         // Initialize dock state - load from saved state or create default
@@ -226,8 +167,6 @@ impl DemoLensApp {
             rotation_degrees: 0.0,
             logger_state,
             log_colors,
-            banner,
-            details,
             display_manager: DisplayManager::new(),
             drc_manager: DrcManager::new(),
             global_units_mils: false, // Default to mm
@@ -266,10 +205,9 @@ impl DemoLensApp {
             }
         }
         
-        // Add platform details
-        app.add_banner_platform_details();
-        
-        // Initialize project based on saved state
+        // Add platform details and initialize project
+        let logger = ReactiveEventLogger::with_colors(&app.logger_state, &app.log_colors);
+        initialize_and_show_banner(&logger);
         app.initialize_project();
         
         app
@@ -282,78 +220,17 @@ impl DemoLensApp {
             ProjectState::NoProject => {
                 logger.log_info("No previous project found. Please select a PCB file.");
             },
-            ProjectState::PcbSelected { pcb_path } => {
-                if pcb_path.exists() {
-                    logger.log_info(&format!("Restored PCB file: {}", pcb_path.display()));
-                    if self.project_manager.auto_generate_on_startup {
-                        logger.log_info("Auto-generating gerbers...");
-                        self.generating_gerbers = true;
-                    }
-                } else {
-                    logger.log_error(&format!("PCB file not found: {}", pcb_path.display()));
-                    self.project_manager.state = ProjectState::NoProject;
-                }
-            },
-            ProjectState::GeneratingGerbers { pcb_path } => {
-                // Resume generation if interrupted
-                if pcb_path.exists() {
-                    logger.log_info("Resuming gerber generation...");
-                    self.generating_gerbers = true;
-                } else {
-                    self.project_manager.state = ProjectState::NoProject;
-                }
-            },
-            ProjectState::GerbersGenerated { pcb_path, gerber_dir } => {
-                if pcb_path.exists() && gerber_dir.exists() {
-                    logger.log_info(&format!("Found generated gerbers at: {}", gerber_dir.display()));
-                    if self.project_manager.auto_generate_on_startup {
-                        logger.log_info("Auto-loading gerbers...");
-                        self.loading_gerbers = true;
-                    }
-                } else {
-                    logger.log_error("PCB or gerber files not found");
-                    self.project_manager.state = ProjectState::NoProject;
-                }
-            },
-            ProjectState::LoadingGerbers { pcb_path, gerber_dir } => {
-                // Resume loading if interrupted
-                if pcb_path.exists() && gerber_dir.exists() {
-                    logger.log_info("Resuming gerber loading...");
-                    self.loading_gerbers = true;
-                } else {
-                    self.project_manager.state = ProjectState::NoProject;
-                }
-            },
-            ProjectState::Ready { pcb_path, gerber_dir, .. } => {
-                if pcb_path.exists() && gerber_dir.exists() {
-                    logger.log_info(&format!("Project ready: {}", pcb_path.file_name().unwrap_or_default().to_string_lossy()));
-                    // Auto-load the gerbers
-                    self.loading_gerbers = true;
-                } else {
-                    logger.log_error("Project files not found");
-                    self.project_manager.state = ProjectState::NoProject;
-                }
-            },
+            _ => {
+                // Use the centralized project state management
+                self.project_manager.manage_project_state(
+                    &mut self.generating_gerbers,
+                    &mut self.loading_gerbers,
+                    &mut self.generated_gerber_dir
+                );
+            }
         }
     }
 
-    /// **Add platform details to the app**
-    /// 
-    /// These functions are customizable via the `platform` module.
-    /// The `add_banner_platform_details` function is responsible for logging the banner message
-    /// and system details. It creates a logger using the `ReactiveEventLogger` and logs the banner
-    /// and operating system details.
-     fn add_banner_platform_details(&self) {
-        // Create a logger using references to our logger state
-        let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
-        
-        // Log banner message (welcome message)
-        logger.log_info(&self.banner.message);
-        
-        // Log system details
-        let details_text = self.details.clone().format_os();
-        logger.log_info(&details_text);
-     }
 
     fn reset_view(&mut self, viewport: Rect) {
         // Find bounding box from all loaded layers
@@ -506,25 +383,19 @@ impl DemoLensApp {
 impl eframe::App for DemoLensApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Handle system info button clicked
-        let show_system_info = ctx.memory(|mem| {
+        let show_system_info_clicked = ctx.memory(|mem| {
             mem.data.get_temp::<bool>(egui::Id::new("show_system_info")).unwrap_or(false)
         });
         
-        if show_system_info {
+        if show_system_info_clicked {
             // Clear the flag
             ctx.memory_mut(|mem| {
                 mem.data.remove::<bool>(egui::Id::new("show_system_info"));
             });
             
-            // Create a temporary logger for system info output
+            // Show system info
             let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
-            
-            // Display system details first
-            let details_text = self.details.format_os();
-            logger.log_info(&details_text);
-            
-            // Then display banner (so it appears above the details in the log)
-            logger.log_info(&self.banner.message);
+            show_system_info(&logger);
         }
         
         // Handle hotkeys first

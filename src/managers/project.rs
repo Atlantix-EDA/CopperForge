@@ -185,4 +185,59 @@ impl ProjectManager {
     pub fn open_file_dialog(&mut self) {
         self.file_dialog.pick_file();
     }
+    
+    /// Manage the project state machine - handles state transitions and actions
+    pub fn manage_project_state(&mut self, generating_gerbers: &mut bool, loading_gerbers: &mut bool, 
+                                generated_gerber_dir: &mut Option<std::path::PathBuf>) {
+        use crate::managers::ProjectState;
+        
+        match &self.state.clone() {
+            ProjectState::NoProject => {
+                // Nothing to do in this state
+            },
+            ProjectState::PcbSelected { pcb_path } => {
+                if pcb_path.exists() {
+                    if self.auto_generate_on_startup {
+                        self.state = ProjectState::GeneratingGerbers { pcb_path: pcb_path.clone() };
+                        *generating_gerbers = true;
+                    }
+                } else {
+                    self.state = ProjectState::NoProject;
+                }
+            },
+            ProjectState::GeneratingGerbers { pcb_path } => {
+                // This state is handled externally by the gerber generation process
+                // When generation completes, the state should be updated to GerbersGenerated
+            },
+            ProjectState::GerbersGenerated { pcb_path, gerber_dir } => {
+                if pcb_path.exists() && gerber_dir.exists() {
+                    *generated_gerber_dir = Some(gerber_dir.clone());
+                    if self.auto_generate_on_startup {
+                        self.state = ProjectState::LoadingGerbers {
+                            pcb_path: pcb_path.clone(),
+                            gerber_dir: gerber_dir.clone(),
+                        };
+                        *loading_gerbers = true;
+                    }
+                } else {
+                    self.state = ProjectState::NoProject;
+                }
+            },
+            ProjectState::LoadingGerbers { pcb_path, gerber_dir } => {
+                // This state is handled externally by the gerber loading process
+                // When loading completes, the state should be updated to Ready
+            },
+            ProjectState::Ready { pcb_path, gerber_dir, .. } => {
+                if pcb_path.exists() && gerber_dir.exists() {
+                    *generated_gerber_dir = Some(gerber_dir.clone());
+                    // Auto-load the gerbers if needed
+                    if self.auto_generate_on_startup && !*loading_gerbers {
+                        *loading_gerbers = true;
+                    }
+                } else {
+                    self.state = ProjectState::NoProject;
+                }
+            },
+        }
+    }
 }
