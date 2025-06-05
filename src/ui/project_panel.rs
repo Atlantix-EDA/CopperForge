@@ -1,5 +1,5 @@
 use crate::{DemoLensApp, LayerInfo};
-use crate::managers::ProjectState;
+use crate::project::ProjectState;
 use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
 use std::path::{Path, PathBuf};

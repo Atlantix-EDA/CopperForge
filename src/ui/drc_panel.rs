@@ -1,4 +1,4 @@
-use crate::{DemoLensApp, constants::LOG_TYPE_DRC};
+use crate::{DemoLensApp, project::constants::LOG_TYPE_DRC};
 use crate::drc_operations::TraceQualityType;
 use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;

@@ -189,7 +189,7 @@ impl ProjectManager {
     /// Manage the project state machine - handles state transitions and actions
     pub fn manage_project_state(&mut self, generating_gerbers: &mut bool, loading_gerbers: &mut bool, 
                                 generated_gerber_dir: &mut Option<std::path::PathBuf>) {
-        use crate::managers::ProjectState;
+        use super::ProjectState;
         
         match &self.state.clone() {
             ProjectState::NoProject => {

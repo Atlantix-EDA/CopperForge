@@ -6,7 +6,7 @@ use egui::ViewportBuilder;
 use egui_dock::{DockArea, DockState, NodeIndex, Style, SurfaceIndex};
 
 mod managers;
-use managers::{ProjectManager, ProjectState, DisplayManager};
+use managers::DisplayManager;
 use layer_operations::LayerManager;
 use drc_operations::DrcManager;
 
@@ -25,18 +25,18 @@ use gerber_viewer::{
 
 // Import platform modules
 mod platform;
+use platform::parameters::gui::{APPLICATION_NAME, VERSION};
 
 // Import new modules
-mod constants;
+mod project;
 mod layer_operations;
 mod drc_operations;
 mod grid;
 mod ui;
 use ui::{Tab, TabKind, TabViewer, initialize_and_show_banner, show_system_info};
-mod defaults;
 
 use layer_operations::{LayerType, LayerInfo};
-// DRC operations are imported where needed in UI modules
+use project::{load_default_gerbers, load_demo_gerber, ProjectManager, ProjectState};
 use grid::GridSettings;
 
 // DRC structures are now imported from the drc module
@@ -119,8 +119,8 @@ impl DemoLensApp {
     ///
     pub fn new() -> Self {
         // Load default gerbers and demo layer
-        let gerber_layer = defaults::load_demo_gerber();
-        let layer_manager = defaults::load_default_gerbers();
+        let gerber_layer = load_demo_gerber();
+        let layer_manager = load_default_gerbers();
         
         // Create logger state and colors
         let logger_state = Dynamic::new(ReactiveEventLoggerState::new());
@@ -289,7 +289,7 @@ impl DemoLensApp {
         use chrono_tz::Tz;
         
         // Show version
-        ui.label(egui::RichText::new(format!("KiForge v{}", env!("CARGO_PKG_VERSION")))
+        ui.label(egui::RichText::new(format!("KiForge v{}", VERSION))
             .color(egui::Color32::from_rgb(100, 150, 200)));
         
         ui.separator();
@@ -495,7 +495,7 @@ impl eframe::App for DemoLensApp {
                 
                 let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
                 logger.log_custom(
-                    constants::LOG_TYPE_ROTATION,
+                    project::constants::LOG_TYPE_ROTATION,
                     &format!("Rotated board to {:.0}° around PCB centroid (R key)", self.rotation_degrees)
                 );
             }
@@ -579,7 +579,7 @@ fn main() -> eframe::Result<()> {
         .filter_module("gerber_parser::parser", log::LevelFilter::Off)
         .init();
     eframe::run_native(
-        "KiForge - PCB & CAM for KiCad",
+        APPLICATION_NAME,
         eframe::NativeOptions {
             viewport: ViewportBuilder::default().with_inner_size([1280.0, 768.0]),
             ..Default::default()

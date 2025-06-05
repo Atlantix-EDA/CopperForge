@@ -1,4 +1,4 @@
-use crate::{DemoLensApp, constants::LOG_TYPE_GRID, grid::{get_grid_status, GridStatus}};
+use crate::{DemoLensApp, project::constants::LOG_TYPE_GRID, grid::{get_grid_status, GridStatus}};
 use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
 
