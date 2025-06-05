@@ -187,8 +187,7 @@ impl ProjectManager {
     }
     
     /// Manage the project state machine - handles state transitions and actions
-    pub fn manage_project_state(&mut self, generating_gerbers: &mut bool, loading_gerbers: &mut bool, 
-                                generated_gerber_dir: &mut Option<std::path::PathBuf>) {
+    pub fn manage_project_state(&mut self) {
         use super::ProjectState;
         
         match &self.state.clone() {
@@ -199,7 +198,7 @@ impl ProjectManager {
                 if pcb_path.exists() {
                     if self.auto_generate_on_startup {
                         self.state = ProjectState::GeneratingGerbers { pcb_path: pcb_path.clone() };
-                        *generating_gerbers = true;
+                        // State transition handled by the state machine
                     }
                 } else {
                     self.state = ProjectState::NoProject;
@@ -211,13 +210,13 @@ impl ProjectManager {
             },
             ProjectState::GerbersGenerated { pcb_path, gerber_dir } => {
                 if pcb_path.exists() && gerber_dir.exists() {
-                    *generated_gerber_dir = Some(gerber_dir.clone());
+                    // Gerber directory is already stored in the state
                     if self.auto_generate_on_startup {
                         self.state = ProjectState::LoadingGerbers {
                             pcb_path: pcb_path.clone(),
                             gerber_dir: gerber_dir.clone(),
                         };
-                        *loading_gerbers = true;
+                        // State transition handled by the state machine
                     }
                 } else {
                     self.state = ProjectState::NoProject;
@@ -229,11 +228,8 @@ impl ProjectManager {
             },
             ProjectState::Ready { pcb_path, gerber_dir, .. } => {
                 if pcb_path.exists() && gerber_dir.exists() {
-                    *generated_gerber_dir = Some(gerber_dir.clone());
-                    // Auto-load the gerbers if needed
-                    if self.auto_generate_on_startup && !*loading_gerbers {
-                        *loading_gerbers = true;
-                    }
+                    // Gerber directory is already stored in the state
+                    // Auto-load logic is handled by the state machine
                 } else {
                     self.state = ProjectState::NoProject;
                 }

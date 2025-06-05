@@ -75,12 +75,10 @@ pub fn show_project_panel<'a>(
         if response.changed() {
             if path_str.is_empty() {
                 app.project_manager.state = ProjectState::NoProject;
-                app.selected_pcb_file = None;
             } else {
                 let path = PathBuf::from(&path_str);
                 if path.extension().and_then(|s| s.to_str()) == Some("kicad_pcb") {
                     app.project_manager.state = ProjectState::PcbSelected { pcb_path: path.clone() };
-                    app.selected_pcb_file = Some(path);
                 }
             }
         }
@@ -92,7 +90,7 @@ pub fn show_project_panel<'a>(
 
     // Update file dialog and handle selection
     if let Some(path_buf) = app.project_manager.update_file_dialog(ui.ctx()) {
-        app.selected_pcb_file = Some(path_buf.clone());
+        app.project_manager.state = ProjectState::PcbSelected { pcb_path: path_buf.clone() };
         logger.log_info(&format!("Selected PCB file: {}", path_buf.display()));
     }
 
@@ -109,7 +107,6 @@ pub fn show_project_panel<'a>(
             
             if ui.button("Generate Gerbers").clicked() {
                 app.project_manager.state = ProjectState::GeneratingGerbers { pcb_path: pcb_path.clone() };
-                app.generating_gerbers = true;
                 logger.log_info("Generating gerbers from PCB file...");
             }
         },
@@ -120,18 +117,16 @@ pub fn show_project_panel<'a>(
             ui.add_enabled(false, egui::Button::new("Generating..."));
             
             // Handle generation
-            if app.generating_gerbers {
+            if matches!(app.project_manager.state, ProjectState::GeneratingGerbers { .. }) {
                 if let Some(output_dir) = generate_gerbers_from_pcb(pcb_path, &logger) {
                     app.project_manager.state = ProjectState::GerbersGenerated {
                         pcb_path: pcb_path.clone(),
                         gerber_dir: output_dir.clone(),
                     };
-                    app.generated_gerber_dir = Some(output_dir);
                 } else {
                     // Generation failed, go back to selected state
                     app.project_manager.state = ProjectState::PcbSelected { pcb_path: pcb_path.clone() };
                 }
-                app.generating_gerbers = false;
             }
         },
         ProjectState::GerbersGenerated { pcb_path, gerber_dir } => {
@@ -146,14 +141,12 @@ pub fn show_project_panel<'a>(
                     pcb_path: pcb_path.clone(),
                     gerber_dir: gerber_dir.clone(),
                 };
-                app.loading_gerbers = true;
                 logger.log_info("Loading gerbers into viewer...");
             }
             
             if ui.button("Regenerate Gerbers").clicked() {
                 app.project_manager.state = ProjectState::GeneratingGerbers { pcb_path: pcb_path.clone() };
-                app.generating_gerbers = true;
-            }
+                            }
         },
         ProjectState::LoadingGerbers { pcb_path, gerber_dir } => {
             show_pcb_info(ui, pcb_path);
@@ -162,7 +155,7 @@ pub fn show_project_panel<'a>(
             ui.add_enabled(false, egui::Button::new("Loading..."));
             
             // Handle loading
-            if app.loading_gerbers {
+            if matches!(app.project_manager.state, ProjectState::LoadingGerbers { .. }) {
                 load_gerbers_into_viewer(app, gerber_dir, &logger);
                 let last_modified = std::fs::metadata(pcb_path)
                     .and_then(|m| m.modified())
@@ -173,7 +166,6 @@ pub fn show_project_panel<'a>(
                     gerber_dir: gerber_dir.clone(),
                     last_modified,
                 };
-                app.loading_gerbers = false;
             }
         },
         ProjectState::Ready { pcb_path, gerber_dir, last_modified } => {
@@ -198,13 +190,11 @@ pub fn show_project_panel<'a>(
                     pcb_path: pcb_path.clone(),
                     gerber_dir: gerber_dir.clone(),
                 };
-                app.loading_gerbers = true;
-            }
+                            }
             
             if ui.button("Regenerate Gerbers").clicked() {
                 app.project_manager.state = ProjectState::GeneratingGerbers { pcb_path: pcb_path.clone() };
-                app.generating_gerbers = true;
-            }
+                            }
         },
     }
 }

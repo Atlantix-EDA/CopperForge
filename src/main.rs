@@ -77,11 +77,6 @@ pub struct DemoLensApp {
     // Project management
     pub project_manager: ProjectManager,
     
-    // Legacy fields for compatibility (will be removed later)
-    pub selected_pcb_file: Option<PathBuf>,
-    pub generated_gerber_dir: Option<PathBuf>,
-    pub generating_gerbers: bool,
-    pub loading_gerbers: bool,
 
     // Dock state
     dock_state: DockState<Tab>,
@@ -174,10 +169,6 @@ impl DemoLensApp {
             global_units_mils: false, // Default to mm
             grid_settings: GridSettings::default(),
             project_manager: ProjectManager::new(),
-            selected_pcb_file: None,
-            generated_gerber_dir: None,
-            generating_gerbers: false,
-            loading_gerbers: false,
             dock_state,
             config_path: dirs::config_dir()
                 .map(|d| d.join("kiforge"))
@@ -192,20 +183,6 @@ impl DemoLensApp {
         if let Ok(project_manager) = ProjectManager::load_from_file(&app.config_path) {
             app.project_manager = project_manager;
             
-            // Sync legacy fields with project state
-            match &app.project_manager.state {
-                ProjectState::NoProject => {},
-                ProjectState::PcbSelected { pcb_path } |
-                ProjectState::GeneratingGerbers { pcb_path } => {
-                    app.selected_pcb_file = Some(pcb_path.clone());
-                },
-                ProjectState::GerbersGenerated { pcb_path, gerber_dir } |
-                ProjectState::LoadingGerbers { pcb_path, gerber_dir } |
-                ProjectState::Ready { pcb_path, gerber_dir, .. } => {
-                    app.selected_pcb_file = Some(pcb_path.clone());
-                    app.generated_gerber_dir = Some(gerber_dir.clone());
-                },
-            }
         }
         
         // Add platform details and initialize project
@@ -225,11 +202,7 @@ impl DemoLensApp {
             },
             _ => {
                 // Use the centralized project state management
-                self.project_manager.manage_project_state(
-                    &mut self.generating_gerbers,
-                    &mut self.loading_gerbers,
-                    &mut self.generated_gerber_dir
-                );
+                self.project_manager.manage_project_state();
             }
         }
     }
@@ -536,7 +509,7 @@ impl eframe::App for DemoLensApp {
                         
                         // Handle file dialog
                         if let Some(path_buf) = self.project_manager.update_file_dialog(ui.ctx()) {
-                            self.selected_pcb_file = Some(path_buf.clone());
+                            self.project_manager.state = ProjectState::PcbSelected { pcb_path: path_buf.clone() };
                             let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
                             logger.log_info(&format!("Selected PCB file: {}", path_buf.display()));
                         }
