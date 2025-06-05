@@ -3,8 +3,15 @@ use std::collections::HashMap;
 use crate::layers::LayerType;
 
 /// Common layer name patterns found across different PCB design tools
+#[derive(Debug)]
 pub struct LayerDetector {
     patterns: HashMap<LayerType, Vec<Regex>>,
+}
+
+impl Default for LayerDetector {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl LayerDetector {
@@ -135,6 +142,7 @@ impl LayerDetector {
 }
 
 /// Represents unassigned gerber files that couldn't be automatically detected
+#[derive(Debug)]
 pub struct UnassignedGerber {
     pub filename: String,
     pub content: String,

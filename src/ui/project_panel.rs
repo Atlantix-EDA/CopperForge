@@ -330,9 +330,9 @@ fn load_gerbers_into_viewer(app: &mut DemoLensApp, gerber_dir: &Path, logger: &R
     
     // Clear all existing layers and unassigned gerbers first
     logger.log_info("Clearing existing gerber layers...");
-    app.layers.clear();
-    app.unassigned_gerbers.clear();
-    app.layer_assignments.clear();
+    app.layer_manager.layers.clear();
+    app.layer_manager.unassigned_gerbers.clear();
+    app.layer_manager.layer_assignments.clear();
     
     let mut loaded_count = 0;
     let mut unassigned_count = 0;
@@ -357,9 +357,9 @@ fn load_gerbers_into_viewer(app: &mut DemoLensApp, gerber_dir: &Path, logger: &R
                                 let gerber_layer = GerberLayer::new(commands);
                                 
                                 // Try to detect layer type using regex patterns
-                                if let Some(detected_type) = app.layer_detector.detect_layer_type(&filename) {
+                                if let Some(detected_type) = app.layer_manager.layer_detector.detect_layer_type(&filename) {
                                     // Check if we already have this layer type assigned
-                                    if let Some(existing_assignment) = app.layer_assignments.iter()
+                                    if let Some(existing_assignment) = app.layer_manager.layer_assignments.iter()
                                         .find(|(_, layer_type)| **layer_type == detected_type)
                                         .map(|(fname, _)| fname.clone()) {
                                         // This layer type is already assigned to another file
@@ -367,7 +367,7 @@ fn load_gerbers_into_viewer(app: &mut DemoLensApp, gerber_dir: &Path, logger: &R
                                             "Layer type {:?} already assigned to {}. Adding {} to unassigned list.",
                                             detected_type, existing_assignment, filename
                                         ));
-                                        app.unassigned_gerbers.push(UnassignedGerber {
+                                        app.layer_manager.unassigned_gerbers.push(UnassignedGerber {
                                             filename: filename.clone(),
                                             content: gerber_content.clone(),
                                             parsed_layer: gerber_layer,
@@ -383,15 +383,15 @@ fn load_gerbers_into_viewer(app: &mut DemoLensApp, gerber_dir: &Path, logger: &R
                                         );
                                         
                                         // Insert into layers map
-                                        app.layers.insert(detected_type, layer_info);
-                                        app.layer_assignments.insert(filename.clone(), detected_type);
+                                        app.layer_manager.layers.insert(detected_type, layer_info);
+                                        app.layer_manager.layer_assignments.insert(filename.clone(), detected_type);
                                         loaded_count += 1;
                                         logger.log_info(&format!("Loaded {} as {:?}", filename, detected_type));
                                     }
                                 } else {
                                     // Could not detect layer type, add to unassigned list
                                     logger.log_warning(&format!("Could not detect layer type for: {}", filename));
-                                    app.unassigned_gerbers.push(UnassignedGerber {
+                                    app.layer_manager.unassigned_gerbers.push(UnassignedGerber {
                                         filename: filename.clone(),
                                         content: gerber_content,
                                         parsed_layer: gerber_layer,

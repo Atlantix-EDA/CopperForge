@@ -25,7 +25,7 @@ pub fn show_drc_panel<'a>(
                     
                     // Run the actual DRC check (now includes OpenCV)
                     let violations = crate::drc::run_simple_drc_check(
-                        &app.layers,
+                        &app.layer_manager.layers,
                         &app.drc_manager.rules,
                         &mut app.drc_manager.trace_quality_issues
                     );
@@ -201,7 +201,7 @@ pub fn show_drc_panel<'a>(
                     
                     // Run the actual DRC check (now includes OpenCV)
                     let violations = crate::drc::run_simple_drc_check(
-                        &app.layers,
+                        &app.layer_manager.layers,
                         &app.drc_manager.rules,
                         &mut app.drc_manager.trace_quality_issues
                     );
@@ -337,7 +337,7 @@ pub fn show_drc_panel<'a>(
                     
                     // Run the DRC check which includes quality analysis
                     let _violations = crate::drc::run_simple_drc_check(
-                        &app.layers,
+                        &app.layer_manager.layers,
                         &app.drc_manager.rules,
                         &mut app.drc_manager.trace_quality_issues
                     );
@@ -385,7 +385,7 @@ pub fn show_drc_panel<'a>(
                         let mut total_fixed = 0;
                         
                         // Generate overlay for top copper
-                        if let Some(layer_info) = app.layers.get(&crate::LayerType::TopCopper) {
+                        if let Some(layer_info) = app.layer_manager.layers.get(&crate::LayerType::TopCopper) {
                             if let Some(gerber_layer) = &layer_info.gerber_layer {
                                 logger.log_info("Processing top copper layer for corner rounding...");
                                 let (overlay_shapes, fixed_count) = drc.generate_corner_overlay_data(gerber_layer, scaling_factor);
@@ -400,7 +400,7 @@ pub fn show_drc_panel<'a>(
                         }
                         
                         // Generate overlay for bottom copper  
-                        if let Some(layer_info) = app.layers.get(&crate::LayerType::BottomCopper) {
+                        if let Some(layer_info) = app.layer_manager.layers.get(&crate::LayerType::BottomCopper) {
                             if let Some(gerber_layer) = &layer_info.gerber_layer {
                                 logger.log_info("Processing bottom copper layer for corner rounding...");
                                 let (overlay_shapes, fixed_count) = drc.generate_corner_overlay_data(gerber_layer, scaling_factor);

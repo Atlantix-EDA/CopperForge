@@ -221,7 +221,7 @@ impl Tab {
 
         // Render all visible layers based on showing_top
         for layer_type in crate::layers::LayerType::all() {
-            if let Some(layer_info) = app.layers.get(&layer_type) {
+            if let Some(layer_info) = app.layer_manager.layers.get(&layer_type) {
                 if layer_info.visible {
                     // Filter based on showing_top
                     let should_render = layer_type.should_render(app.display_manager.showing_top);
@@ -362,7 +362,7 @@ impl Tab {
         }
         
         // Draw board dimensions at the bottom
-        if let Some(layer_info) = app.layers.get(&crate::layers::LayerType::MechanicalOutline) {
+        if let Some(layer_info) = app.layer_manager.layers.get(&crate::layers::LayerType::MechanicalOutline) {
             if let Some(ref outline_layer) = layer_info.gerber_layer {
                 let bbox = outline_layer.bounding_box();
                 let width_mm = bbox.width();

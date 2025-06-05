@@ -7,14 +7,13 @@ use egui::ViewportBuilder;
 use egui_dock::{DockArea, DockState, NodeIndex, Style, SurfaceIndex};
 
 mod managers;
-use managers::{ProjectManager, ProjectState, DisplayManager, DrcManager};
+use managers::{ProjectManager, ProjectState, DisplayManager, DrcManager, LayerManager};
 
 /// egui_lens imports
 use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 
 /// Use of prelude for egui_mobius_reactive
 use egui_mobius_reactive::Dynamic;  
-use std::collections::HashMap;
 
 use gerber_viewer::gerber_parser::parse;
 use log;
@@ -39,7 +38,6 @@ mod layer_detection;
 
 use layers::{LayerType, LayerInfo};
 use grid::GridSettings;
-use layer_detection::{LayerDetector, UnassignedGerber};
 
 // DRC structures are now imported from the drc module
 
@@ -50,9 +48,8 @@ use layer_detection::{LayerDetector, UnassignedGerber};
 
 /// The main application struct
 pub struct DemoLensApp {
-    // Multi-layer support
-    pub layers: HashMap<LayerType, LayerInfo>,
-    pub active_layer: LayerType,
+    // Layer management
+    pub layer_manager: LayerManager,
     
     // Legacy single layer support (for compatibility)
     pub gerber_layer: GerberLayer,
@@ -93,10 +90,6 @@ pub struct DemoLensApp {
     dock_state: DockState<Tab>,
     config_path: PathBuf,
     
-    // Layer detection and unassigned gerbers
-    pub layer_detector: LayerDetector,
-    pub unassigned_gerbers: Vec<UnassignedGerber>,
-    pub layer_assignments: HashMap<String, LayerType>, // filename -> assigned layer type
     
     // Zoom window state
     pub zoom_window_start: Option<Pos2>,
@@ -134,8 +127,8 @@ impl DemoLensApp {
         let commands = doc.into_commands();
         let gerber_layer = GerberLayer::new(commands);
         
-        // Initialize layers HashMap
-        let mut layers = HashMap::new();
+        // Initialize layer manager
+        let mut layer_manager = LayerManager::new();
         
         // Map layer types to their corresponding gerber files
         let layer_files = [
@@ -179,7 +172,7 @@ impl DemoLensApp {
                 Some(gerber_data.to_string()),  // Store raw Gerber data for DRC
                 matches!(layer_type, LayerType::TopCopper | LayerType::MechanicalOutline),
             );
-            layers.insert(layer_type, layer_info);
+            layer_manager.add_layer(layer_type, layer_info);
         }
         
         // Create logger state, colors, banner, and details
@@ -225,8 +218,7 @@ impl DemoLensApp {
         };
 
         let mut app = Self {
-            layers,
-            active_layer: LayerType::TopCopper,
+            layer_manager,
             gerber_layer,
             view_state: ViewState::default(),
             ui_state: UiState::default(),
@@ -249,9 +241,6 @@ impl DemoLensApp {
             config_path: dirs::config_dir()
                 .map(|d| d.join("kiforge"))
                 .unwrap_or_default(),
-            layer_detector: LayerDetector::new(),
-            unassigned_gerbers: Vec::new(),
-            layer_assignments: HashMap::new(),
             zoom_window_start: None,
             zoom_window_dragging: false,
             user_timezone: None,
@@ -370,7 +359,7 @@ impl DemoLensApp {
         // Find bounding box from all loaded layers
         let mut combined_bbox: Option<BoundingBox> = None;
         
-        for layer_info in self.layers.values() {
+        for layer_info in self.layer_manager.layers.values() {
             if let Some(ref layer_gerber) = layer_info.gerber_layer {
                 let layer_bbox = layer_gerber.bounding_box();
                 combined_bbox = Some(match combined_bbox {
@@ -561,7 +550,7 @@ impl eframe::App for DemoLensApp {
                 // Calculate the centroid of all visible gerber layers
                 let mut combined_bbox: Option<gerber_viewer::BoundingBox> = None;
                 
-                for (_layer_type, layer_info) in &self.layers {
+                for (_layer_type, layer_info) in &self.layer_manager.layers {
                     if layer_info.visible {
                         if let Some(ref gerber_layer) = layer_info.gerber_layer {
                             let layer_bbox = gerber_layer.bounding_box();

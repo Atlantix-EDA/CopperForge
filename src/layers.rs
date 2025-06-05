@@ -2,7 +2,7 @@ use eframe::epaint::Color32;
 use gerber_viewer::GerberLayer;
 
 /// Represents different PCB layers
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum LayerType {
     TopCopper,
     BottomCopper,
@@ -82,6 +82,7 @@ impl LayerType {
 }
 
 /// Layer information including the gerber data and visibility
+#[derive(Debug)]
 pub struct LayerInfo {
     pub layer_type: LayerType,
     pub gerber_layer: Option<GerberLayer>,

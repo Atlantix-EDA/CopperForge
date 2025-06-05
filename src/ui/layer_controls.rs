@@ -16,13 +16,13 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
     // Quick controls
     ui.horizontal(|ui| {
         if ui.button("Show All").clicked() {
-            for layer_info in app.layers.values_mut() {
+            for layer_info in app.layer_manager.layers.values_mut() {
                 layer_info.visible = true;
             }
             logger.log_info("All layers shown");
         }
         if ui.button("Hide All").clicked() {
-            for layer_info in app.layers.values_mut() {
+            for layer_info in app.layer_manager.layers.values_mut() {
                 layer_info.visible = false;
             }
             logger.log_info("All layers hidden");
@@ -31,7 +31,7 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
     ui.add_space(4.0);
     
     for layer_type in LayerType::all() {
-        if let Some(layer_info) = app.layers.get_mut(&layer_type) {
+        if let Some(layer_info) = app.layer_manager.layers.get_mut(&layer_type) {
             // Only show relevant layers based on showing_top
             let show_control = layer_type.should_render(app.display_manager.showing_top) || 
                               layer_type == LayerType::MechanicalOutline;
@@ -59,7 +59,7 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
     }
     
     // Show unassigned gerbers section if any exist
-    if !app.unassigned_gerbers.is_empty() {
+    if !app.layer_manager.unassigned_gerbers.is_empty() {
         ui.add_space(8.0);
         ui.separator();
         ui.heading("Unassigned Gerber Files");
@@ -68,13 +68,13 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
         
         let mut assignments_to_make = Vec::new();
         
-        for unassigned in &app.unassigned_gerbers {
+        for unassigned in &app.layer_manager.unassigned_gerbers {
             ui.horizontal(|ui| {
                 ui.label(&unassigned.filename);
                 ui.add_space(10.0);
                 
                 // Create dropdown for layer type selection
-                let current_selection = app.layer_assignments.get(&unassigned.filename)
+                let current_selection = app.layer_manager.layer_assignments.get(&unassigned.filename)
                     .copied()
                     .unwrap_or(LayerType::TopCopper); // Default selection
                 
@@ -83,7 +83,7 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
                     .show_ui(ui, |ui| {
                         for layer_type in LayerType::all() {
                             // Check if this layer type is already assigned to another file
-                            let already_assigned = app.layers.contains_key(&layer_type);
+                            let already_assigned = app.layer_manager.layers.contains_key(&layer_type);
                             
                             if already_assigned {
                                 ui.add_enabled(false, egui::SelectableLabel::new(
@@ -100,8 +100,8 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
         
         // Apply assignments
         for (filename, layer_type) in assignments_to_make {
-            if let Some(unassigned_idx) = app.unassigned_gerbers.iter().position(|u| u.filename == filename) {
-                let unassigned = app.unassigned_gerbers.remove(unassigned_idx);
+            if let Some(unassigned_idx) = app.layer_manager.unassigned_gerbers.iter().position(|u| u.filename == filename) {
+                let unassigned = app.layer_manager.unassigned_gerbers.remove(unassigned_idx);
                 
                 // Create layer info from unassigned gerber
                 let layer_info = crate::layers::LayerInfo::new(
@@ -111,29 +111,29 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
                     true,
                 );
                 
-                app.layers.insert(layer_type, layer_info);
-                app.layer_assignments.insert(filename.clone(), layer_type);
+                app.layer_manager.layers.insert(layer_type, layer_info);
+                app.layer_manager.layer_assignments.insert(filename.clone(), layer_type);
                 logger.log_info(&format!("Assigned {} to {:?}", filename, layer_type));
                 app.needs_initial_view = true;
             }
         }
         
-        if !app.unassigned_gerbers.is_empty() {
+        if !app.layer_manager.unassigned_gerbers.is_empty() {
             ui.add_space(8.0);
             if ui.button("Auto-detect All").clicked() {
                 let mut newly_assigned = Vec::new();
                 
-                for unassigned in &app.unassigned_gerbers {
-                    if let Some(detected_type) = app.layer_detector.detect_layer_type(&unassigned.filename) {
-                        if !app.layers.contains_key(&detected_type) {
+                for unassigned in &app.layer_manager.unassigned_gerbers {
+                    if let Some(detected_type) = app.layer_manager.layer_detector.detect_layer_type(&unassigned.filename) {
+                        if !app.layer_manager.layers.contains_key(&detected_type) {
                             newly_assigned.push((unassigned.filename.clone(), detected_type));
                         }
                     }
                 }
                 
                 for (filename, layer_type) in &newly_assigned {
-                    if let Some(unassigned_idx) = app.unassigned_gerbers.iter().position(|u| &u.filename == filename) {
-                        let unassigned = app.unassigned_gerbers.remove(unassigned_idx);
+                    if let Some(unassigned_idx) = app.layer_manager.unassigned_gerbers.iter().position(|u| &u.filename == filename) {
+                        let unassigned = app.layer_manager.unassigned_gerbers.remove(unassigned_idx);
                         
                         let layer_info = crate::layers::LayerInfo::new(
                             *layer_type,
@@ -142,9 +142,9 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
                             true,
                         );
                         
-                        app.layers.insert(*layer_type, layer_info);
+                        app.layer_manager.layers.insert(*layer_type, layer_info);
                         logger.log_info(&format!("Auto-detected {} as {:?}", filename, layer_type));
-                        app.layer_assignments.insert(filename.clone(), *layer_type);
+                        app.layer_manager.layer_assignments.insert(filename.clone(), *layer_type);
                     }
                 }
                 
