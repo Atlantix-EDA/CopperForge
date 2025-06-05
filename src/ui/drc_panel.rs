@@ -1,4 +1,5 @@
-use crate::{DemoLensApp, constants::LOG_TYPE_DRC, drc::TraceQualityType};
+use crate::{DemoLensApp, constants::LOG_TYPE_DRC};
+use crate::drc_operations::TraceQualityType;
 use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
 
@@ -24,7 +25,7 @@ pub fn show_drc_panel<'a>(
                     logger.log_info("Analyzing Gerber files with imageproc trace detection");
                     
                     // Run the actual DRC check (now includes OpenCV)
-                    let violations = crate::drc::run_simple_drc_check(
+                    let violations = crate::drc_operations::run_simple_drc_check(
                         &app.layer_manager.layers,
                         &app.drc_manager.rules,
                         &mut app.drc_manager.trace_quality_issues
@@ -200,7 +201,7 @@ pub fn show_drc_panel<'a>(
                     logger.log_info("Analyzing Gerber files...");
                     
                     // Run the actual DRC check (now includes OpenCV)
-                    let violations = crate::drc::run_simple_drc_check(
+                    let violations = crate::drc_operations::run_simple_drc_check(
                         &app.layer_manager.layers,
                         &app.drc_manager.rules,
                         &mut app.drc_manager.trace_quality_issues
@@ -336,7 +337,7 @@ pub fn show_drc_panel<'a>(
                     logger.log_info("Starting trace quality analysis...");
                     
                     // Run the DRC check which includes quality analysis
-                    let _violations = crate::drc::run_simple_drc_check(
+                    let _violations = crate::drc_operations::run_simple_drc_check(
                         &app.layer_manager.layers,
                         &app.drc_manager.rules,
                         &mut app.drc_manager.trace_quality_issues
@@ -380,7 +381,7 @@ pub fn show_drc_panel<'a>(
                         app.drc_manager.corner_overlay_shapes.clear();
                         
                         // Generate corner overlay on each copper layer using KiCad-style algorithm
-                        let drc = crate::drc::DrcSimple::default();
+                        let drc = crate::drc_operations::DrcSimple::default();
                         let scaling_factor = 0.1; // 0.1mm scaling factor (like KiCad's default)
                         let mut total_fixed = 0;
                         

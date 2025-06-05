@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::drc::{DrcRules, DrcViolation, TraceQualityIssue, CornerOverlayShape};
+use super::types::{DrcRules, DrcViolation, TraceQualityIssue, CornerOverlayShape};
 use gerber_viewer::GerberPrimitive;
 
 /// Manager for all DRC (Design Rule Check) related functionality
