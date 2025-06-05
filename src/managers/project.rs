@@ -205,7 +205,7 @@ impl ProjectManager {
                     self.state = ProjectState::NoProject;
                 }
             },
-            ProjectState::GeneratingGerbers { pcb_path } => {
+            ProjectState::GeneratingGerbers { pcb_path: _ } => {
                 // This state is handled externally by the gerber generation process
                 // When generation completes, the state should be updated to GerbersGenerated
             },
@@ -223,7 +223,7 @@ impl ProjectManager {
                     self.state = ProjectState::NoProject;
                 }
             },
-            ProjectState::LoadingGerbers { pcb_path, gerber_dir } => {
+            ProjectState::LoadingGerbers { pcb_path: _, gerber_dir: _ } => {
                 // This state is handled externally by the gerber loading process
                 // When loading completes, the state should be updated to Ready
             },

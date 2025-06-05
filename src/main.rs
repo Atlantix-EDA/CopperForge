@@ -286,6 +286,13 @@ impl DemoLensApp {
         use chrono::{Local, Utc};
         use chrono_tz::Tz;
         
+        // Show version
+        ui.label(egui::RichText::new(format!("KiForge v{}", env!("CARGO_PKG_VERSION")))
+            .color(egui::Color32::from_rgb(100, 150, 200)));
+        
+        ui.separator();
+        
+        // Show clock
         let clock_text = if let Some(tz_name) = &self.user_timezone {
             if let Ok(tz) = tz_name.parse::<Tz>() {
                 let now = Utc::now().with_timezone(&tz);
