@@ -1,8 +1,8 @@
 use std::io::BufReader;
 use gerber_viewer::gerber_parser::parse;
 use gerber_viewer::GerberLayer;
-use crate::layers::{LayerType, LayerInfo};
-use crate::managers::LayerManager;
+use crate::layer_operations::{LayerType, LayerInfo};
+use crate::LayerManager;
 
 /// Load default gerber layers from embedded assets
 pub fn load_default_gerbers() -> LayerManager {

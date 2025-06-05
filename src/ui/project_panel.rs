@@ -326,7 +326,7 @@ fn generate_gerbers_from_pcb(pcb_path: &Path, logger: &ReactiveEventLogger) -> O
 }
 
 fn load_gerbers_into_viewer(app: &mut DemoLensApp, gerber_dir: &Path, logger: &ReactiveEventLogger) {
-    use crate::layer_detection::UnassignedGerber;
+    use crate::layer_operations::UnassignedGerber;
     
     // Clear all existing layers and unassigned gerbers first
     logger.log_info("Clearing existing gerber layers...");

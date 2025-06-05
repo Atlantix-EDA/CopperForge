@@ -1038,11 +1038,11 @@ pub fn check_trace_width_in_gerber_data(
 
 /// Main DRC check function - runs all configured DRC checks
 pub fn run_simple_drc_check(
-    layers: &HashMap<crate::layers::LayerType, crate::layers::LayerInfo>,
+    layers: &HashMap<crate::layer_operations::LayerType, crate::layer_operations::LayerInfo>,
     drc_rules: &DrcRules,
     trace_quality_issues: &mut Vec<TraceQualityIssue>
 ) -> Vec<DrcViolation> {
-    use crate::layers::LayerType;
+    use crate::layer_operations::LayerType;
     
     let mut violations = Vec::new();
     

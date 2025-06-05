@@ -1,7 +1,7 @@
 use serde;
 use std::collections::HashMap;
-use crate::layers::{LayerType, LayerInfo};
-use crate::layer_detection::{LayerDetector, UnassignedGerber};
+use super::types::{LayerType, LayerInfo};
+use super::detection::{LayerDetector, UnassignedGerber};
 
 /// Manager for all layer-related functionality
 #[derive(Debug)]

@@ -6,7 +6,8 @@ use egui::ViewportBuilder;
 use egui_dock::{DockArea, DockState, NodeIndex, Style, SurfaceIndex};
 
 mod managers;
-use managers::{ProjectManager, ProjectState, DisplayManager, DrcManager, LayerManager};
+use managers::{ProjectManager, ProjectState, DisplayManager, DrcManager};
+use layer_operations::LayerManager;
 
 /// egui_lens imports
 use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
@@ -26,15 +27,14 @@ mod platform;
 
 // Import new modules
 mod constants;
-mod layers;
+mod layer_operations;
 mod grid;
 mod ui;
 use ui::{Tab, TabKind, TabViewer, initialize_and_show_banner, show_system_info};
 mod defaults;
 mod drc;
-mod layer_detection;
 
-use layers::{LayerType, LayerInfo};
+use layer_operations::{LayerType, LayerInfo};
 use grid::GridSettings;
 
 // DRC structures are now imported from the drc module

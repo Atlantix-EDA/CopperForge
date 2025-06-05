@@ -1,4 +1,4 @@
-use crate::{DemoLensApp, layers::LayerType};
+use crate::{DemoLensApp, layer_operations::LayerType};
 use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use eframe::emath::Vec2;
 use egui_mobius_reactive::*; 
@@ -104,7 +104,7 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
                 let unassigned = app.layer_manager.unassigned_gerbers.remove(unassigned_idx);
                 
                 // Create layer info from unassigned gerber
-                let layer_info = crate::layers::LayerInfo::new(
+                let layer_info = crate::layer_operations::LayerInfo::new(
                     layer_type,
                     Some(unassigned.parsed_layer),
                     Some(unassigned.content),
@@ -135,7 +135,7 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
                     if let Some(unassigned_idx) = app.layer_manager.unassigned_gerbers.iter().position(|u| &u.filename == filename) {
                         let unassigned = app.layer_manager.unassigned_gerbers.remove(unassigned_idx);
                         
-                        let layer_info = crate::layers::LayerInfo::new(
+                        let layer_info = crate::layer_operations::LayerInfo::new(
                             *layer_type,
                             Some(unassigned.parsed_layer),
                             Some(unassigned.content),

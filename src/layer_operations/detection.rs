@@ -1,6 +1,6 @@
 use regex::Regex;
 use std::collections::HashMap;
-use crate::layers::LayerType;
+use crate::layer_operations::LayerType;
 
 /// Common layer name patterns found across different PCB design tools
 #[derive(Debug)]
