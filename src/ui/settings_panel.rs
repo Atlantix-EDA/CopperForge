@@ -82,12 +82,32 @@ pub fn show_settings_panel<'a>(
                 });
         });
         
-        // Show current time in selected timezone
+        ui.add_space(10.0);
+        
+        // Clock format selection
+        ui.horizontal(|ui| {
+            ui.label("Clock Format:");
+            let prev_format = app.use_24_hour_clock;
+            ui.selectable_value(&mut app.use_24_hour_clock, true, "24-hour (13:30:45)");
+            ui.selectable_value(&mut app.use_24_hour_clock, false, "12-hour (1:30:45 PM)");
+            
+            if prev_format != app.use_24_hour_clock {
+                let format_name = if app.use_24_hour_clock { "24-hour" } else { "12-hour" };
+                logger.log_info(&format!("Changed clock format to {}", format_name));
+            }
+        });
+        
+        // Show current time in selected timezone with chosen format
+        let time_format = if app.use_24_hour_clock { "%Y-%m-%d %H:%M:%S %Z" } else { "%Y-%m-%d %I:%M:%S %p %Z" };
+        
         if let Some(tz_name) = &app.user_timezone {
             if let Ok(tz) = tz_name.parse::<Tz>() {
                 let now = Local::now().with_timezone(&tz);
-                ui.label(format!("Current time: {}", now.format("%Y-%m-%d %H:%M:%S %Z")));
+                ui.label(format!("Current time: {}", now.format(time_format)));
             }
+        } else {
+            let now = Local::now();
+            ui.label(format!("Current time: {}", now.format(if app.use_24_hour_clock { "%Y-%m-%d %H:%M:%S" } else { "%Y-%m-%d %I:%M:%S %p" })));
         }
     });
     

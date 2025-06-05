@@ -5,8 +5,8 @@ use egui::Pos2;
 use egui::ViewportBuilder;
 use egui_dock::{DockArea, DockState, NodeIndex, Style, SurfaceIndex};
 
-mod managers;
-use managers::DisplayManager;
+mod display;
+use display::DisplayManager;
 use layer_operations::LayerManager;
 use drc_operations::DrcManager;
 
@@ -31,13 +31,12 @@ use platform::parameters::gui::{APPLICATION_NAME, VERSION};
 mod project;
 mod layer_operations;
 mod drc_operations;
-mod grid;
 mod ui;
 use ui::{Tab, TabKind, TabViewer, initialize_and_show_banner, show_system_info};
 
 use layer_operations::{LayerType, LayerInfo};
 use project::{load_default_gerbers, load_demo_gerber, ProjectManager, ProjectState};
-use grid::GridSettings;
+use display::GridSettings;
 
 // DRC structures are now imported from the drc module
 
@@ -95,6 +94,7 @@ pub struct DemoLensApp {
     
     // User preferences
     pub user_timezone: Option<String>,
+    pub use_24_hour_clock: bool, // true = 24-hour, false = 12-hour
 }
 
 
@@ -185,6 +185,7 @@ impl DemoLensApp {
             zoom_window_start: None,
             zoom_window_dragging: false,
             user_timezone: None,
+            use_24_hour_clock: true, // Default to 24-hour format
         };
         
         // Load project config from disk
@@ -294,18 +295,20 @@ impl DemoLensApp {
         
         ui.separator();
         
-        // Show clock
+        // Show clock with user's preferred format
+        let time_format = if self.use_24_hour_clock { "%H:%M:%S" } else { "%I:%M:%S %p" };
+        
         let clock_text = if let Some(tz_name) = &self.user_timezone {
             if let Ok(tz) = tz_name.parse::<Tz>() {
                 let now = Utc::now().with_timezone(&tz);
-                format!("🕐 {} {}", now.format("%H:%M:%S"), tz.name())
+                format!("🕐 {} {}", now.format(time_format), tz.name())
             } else {
                 let now = Local::now();
-                format!("🕐 {}", now.format("%H:%M:%S"))
+                format!("🕐 {}", now.format(time_format))
             }
         } else {
             let now = Local::now();
-            format!("🕐 {}", now.format("%H:%M:%S"))
+            format!("🕐 {}", now.format(time_format))
         };
         
         ui.label(egui::RichText::new(clock_text).color(egui::Color32::from_rgb(150, 150, 150)));
@@ -490,7 +493,7 @@ impl eframe::App for DemoLensApp {
                 {
                     let current_offset: gerber_viewer::position::Vector = self.display_manager.design_offset.clone().into();
                     let new_offset = current_offset + offset_adjustment;
-                    self.display_manager.design_offset = managers::display::VectorOffset { x: new_offset.x, y: new_offset.y };
+                    self.display_manager.design_offset = display::VectorOffset { x: new_offset.x, y: new_offset.y };
                 }
                 
                 let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);

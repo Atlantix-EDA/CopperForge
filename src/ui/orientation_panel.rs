@@ -1,7 +1,7 @@
 use crate::{DemoLensApp, project::constants::{LOG_TYPE_ROTATION, LOG_TYPE_MIRROR, LOG_TYPE_CENTER_OFFSET, LOG_TYPE_DESIGN_OFFSET}};
 use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
-use crate::managers::display::VectorOffset;
+use crate::display::VectorOffset;
 
 pub fn show_orientation_panel<'a>(    
     ui: &mut egui::Ui,

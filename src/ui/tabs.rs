@@ -132,8 +132,8 @@ impl Tab {
         // Handle double-click to center (same as Center button)
         if response.double_clicked() {
             // Apply the same logic as the "Center" button in orientation panel
-            app.display_manager.center_offset = crate::managers::display::VectorOffset { x: 0.0, y: 0.0 };
-            app.display_manager.design_offset = crate::managers::display::VectorOffset { x: 0.0, y: 0.0 };
+            app.display_manager.center_offset = crate::display::VectorOffset { x: 0.0, y: 0.0 };
+            app.display_manager.design_offset = crate::display::VectorOffset { x: 0.0, y: 0.0 };
             app.needs_initial_view = true;
         }
         
@@ -214,7 +214,7 @@ impl Tab {
         let painter = ui.painter().with_clip_rect(viewport);
         
         // Draw grid if enabled (before other elements so it appears underneath)
-        crate::grid::draw_grid(&painter, &viewport, &app.view_state, &app.grid_settings);
+        crate::display::draw_grid(&painter, &viewport, &app.view_state, &app.grid_settings);
         
         draw_crosshair(&painter, app.ui_state.origin_screen_pos, Color32::BLUE);
         draw_crosshair(&painter, app.ui_state.center_screen_pos, Color32::LIGHT_GRAY);
