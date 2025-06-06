@@ -77,8 +77,8 @@ pub fn draw_grid(
         for grid_y in start_y..=end_y {
             let x = grid_x as f64 * grid_spacing_gerber;
             let y = grid_y as f64 * grid_spacing_gerber;
-            let grid_pos = gerber_viewer::position::Position::new(x, y);
-            let screen_pos = view_state.gerber_to_screen_coords(grid_pos);
+            let grid_pos = crate::drc_operations::types::Position { x, y };
+            let screen_pos = view_state.gerber_to_screen_coords(grid_pos.to_point2());
             
             // Only draw if within viewport
             if viewport.contains(screen_pos) {

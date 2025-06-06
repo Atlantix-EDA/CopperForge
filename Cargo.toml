@@ -10,6 +10,7 @@ eframe = "0.31.1"
 gerber_viewer = { git = "https://github.com/MakerPnP/gerber-viewer" }
 gerber_parser = { git = "https://github.com/MakerPnP/gerber-parser" }
 gerber_types = { git = "https://github.com/MakerPnP/gerber-types" }
+nalgebra = "0.33"
 
 egui_lens = { version = "0.1.0"}
 egui_mobius_reactive = { version = "0.3.0-alpha.31" }

@@ -6,27 +6,21 @@ use egui::ViewportBuilder;
 use egui_dock::{DockArea, DockState, NodeIndex, Style, SurfaceIndex};
 
 mod display;
-use display::DisplayManager;
+use display::{DisplayManager, manager::ToPosition};
 use layer_operations::LayerManager;
 use drc_operations::DrcManager;
 
 /// egui_lens imports
 use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
-
-/// Use of prelude for egui_mobius_reactive
-use egui_mobius_reactive::Dynamic;  
-
+use egui_mobius_reactive::*; 
 use log;
 use gerber_viewer::{
    BoundingBox, GerberLayer, 
    ViewState, UiState
 };
-
-
 // Import platform modules
 mod platform;
 use platform::parameters::gui::{APPLICATION_NAME, VERSION};
-
 // Import new modules
 mod project;
 mod layer_operations;
@@ -37,13 +31,6 @@ use ui::{Tab, TabKind, TabViewer, initialize_and_show_banner, show_system_info};
 use layer_operations::{LayerType, LayerInfo};
 use project::{load_default_gerbers, load_demo_gerber, ProjectManager, ProjectState};
 use display::GridSettings;
-
-// DRC structures are now imported from the drc module
-
-
-
-
-
 
 /// The main application struct
 pub struct DemoLensApp {
@@ -92,8 +79,6 @@ pub struct DemoLensApp {
     pub use_24_hour_clock: bool, // true = 24-hour, false = 12-hour
 }
 
-
-
 impl Drop for DemoLensApp {
     fn drop(&mut self) {
         // Save dock state when application closes
@@ -106,23 +91,14 @@ impl Drop for DemoLensApp {
 }
 
 impl DemoLensApp {
-    /// **Create a new instance of the DemoLensApp**
-    ///
-    /// This function initializes the application state, including loading the Gerber layer,
-    /// setting up the logger, and configuring the UI properties. It also sets up the initial view
-    /// and adds platform details to the app. The function returns a new instance of the DemoLensApp.
-    ///
     pub fn new() -> Self {
-        // Load default gerbers and demo layer
+
         let gerber_layer = load_demo_gerber();
         let layer_manager = load_default_gerbers();
         
-        // Create logger state and colors
         let logger_state = Dynamic::new(ReactiveEventLoggerState::new());
         let log_colors = Dynamic::new(LogColors::default());
         
-
-        // Initialize dock state - load from saved state or create default
         let dock_state = if let Some(saved_dock_state) = Self::load_dock_state() {
             saved_dock_state
         } else {
@@ -134,18 +110,15 @@ impl DemoLensApp {
             let gerber_tab = Tab::new(TabKind::GerberView, SurfaceIndex::main(), NodeIndex(4));
             let log_tab = Tab::new(TabKind::EventLog, SurfaceIndex::main(), NodeIndex(5));
             
-            // Create dock state with gerber view as the root
             let mut dock_state = DockState::new(vec![gerber_tab]);
             let surface = dock_state.main_surface_mut();
             
-            // Split left for control panels
             let [left, _right] = surface.split_left(
                 NodeIndex::root(),
                 0.3, // Left panel takes 30% of width
                 vec![view_settings_tab, drc_tab, project_tab, settings_tab],
             );
             
-            // Add event log to bottom of left panel
             surface.split_below(
                 left,
                 0.7, // Top takes 70% of height
@@ -179,13 +152,11 @@ impl DemoLensApp {
             use_24_hour_clock: true, // Default to 24-hour format
         };
         
-        // Load project config from disk
         if let Ok(project_manager) = ProjectManager::load_from_file(&app.config_path) {
             app.project_manager = project_manager;
             
         }
         
-        // Add platform details and initialize project
         let logger = ReactiveEventLogger::with_colors(&app.logger_state, &app.log_colors);
         initialize_and_show_banner(&logger);
         app.initialize_project();
@@ -207,7 +178,6 @@ impl DemoLensApp {
         }
     }
 
-
     fn reset_view(&mut self, viewport: Rect) {
         // Find bounding box from all loaded layers
         let mut combined_bbox: Option<BoundingBox> = None;
@@ -218,11 +188,11 @@ impl DemoLensApp {
                 combined_bbox = Some(match combined_bbox {
                     None => layer_bbox.clone(),
                     Some(existing) => BoundingBox {
-                        min: gerber_viewer::position::Position::new(
+                        min: nalgebra::Point2::new(
                             existing.min.x.min(layer_bbox.min.x),
                             existing.min.y.min(layer_bbox.min.y),
                         ),
-                        max: gerber_viewer::position::Position::new(
+                        max: nalgebra::Point2::new(
                             existing.max.x.max(layer_bbox.max.x),
                             existing.max.y.max(layer_bbox.max.y),
                         ),
@@ -413,11 +383,11 @@ impl eframe::App for DemoLensApp {
                             combined_bbox = Some(match combined_bbox {
                                 None => layer_bbox.clone(),
                                 Some(existing) => gerber_viewer::BoundingBox {
-                                    min: gerber_viewer::position::Position::new(
+                                    min: nalgebra::Point2::new(
                                         existing.min.x.min(layer_bbox.min.x),
                                         existing.min.y.min(layer_bbox.min.y),
                                     ),
-                                    max: gerber_viewer::position::Position::new(
+                                    max: nalgebra::Point2::new(
                                         existing.max.x.max(layer_bbox.max.x),
                                         existing.max.y.max(layer_bbox.max.y),
                                     ),
@@ -433,8 +403,8 @@ impl eframe::App for DemoLensApp {
                 } else {
                     // Fallback to current design offset if no layers
                     {
-                        let design_vec: gerber_viewer::position::Vector = self.display_manager.design_offset.clone().into();
-                        design_vec.to_position()
+                        let design_vec: nalgebra::Vector2::<f64> = self.display_manager.design_offset.clone().into();
+                        nalgebra::Point2::new(design_vec.x, design_vec.y)
                     }
                 };
                 
@@ -457,14 +427,14 @@ impl eframe::App for DemoLensApp {
                 
                 // Adjust the design offset to account for the rotation around the centroid
                 // The offset difference keeps the same point at the center of rotation
-                let offset_adjustment = gerber_viewer::position::Vector::new(
+                let offset_adjustment = nalgebra::Vector2::<f64>::new(
                     rotation_center.x - rotated_center_x,
                     rotation_center.y - rotated_center_y
                 );
                 
                 // Apply the offset adjustment
                 {
-                    let current_offset: gerber_viewer::position::Vector = self.display_manager.design_offset.clone().into();
+                    let current_offset: nalgebra::Vector2::<f64> = self.display_manager.design_offset.clone().into();
                     let new_offset = current_offset + offset_adjustment;
                     self.display_manager.design_offset = display::VectorOffset { x: new_offset.x, y: new_offset.y };
                 }
@@ -545,10 +515,7 @@ impl eframe::App for DemoLensApp {
     }
 }
 
-/// The main function is the entry point of the application.
-/// 
-/// It initializes the logger, sets up the native window options,
-/// and runs the application using the `eframe` framework.
+
 fn main() -> eframe::Result<()> {
     // Configure env_logger to filter out gerber_parser warnings
     env_logger::Builder::from_default_env()

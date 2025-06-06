@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use super::types::{DrcRules, DrcViolation, TraceQualityIssue, CornerOverlayShape};
-use gerber_viewer::GerberPrimitive;
+use super::types::GerberPrimitive;
 
 /// Manager for all DRC (Design Rule Check) related functionality
 #[derive(Debug, Clone, Serialize, Deserialize)]

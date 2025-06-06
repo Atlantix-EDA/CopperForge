@@ -32,14 +32,14 @@ pub struct VectorOffset {
     pub y: f64,
 }
 
-impl From<VectorOffset> for gerber_viewer::position::Vector {
+impl From<VectorOffset> for nalgebra::Vector2<f64> {
     fn from(offset: VectorOffset) -> Self {
-        gerber_viewer::position::Vector::new(offset.x, offset.y)
+        nalgebra::Vector2::new(offset.x, offset.y)
     }
 }
 
-impl From<gerber_viewer::position::Vector> for VectorOffset {
-    fn from(vector: gerber_viewer::position::Vector) -> Self {
+impl From<nalgebra::Vector2<f64>> for VectorOffset {
+    fn from(vector: nalgebra::Vector2<f64>) -> Self {
         VectorOffset {
             x: vector.x,
             y: vector.y,
@@ -131,5 +131,16 @@ impl DisplayManager {
 impl Default for DisplayManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// Helper trait for vector conversions
+pub trait ToPosition {
+    fn to_position(self) -> crate::drc_operations::types::Position;
+}
+
+impl ToPosition for nalgebra::Vector2<f64> {
+    fn to_position(self) -> crate::drc_operations::types::Position {
+        crate::drc_operations::types::Position { x: self.x, y: self.y }
     }
 }

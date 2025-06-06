@@ -13,7 +13,9 @@ use gerber_viewer::{
     draw_arrow, draw_outline, draw_crosshair, GerberRenderer, 
     draw_marker
 };
-use gerber_viewer::position::Vector;
+use crate::drc_operations::types::Position;
+use crate::display::manager::ToPosition;
+use nalgebra::Vector2;
 
 /// Define the tabs for the DockArea
 #[derive(Clone, Serialize, Deserialize)]
@@ -250,17 +252,17 @@ impl Tab {
 
         // Get bounding box and outline vertices
         let bbox = app.gerber_layer.bounding_box();
-        let origin = Vector::from(app.display_manager.center_offset.clone()) - Vector::from(app.display_manager.design_offset.clone());
+        let origin = Vector2::from(app.display_manager.center_offset.clone()) - Vector2::from(app.display_manager.design_offset.clone());
         let bbox_vertices = bbox.vertices();  
         let outline_vertices = bbox.vertices();  
         
         // Transform vertices after getting them
         let bbox_vertices_screen = bbox_vertices.iter()
-            .map(|v| app.view_state.gerber_to_screen_coords(*v + origin.to_position()))
+            .map(|v| app.view_state.gerber_to_screen_coords(*v + origin))
             .collect::<Vec<_>>();
             
         let outline_vertices_screen = outline_vertices.iter()
-            .map(|v| app.view_state.gerber_to_screen_coords(*v + origin.to_position()))
+            .map(|v| app.view_state.gerber_to_screen_coords(*v + origin))
             .collect::<Vec<_>>();
 
         draw_outline(&painter, bbox_vertices_screen, Color32::RED);
@@ -268,11 +270,11 @@ impl Tab {
 
         let screen_radius = MARKER_RADIUS * app.view_state.scale;
 
-        let design_offset_screen_position = app.view_state.gerber_to_screen_coords(Vector::from(app.display_manager.design_offset.clone()).to_position());
+        let design_offset_screen_position = app.view_state.gerber_to_screen_coords(Vector2::from(app.display_manager.design_offset.clone()).to_position().to_point2());
         draw_arrow(&painter, design_offset_screen_position, app.ui_state.origin_screen_pos, Color32::ORANGE);
         draw_marker(&painter, design_offset_screen_position, Color32::ORANGE, Color32::YELLOW, screen_radius);
 
-        let design_origin_screen_position = app.view_state.gerber_to_screen_coords((Vector::from(app.display_manager.center_offset.clone()) - Vector::from(app.display_manager.design_offset.clone())).to_position());
+        let design_origin_screen_position = app.view_state.gerber_to_screen_coords((Vector2::from(app.display_manager.center_offset.clone()) - Vector2::from(app.display_manager.design_offset.clone())).to_position().to_point2());
         draw_marker(&painter, design_origin_screen_position, Color32::PURPLE, Color32::MAGENTA, screen_radius);
         
         // Render corner overlay shapes (rounded corners)
@@ -294,7 +296,7 @@ impl Tab {
                         
                         let rotated_x = vertex_pos.x * cos_theta as f64 - vertex_pos.y * sin_theta as f64;
                         let rotated_y = vertex_pos.x * sin_theta as f64 + vertex_pos.y * cos_theta as f64;
-                        vertex_pos = gerber_viewer::position::Position::new(rotated_x, rotated_y);
+                        vertex_pos = Position { x: rotated_x, y: rotated_y };
                     }
                     
                     // Apply mirroring if any
@@ -306,10 +308,10 @@ impl Tab {
                     }
                     
                     // Apply center and design offsets
-                    let origin = Vector::from(app.display_manager.center_offset.clone()) - Vector::from(app.display_manager.design_offset.clone());
+                    let origin = Vector2::from(app.display_manager.center_offset.clone()) - Vector2::from(app.display_manager.design_offset.clone());
                     vertex_pos = vertex_pos + origin.to_position();
                     
-                    let vertex_screen = app.view_state.gerber_to_screen_coords(vertex_pos);
+                    let vertex_screen = app.view_state.gerber_to_screen_coords(vertex_pos.to_point2());
                     transformed_vertices.push(vertex_screen);
                 }
                 
@@ -326,7 +328,7 @@ impl Tab {
         
         // Draw DRC violation markers
         for violation in &app.drc_manager.violations {
-            let violation_pos = gerber_viewer::position::Position::new(violation.x as f64, violation.y as f64);
+            let violation_pos = Position::new(violation.x as f64, violation.y as f64);
             
             // Apply the same transformation pipeline as GerberRenderer::paint_layer()
             let mut transformed_pos = violation_pos;
@@ -337,7 +339,7 @@ impl Tab {
                 let (sin_theta, cos_theta) = (rotation_radians.sin(), rotation_radians.cos());
                 let rotated_x = transformed_pos.x * cos_theta as f64 - transformed_pos.y * sin_theta as f64;
                 let rotated_y = transformed_pos.x * sin_theta as f64 + transformed_pos.y * cos_theta as f64;
-                transformed_pos = gerber_viewer::position::Position::new(rotated_x, rotated_y);
+                transformed_pos = Position::new(rotated_x, rotated_y);
             }
             
             // Apply mirroring if any
@@ -351,7 +353,7 @@ impl Tab {
             // Apply center and design offsets
             transformed_pos = transformed_pos + origin.to_position();
             
-            let screen_pos = app.view_state.gerber_to_screen_coords(transformed_pos);
+            let screen_pos = app.view_state.gerber_to_screen_coords(transformed_pos.to_point2());
             
             // All markers now represent trace areas (1 per trace)
             let base_size = 3.0; // Small but visible markers
@@ -469,8 +471,8 @@ impl Tab {
                 let gerber_pos = app.view_state.screen_to_gerber_coords(mouse_screen_pos);
                 
                 // Apply the same transformation as other elements for consistency
-                let origin = Vector::from(app.display_manager.center_offset.clone()) - Vector::from(app.display_manager.design_offset.clone());
-                let adjusted_pos = gerber_viewer::position::Position::new(
+                let origin = Vector2::from(app.display_manager.center_offset.clone()) - Vector2::from(app.display_manager.design_offset.clone());
+                let adjusted_pos = Position::new(
                     gerber_pos.x - origin.to_position().x,
                     gerber_pos.y - origin.to_position().y
                 );
