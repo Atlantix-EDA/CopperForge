@@ -45,13 +45,28 @@ pub fn show_orientation_panel<'a>(
     ui.horizontal(|ui| {
         ui.label("Rotate by");
         let prev_rotation = app.rotation_degrees;
-        if ui.add(egui::DragValue::new(&mut app.rotation_degrees).suffix("°").speed(1.0)).changed() {
+        let mut new_rotation = app.rotation_degrees;
+        if ui.add(egui::DragValue::new(&mut new_rotation).suffix("°").speed(1.0)).changed() {
+            app.rotation_degrees = new_rotation;
+            
+            // When rotation changes, we need to trigger a view update
+            // The actual rotation handling will happen in the render method
+            app.needs_initial_view = true;
+            
             logger.log_custom(
                 LOG_TYPE_ROTATION, 
                 &format!("Rotation changed from {:.1}° to {:.1}°", prev_rotation, app.rotation_degrees)
             );
         }
         ui.label("degrees");
+        
+        // Add reset button
+        if ui.button("Reset").clicked() {
+            if app.rotation_degrees != 0.0 {
+                app.rotation_degrees = 0.0;
+                logger.log_custom(LOG_TYPE_ROTATION, "Reset rotation to 0°");
+            }
+        }
     });
     
     // Advanced offset controls (initially hidden)

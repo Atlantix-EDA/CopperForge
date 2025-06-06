@@ -6,7 +6,7 @@ use egui::ViewportBuilder;
 use egui_dock::{DockArea, DockState, NodeIndex, Style, SurfaceIndex};
 
 mod display;
-use display::{DisplayManager, manager::ToPosition};
+use display::DisplayManager;
 use layer_operations::LayerManager;
 use drc_operations::DrcManager;
 
@@ -16,7 +16,7 @@ use egui_mobius_reactive::*;
 use log;
 use gerber_viewer::{
    BoundingBox, GerberLayer, 
-   ViewState, UiState
+   ViewState, UiState, Transform2D
 };
 // Import platform modules
 mod platform;
@@ -214,12 +214,32 @@ impl DemoLensApp {
         // adjust slightly to add a margin
         let scale = scale * 0.95;
 
-        let center = bbox.center();
+        // Create the transform that will be used during rendering
+        let origin: nalgebra::Vector2<f64> = self.display_manager.center_offset.clone().into();
+        let offset: nalgebra::Vector2<f64> = self.display_manager.design_offset.clone().into();
+        let transform = Transform2D {
+            rotation_radians: self.rotation_degrees.to_radians(),
+            mirroring: self.display_manager.mirroring.clone().into(),
+            origin: origin - offset,
+            offset,
+        };
+
+        // Compute transformed bounding box
+        let outline_vertices: Vec<_> = bbox
+            .vertices()
+            .into_iter()
+            .map(|v| transform.apply_to_position(v))
+            .collect();
+
+        let transformed_bbox = BoundingBox::from_points(&outline_vertices);
+
+        // Use the center of the transformed bounding box
+        let transformed_center = transformed_bbox.center();
 
         // Offset from viewport center to place content in the center
         self.view_state.translation = Vec2::new(
-            viewport.center().x - (center.x as f32 * scale),
-            viewport.center().y + (center.y as f32 * scale), // Note the + here since we flip Y
+            viewport.center().x - (transformed_center.x as f32 * scale),
+            viewport.center().y + (transformed_center.y as f32 * scale), // Note the + here since we flip Y
         );
 
         self.view_state.scale = scale;
@@ -371,78 +391,18 @@ impl eframe::App for DemoLensApp {
                 logger.log_info(&format!("Toggled units to {} (U key)", units_name));
             }
             
-            // R key - rotate board 90 degrees clockwise around PCB centroid
+            // R key - rotate board 90 degrees clockwise
             if i.key_pressed(egui::Key::R) {
-                // Calculate the centroid of all visible gerber layers
-                let mut combined_bbox: Option<gerber_viewer::BoundingBox> = None;
-                
-                for (_layer_type, layer_info) in &self.layer_manager.layers {
-                    if layer_info.visible {
-                        if let Some(ref gerber_layer) = layer_info.gerber_layer {
-                            let layer_bbox = gerber_layer.bounding_box();
-                            combined_bbox = Some(match combined_bbox {
-                                None => layer_bbox.clone(),
-                                Some(existing) => gerber_viewer::BoundingBox {
-                                    min: nalgebra::Point2::new(
-                                        existing.min.x.min(layer_bbox.min.x),
-                                        existing.min.y.min(layer_bbox.min.y),
-                                    ),
-                                    max: nalgebra::Point2::new(
-                                        existing.max.x.max(layer_bbox.max.x),
-                                        existing.max.y.max(layer_bbox.max.y),
-                                    ),
-                                },
-                            });
-                        }
-                    }
-                }
-                
-                // Get the current center point that we're rotating around
-                let rotation_center = if let Some(bbox) = combined_bbox {
-                    bbox.center()
-                } else {
-                    // Fallback to current design offset if no layers
-                    {
-                        let design_vec: nalgebra::Vector2::<f64> = self.display_manager.design_offset.clone().into();
-                        nalgebra::Point2::new(design_vec.x, design_vec.y)
-                    }
-                };
-                
-                // To rotate around a specific point, we need to:
-                // 1. Translate so the rotation center is at origin (subtract center)
-                // 2. Rotate 90 degrees
-                // 3. Translate back (add rotated center)
-                
-                // Calculate what the rotation center will be after rotation
-                let angle_rad = 90.0_f32.to_radians();
-                let cos_a = angle_rad.cos() as f64;
-                let sin_a = angle_rad.sin() as f64;
-                
-                // Rotate the center point itself
-                let rotated_center_x = rotation_center.x * cos_a - rotation_center.y * sin_a;
-                let rotated_center_y = rotation_center.x * sin_a + rotation_center.y * cos_a;
-                
                 // Update rotation
                 self.rotation_degrees = (self.rotation_degrees + 90.0) % 360.0;
                 
-                // Adjust the design offset to account for the rotation around the centroid
-                // The offset difference keeps the same point at the center of rotation
-                let offset_adjustment = nalgebra::Vector2::<f64>::new(
-                    rotation_center.x - rotated_center_x,
-                    rotation_center.y - rotated_center_y
-                );
-                
-                // Apply the offset adjustment
-                {
-                    let current_offset: nalgebra::Vector2::<f64> = self.display_manager.design_offset.clone().into();
-                    let new_offset = current_offset + offset_adjustment;
-                    self.display_manager.design_offset = display::VectorOffset { x: new_offset.x, y: new_offset.y };
-                }
+                // Trigger view update to recalculate centering with new rotation
+                self.needs_initial_view = true;
                 
                 let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
                 logger.log_custom(
                     project::constants::LOG_TYPE_ROTATION,
-                    &format!("Rotated board to {:.0}° around PCB centroid (R key)", self.rotation_degrees)
+                    &format!("Rotated board to {:.0}° (R key)", self.rotation_degrees)
                 );
             }
         });

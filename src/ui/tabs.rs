@@ -250,24 +250,6 @@ impl Tab {
             }
         }
 
-        // Get bounding box and outline vertices
-        let bbox = app.gerber_layer.bounding_box();
-        let origin = Vector2::from(app.display_manager.center_offset.clone()) - Vector2::from(app.display_manager.design_offset.clone());
-        let bbox_vertices = bbox.vertices();  
-        let outline_vertices = bbox.vertices();  
-        
-        // Transform vertices after getting them
-        let bbox_vertices_screen = bbox_vertices.iter()
-            .map(|v| app.view_state.gerber_to_screen_coords(*v + origin))
-            .collect::<Vec<_>>();
-            
-        let outline_vertices_screen = outline_vertices.iter()
-            .map(|v| app.view_state.gerber_to_screen_coords(*v + origin))
-            .collect::<Vec<_>>();
-
-        draw_outline(&painter, bbox_vertices_screen, Color32::RED);
-        draw_outline(&painter, outline_vertices_screen, Color32::GREEN);
-
         let screen_radius = MARKER_RADIUS * app.view_state.scale;
 
         let design_offset_screen_position = app.view_state.gerber_to_screen_coords(Vector2::from(app.display_manager.design_offset.clone()).to_position().to_point2());
@@ -351,6 +333,7 @@ impl Tab {
             }
             
             // Apply center and design offsets
+            let origin = Vector2::from(app.display_manager.center_offset.clone()) - Vector2::from(app.display_manager.design_offset.clone());
             transformed_pos = transformed_pos + origin.to_position();
             
             let screen_pos = app.view_state.gerber_to_screen_coords(transformed_pos.to_point2());
