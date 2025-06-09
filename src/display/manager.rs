@@ -67,6 +67,12 @@ pub struct DisplayManager {
     
     /// View orientation: true = top layers, false = bottom layers
     pub showing_top: bool,
+    
+    /// Enable quadrant view mode for spreading layers
+    pub quadrant_view_enabled: bool,
+    
+    /// Offset magnitude for quadrant view (in mm)
+    pub quadrant_offset_magnitude: f64,
 }
 
 impl DisplayManager {
@@ -79,6 +85,8 @@ impl DisplayManager {
             center_offset: VectorOffset { x: 0.0, y: 0.0 },
             design_offset: VectorOffset { x: 0.0, y: 0.0 },
             showing_top: true,
+            quadrant_view_enabled: false,
+            quadrant_offset_magnitude: 141.42, // Default ~100mil in x and y (sqrt(100^2 + 100^2) * 0.0254)
         }
     }
     
@@ -124,6 +132,72 @@ impl DisplayManager {
             (true, false) => "X-axis mirrored".to_string(),
             (false, true) => "Y-axis mirrored".to_string(),
             (true, true) => "X and Y mirrored".to_string(),
+        }
+    }
+    
+    /// Toggle quadrant view mode
+    pub fn toggle_quadrant_view(&mut self) {
+        self.quadrant_view_enabled = !self.quadrant_view_enabled;
+    }
+    
+    /// Get the quadrant offset for a specific layer type
+    /// Returns (x_offset, y_offset) in mm
+    pub fn get_quadrant_offset(&self, layer_type: &crate::layer_operations::LayerType) -> VectorOffset {
+        if !self.quadrant_view_enabled {
+            return VectorOffset { x: 0.0, y: 0.0 };
+        }
+        
+        // Ensure we have a valid offset magnitude (minimum 1mm to avoid issues)
+        let safe_magnitude = self.quadrant_offset_magnitude.max(1.0);
+        
+        // Calculate base offset - divide by sqrt(2) to get X and Y components
+        let base_offset = safe_magnitude / std::f64::consts::SQRT_2;
+        
+        // Determine quadrant based on layer type
+        // Quadrant 1 (top-right): Copper layers
+        // Quadrant 2 (top-left): Silkscreen layers  
+        // Quadrant 3 (bottom-left): Soldermask layers
+        // Quadrant 4 (bottom-right): Paste layers
+        
+        use crate::layer_operations::LayerType;
+        
+        let (x_mult, y_mult) = match layer_type {
+            // Copper layers - Quadrant 1 (top-right)
+            LayerType::TopCopper | LayerType::BottomCopper => (1.0, 1.0),
+            
+            // Silkscreen layers - Quadrant 2 (top-left)
+            LayerType::TopSilk | LayerType::BottomSilk => (-1.0, 1.0),
+            
+            // Soldermask layers - Quadrant 3 (bottom-left)
+            LayerType::TopSoldermask | LayerType::BottomSoldermask => (-1.0, -1.0),
+            
+            // Paste layers - Quadrant 4 (bottom-right)
+            LayerType::TopPaste | LayerType::BottomPaste => (1.0, -1.0),
+            
+            // Mechanical outline should not be displayed in quadrant view
+            // (it will be rendered separately with each layer)
+            LayerType::MechanicalOutline => (0.0, 0.0),
+        };
+        
+        VectorOffset {
+            x: base_offset * x_mult,
+            y: base_offset * y_mult,
+        }
+    }
+    
+    /// Set the quadrant offset magnitude in mm
+    pub fn set_quadrant_offset_magnitude(&mut self, magnitude_mm: f64) {
+        // Ensure magnitude is finite and positive, with reasonable bounds
+        if magnitude_mm.is_finite() && magnitude_mm >= 0.0 {
+            self.quadrant_offset_magnitude = magnitude_mm.clamp(0.1, 1000.0); // 0.1mm to 1m max
+        }
+    }
+    
+    /// Set the quadrant offset magnitude in mils
+    pub fn set_quadrant_offset_magnitude_mils(&mut self, magnitude_mils: f64) {
+        if magnitude_mils.is_finite() && magnitude_mils >= 0.0 {
+            let magnitude_mm = magnitude_mils * 0.0254;
+            self.set_quadrant_offset_magnitude(magnitude_mm);
         }
     }
 }

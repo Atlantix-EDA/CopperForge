@@ -10,8 +10,8 @@ use serde::{Serialize, Deserialize};
 
 use egui_lens::ReactiveEventLogger;
 use gerber_viewer::{
-    draw_arrow, draw_outline, draw_crosshair, GerberRenderer, 
-    draw_marker
+    draw_arrow, draw_crosshair, GerberRenderer, 
+    draw_marker, ViewState
 };
 use crate::drc_operations::types::Position;
 use crate::display::manager::ToPosition;
@@ -218,13 +218,36 @@ impl Tab {
         // Draw grid if enabled (before other elements so it appears underneath)
         crate::display::draw_grid(&painter, &viewport, &app.view_state, &app.grid_settings);
         
-        draw_crosshair(&painter, app.ui_state.origin_screen_pos, Color32::BLUE);
-        draw_crosshair(&painter, app.ui_state.center_screen_pos, Color32::LIGHT_GRAY);
+        // Draw quadrant axes if quadrant view is enabled
+        if app.display_manager.quadrant_view_enabled {
+            draw_quadrant_axes(&painter, &viewport, &app.view_state, app.ui_state.center_screen_pos);
+        }
+        
+        // In quadrant view, show blue crosshair at viewport center instead of origin
+        if app.display_manager.quadrant_view_enabled {
+            draw_crosshair(&painter, app.ui_state.center_screen_pos, Color32::BLUE);
+        } else {
+            draw_crosshair(&painter, app.ui_state.origin_screen_pos, Color32::BLUE);
+            draw_crosshair(&painter, app.ui_state.center_screen_pos, Color32::LIGHT_GRAY);
+        }
+
+        // Get mechanical outline layer for quadrant view
+        let mechanical_outline_layer = if app.display_manager.quadrant_view_enabled {
+            app.layer_manager.layers.get(&crate::layer_operations::LayerType::MechanicalOutline)
+                .and_then(|info| if info.visible { info.gerber_layer.as_ref() } else { None })
+        } else {
+            None
+        };
 
         // Render all visible layers based on showing_top
         for layer_type in crate::layer_operations::LayerType::all() {
             if let Some(layer_info) = app.layer_manager.layers.get(&layer_type) {
                 if layer_info.visible {
+                    // Skip mechanical outline in quadrant view (it will be rendered with each layer)
+                    if app.display_manager.quadrant_view_enabled && layer_type == crate::layer_operations::LayerType::MechanicalOutline {
+                        continue;
+                    }
+                    
                     // Filter based on showing_top
                     let should_render = layer_type.should_render(app.display_manager.showing_top);
                     
@@ -233,6 +256,23 @@ impl Tab {
                         let gerber_to_render = layer_info.gerber_layer.as_ref()
                             .unwrap_or(&app.gerber_layer);
                         
+                        // Get quadrant offset for this layer type
+                        let quadrant_offset = app.display_manager.get_quadrant_offset(&layer_type);
+                        
+                        // The key is to offset from center_offset (which positions the viewport center)
+                        // rather than from design_offset
+                        let combined_offset = if app.display_manager.quadrant_view_enabled {
+                            // When quadrant view is enabled, position relative to center_offset
+                            crate::display::VectorOffset {
+                                x: app.display_manager.center_offset.x + quadrant_offset.x,
+                                y: app.display_manager.center_offset.y + quadrant_offset.y,
+                            }
+                        } else {
+                            // Normal mode: use design offset
+                            app.display_manager.design_offset.clone()
+                        };
+                        
+                        // Render the main layer
                         GerberRenderer::default().paint_layer(
                             &painter,
                             app.view_state,
@@ -243,8 +283,26 @@ impl Tab {
                             app.rotation_degrees.to_radians(),
                             app.display_manager.mirroring.clone().into(),
                             app.display_manager.center_offset.clone().into(),
-                            app.display_manager.design_offset.clone().into(),
+                            combined_offset.clone().into(),
                         );
+                        
+                        // In quadrant view, also render mechanical outline with this layer
+                        if app.display_manager.quadrant_view_enabled {
+                            if let Some(mechanical_layer) = mechanical_outline_layer {
+                                GerberRenderer::default().paint_layer(
+                                    &painter,
+                                    app.view_state,
+                                    mechanical_layer,
+                                    crate::layer_operations::LayerType::MechanicalOutline.color(),
+                                    false,
+                                    false,
+                                    app.rotation_degrees.to_radians(),
+                                    app.display_manager.mirroring.clone().into(),
+                                    app.display_manager.center_offset.clone().into(),
+                                    combined_offset.into(),
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -570,4 +628,82 @@ fn draw_violation_marker(painter: &Painter, center: Pos2, size: f32, color: Colo
         Pos2::new(center.x - half_size, center.y + half_size),
         Pos2::new(center.x + half_size, center.y - half_size)
     ], stroke);
+}
+
+/// Draw quadrant axes when quadrant view is enabled
+fn draw_quadrant_axes(painter: &Painter, viewport: &Rect, _view_state: &ViewState, center_screen_pos: Pos2) {
+    let stroke = Stroke::new(2.0, Color32::from_rgba_unmultiplied(100, 100, 100, 150));
+    
+    // Use the viewport center (white crosshair) as the origin for quadrant axes
+    let origin_screen = center_screen_pos;
+    
+    // Draw vertical axis
+    if origin_screen.x >= viewport.min.x && origin_screen.x <= viewport.max.x {
+        painter.line_segment(
+            [
+                Pos2::new(origin_screen.x, viewport.min.y),
+                Pos2::new(origin_screen.x, viewport.max.y)
+            ],
+            stroke
+        );
+    }
+    
+    // Draw horizontal axis
+    if origin_screen.y >= viewport.min.y && origin_screen.y <= viewport.max.y {
+        painter.line_segment(
+            [
+                Pos2::new(viewport.min.x, origin_screen.y),
+                Pos2::new(viewport.max.x, origin_screen.y)
+            ],
+            stroke
+        );
+    }
+    
+    // Add quadrant labels
+    let label_offset = 20.0;
+    let font_id = egui::FontId::default();
+    let label_color = Color32::from_rgba_unmultiplied(150, 150, 150, 200);
+    
+    // Only draw labels if axes are visible
+    if origin_screen.x > viewport.min.x + label_offset * 2.0 && 
+       origin_screen.x < viewport.max.x - label_offset * 2.0 &&
+       origin_screen.y > viewport.min.y + label_offset * 2.0 &&
+       origin_screen.y < viewport.max.y - label_offset * 2.0 {
+        
+        // Quadrant 1 (top-right): Copper
+        painter.text(
+            origin_screen + Vec2::new(label_offset, -label_offset),
+            egui::Align2::LEFT_BOTTOM,
+            "Copper",
+            font_id.clone(),
+            label_color,
+        );
+        
+        // Quadrant 2 (top-left): Silkscreen
+        painter.text(
+            origin_screen + Vec2::new(-label_offset, -label_offset),
+            egui::Align2::RIGHT_BOTTOM,
+            "Silkscreen",
+            font_id.clone(),
+            label_color,
+        );
+        
+        // Quadrant 3 (bottom-left): Soldermask
+        painter.text(
+            origin_screen + Vec2::new(-label_offset, label_offset),
+            egui::Align2::RIGHT_TOP,
+            "Soldermask",
+            font_id.clone(),
+            label_color,
+        );
+        
+        // Quadrant 4 (bottom-right): Paste
+        painter.text(
+            origin_screen + Vec2::new(label_offset, label_offset),
+            egui::Align2::LEFT_TOP,
+            "Paste",
+            font_id,
+            label_color,
+        );
+    }
 }

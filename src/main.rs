@@ -446,6 +446,71 @@ impl eframe::App for DemoLensApp {
                     });
                 });
                 
+                // Hotkeys menu
+                ui.menu_button("📋 Hotkeys", |ui| {
+                    ui.heading("Keyboard Shortcuts");
+                    ui.separator();
+                    
+                    ui.horizontal(|ui| {
+                        ui.label("F");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label("Flip Top/Bottom view");
+                        });
+                    });
+                    
+                    ui.horizontal(|ui| {
+                        ui.label("R");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label("Rotate 90° clockwise");
+                        });
+                    });
+                    
+                    ui.horizontal(|ui| {
+                        ui.label("U");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label("Toggle units (mm/mils)");
+                        });
+                    });
+                    
+                    ui.separator();
+                    ui.heading("Mouse Controls");
+                    
+                    ui.horizontal(|ui| {
+                        ui.label("Double-click");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label("Center view");
+                        });
+                    });
+                    
+                    ui.horizontal(|ui| {
+                        ui.label("Right-click + drag");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label("Zoom to selection");
+                        });
+                    });
+                    
+                    ui.horizontal(|ui| {
+                        ui.label("Scroll wheel");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label("Zoom in/out");
+                        });
+                    });
+                    
+                    ui.horizontal(|ui| {
+                        ui.label("Drag");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label("Pan view");
+                        });
+                    });
+                    
+                    ui.horizontal(|ui| {
+                        ui.label("Escape");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label("Cancel zoom selection");
+                        });
+                    });
+                });
+                
                 // Clock in the upper right
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     self.show_clock_display(ui);

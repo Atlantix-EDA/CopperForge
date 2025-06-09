@@ -69,6 +69,43 @@ pub fn show_orientation_panel<'a>(
         }
     });
     
+    // Quadrant View controls
+    ui.separator();
+    ui.horizontal(|ui| {
+        if ui.checkbox(&mut app.display_manager.quadrant_view_enabled, "Quadrant View").clicked() {
+            logger.log_info(&format!("Quadrant view {}", 
+                if app.display_manager.quadrant_view_enabled { "enabled" } else { "disabled" }));
+            app.needs_initial_view = true;
+        }
+        
+        if app.display_manager.quadrant_view_enabled {
+            ui.separator();
+            ui.label("Offset:");
+            
+            // Always store in mm internally, but display in user's preferred units
+            let (mut offset_value, units_suffix, conversion_factor) = if app.global_units_mils {
+                (app.display_manager.quadrant_offset_magnitude / 0.0254, "mils", 0.0254)
+            } else {
+                (app.display_manager.quadrant_offset_magnitude, "mm", 1.0)
+            };
+            
+            let speed = if app.global_units_mils { 10.0 } else { 1.0 };
+            let max_range = if app.global_units_mils { 20000.0 } else { 500.0 }; // Larger range for mils
+            
+            if ui.add(egui::DragValue::new(&mut offset_value)
+                .suffix(units_suffix)
+                .speed(speed)
+                .range(0.0..=max_range))
+                .changed() 
+            {
+                // Always convert to mm for internal storage
+                let offset_mm = offset_value * conversion_factor;
+                app.display_manager.set_quadrant_offset_magnitude(offset_mm);
+                logger.log_info(&format!("Quadrant offset: {:.1} {} ({:.2} mm)", offset_value, units_suffix, offset_mm));
+            }
+        }
+    });
+    
     // Advanced offset controls (initially hidden)
     egui::CollapsingHeader::new("Advanced Offsets")
         .default_open(false)
