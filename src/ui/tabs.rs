@@ -280,10 +280,11 @@ impl Tab {
                             layer_type.color(),
                             false, // Don't use unique colors for multi-layer view
                             false, // Don't show polygon numbering
-                            app.rotation_degrees.to_radians(),
-                            app.display_manager.mirroring.clone().into(),
-                            app.display_manager.center_offset.clone().into(),
-                            combined_offset.clone().into(),
+                            false, // New boolean flag
+                            app.rotation_degrees.to_radians(), // f32 rotation
+                            gerber_viewer::Mirroring::from(app.display_manager.mirroring.clone()),
+                            nalgebra::Vector2::from(app.display_manager.center_offset.clone()),
+                            nalgebra::Vector2::from(combined_offset.clone()),
                         );
                         
                         // In quadrant view, also render mechanical outline with this layer
@@ -296,10 +297,11 @@ impl Tab {
                                     crate::layer_operations::LayerType::MechanicalOutline.color(),
                                     false,
                                     false,
-                                    app.rotation_degrees.to_radians(),
-                                    app.display_manager.mirroring.clone().into(),
-                                    app.display_manager.center_offset.clone().into(),
-                                    combined_offset.into(),
+                                    false, // New boolean flag
+                                    app.rotation_degrees.to_radians(), // f32 rotation
+                                    gerber_viewer::Mirroring::from(app.display_manager.mirroring.clone()),
+                                    nalgebra::Vector2::from(app.display_manager.center_offset.clone()),
+                                    nalgebra::Vector2::from(combined_offset),
                                 );
                             }
                         }
