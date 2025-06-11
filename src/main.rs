@@ -77,6 +77,9 @@ pub struct DemoLensApp {
     // User preferences
     pub user_timezone: Option<String>,
     pub use_24_hour_clock: bool, // true = 24-hour, false = 12-hour
+    
+    // Modal states
+    pub show_about_modal: bool,
 }
 
 impl Drop for DemoLensApp {
@@ -150,6 +153,7 @@ impl DemoLensApp {
             zoom_window_dragging: false,
             user_timezone: None,
             use_24_hour_clock: true, // Default to 24-hour format
+            show_about_modal: false,
         };
         
         if let Ok(project_manager) = ProjectManager::load_from_file(&app.config_path) {
@@ -248,13 +252,15 @@ impl DemoLensApp {
     
     
     /// Show clock display in the upper right corner
-    fn show_clock_display(&self, ui: &mut egui::Ui) {
+    fn show_clock_display(&mut self, ui: &mut egui::Ui) {
         use chrono::{Local, Utc};
         use chrono_tz::Tz;
         
-        // Show version
-        ui.label(egui::RichText::new(format!("KiForge v{}", VERSION))
-            .color(egui::Color32::from_rgb(100, 150, 200)));
+        // Show version as clickable button
+        if ui.button(egui::RichText::new(format!("KiForge v{}", VERSION))
+            .color(egui::Color32::from_rgb(100, 150, 200))).clicked() {
+            self.show_about_modal = true;
+        }
         
         ui.separator();
         
@@ -533,6 +539,26 @@ impl eframe::App for DemoLensApp {
             
         self.dock_state = dock_state;
         
+        // Show About modal if requested
+        if self.show_about_modal {
+            egui::Window::new("About KiForge")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui::AboutPanel::render(ui);
+                    
+                    ui.add_space(20.0);
+                    ui.horizontal(|ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Close").clicked() {
+                                self.show_about_modal = false;
+                            }
+                        });
+                    });
+                });
+        }
+        
         // Save dock state to disk periodically
         if ctx.input(|i| i.time) % 30.0 < 0.1 {
             self.save_dock_state();
@@ -552,6 +578,9 @@ fn main() -> eframe::Result<()> {
             viewport: ViewportBuilder::default().with_inner_size([1280.0, 768.0]),
             ..Default::default()
         },
-        Box::new(|_cc| Ok(Box::new(DemoLensApp::new()))),
-    )
+        Box::new(|cc|{
+            egui_extras::install_image_loaders(&cc.egui_ctx);
+            Ok(Box::new(DemoLensApp::new()))
+        }))
+    
 }
