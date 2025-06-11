@@ -6,9 +6,11 @@ use egui::ViewportBuilder;
 use egui_dock::{DockArea, DockState, NodeIndex, Style, SurfaceIndex};
 
 mod display;
+mod viewer_3d;
 use display::DisplayManager;
 use layer_operations::LayerManager;
 use drc_operations::DrcManager;
+use viewer_3d::{Pcb3DViewer, ViewMode};
 
 /// egui_lens imports
 use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
@@ -77,6 +79,10 @@ pub struct DemoLensApp {
     // User preferences
     pub user_timezone: Option<String>,
     pub use_24_hour_clock: bool, // true = 24-hour, false = 12-hour
+    
+    // 3D viewer
+    pub viewer_3d: Option<Pcb3DViewer>,
+    pub view_mode: ViewMode,
 }
 
 impl Drop for DemoLensApp {
@@ -150,6 +156,8 @@ impl DemoLensApp {
             zoom_window_dragging: false,
             user_timezone: None,
             use_24_hour_clock: true, // Default to 24-hour format
+            viewer_3d: None,
+            view_mode: ViewMode::Gerber2D,
         };
         
         if let Ok(project_manager) = ProjectManager::load_from_file(&app.config_path) {

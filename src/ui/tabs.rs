@@ -98,7 +98,7 @@ impl Tab {
                 ui::show_drc_panel(ui, params.app, &logger_state_clone, &log_colors_clone);
             }
             TabKind::GerberView => {
-                self.render_gerber_view(ui, params.app);
+                self.render_view_with_mode_toggle(ui, params.app);
             }
             TabKind::EventLog => {
                 let logger = ReactiveEventLogger::with_colors(&params.app.logger_state, &params.app.log_colors);
@@ -113,6 +113,25 @@ impl Tab {
                 let logger_state_clone = params.app.logger_state.clone();
                 let log_colors_clone = params.app.log_colors.clone();
                 ui::show_settings_panel(ui, params.app, &logger_state_clone, &log_colors_clone);
+            }
+        }
+    }
+
+    fn render_view_with_mode_toggle(&self, ui: &mut egui::Ui, app: &mut DemoLensApp) {
+        // View mode toggle at the top
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut app.view_mode, crate::viewer_3d::ViewMode::Gerber2D, "📋 2D Gerber");
+            ui.selectable_value(&mut app.view_mode, crate::viewer_3d::ViewMode::Pcb3D, "🔥 3D PCB");
+        });
+        
+        ui.separator();
+        
+        match app.view_mode {
+            crate::viewer_3d::ViewMode::Gerber2D => {
+                self.render_gerber_view(ui, app);
+            }
+            crate::viewer_3d::ViewMode::Pcb3D => {
+                self.render_3d_view(ui, app);
             }
         }
     }
@@ -591,6 +610,40 @@ impl Tab {
             egui::FontId::default(),
             Color32::from_rgb(150, 150, 150),
         );
+    }
+
+    fn render_3d_view(&self, ui: &mut egui::Ui, app: &mut DemoLensApp) {
+        ui.ctx().request_repaint(); // Ensure continuous updates for 3D
+
+        // Check if we need to initialize the 3D viewer
+        if app.viewer_3d.is_none() {
+            match crate::viewer_3d::Pcb3DViewer::new() {
+                Ok(mut viewer) => {
+                    viewer.build_from_layers(&app.layer_manager);
+                    app.viewer_3d = Some(viewer);
+                }
+                Err(e) => {
+                    ui.centered_and_justified(|ui| {
+                        ui.label(format!("Failed to initialize 3D viewer: {}", e));
+                    });
+                    return;
+                }
+            }
+        }
+
+        // Render the 3D view
+        if let Some(ref mut viewer_3d) = app.viewer_3d {
+            if !viewer_3d.is_initialized() {
+                viewer_3d.build_from_layers(&app.layer_manager);
+            }
+
+            // Render the placeholder 3D view
+            if let Err(e) = viewer_3d.render(ui) {
+                ui.centered_and_justified(|ui| {
+                    ui.label(format!("3D rendering error: {}", e));
+                });
+            }
+        }
     }
 }
 
