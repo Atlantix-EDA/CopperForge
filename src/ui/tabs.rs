@@ -116,6 +116,40 @@ impl Tab {
                             } else if let Some(ref widget) = params.app.wgpu_widget {
                                 if widget.is_initialized() {
                                     ui.label("✅ WGPU Ready");
+                                    
+                                    // 3D PCB Generation Controls
+                                    ui.horizontal(|ui| {
+                                        if ui.button("🔧 Generate 3D PCB").clicked() {
+                                            self.generate_3d_pcb(params.app);
+                                        }
+                                        
+                                        if params.app.pcb3d_generated {
+                                            ui.label("✅ 3D PCB Generated");
+                                            
+                                            if ui.button("🔄 Regenerate").clicked() {
+                                                params.app.pcb3d_system.clear_cache();
+                                                params.app.pcb3d_generated = false;
+                                                self.generate_3d_pcb(params.app);
+                                            }
+                                        }
+                                    });
+                                    
+                                    // Show 3D PCB statistics if generated
+                                    if params.app.pcb3d_generated {
+                                        ui.collapsing("📊 3D PCB Statistics", |ui| {
+                                            let stats = params.app.pcb3d_system.get_statistics();
+                                            ui.label(format!("Layers processed: {}", stats.layers_processed));
+                                            ui.label(format!("Total vertices: {}", stats.total_vertices));
+                                            ui.label(format!("Total triangles: {}", stats.total_triangles));
+                                            ui.label(format!("Cached primitives: {}", stats.cached_primitives));
+                                            
+                                            if let Some((min, max)) = stats.bounds {
+                                                ui.label(format!("Bounds: ({:.2}, {:.2}, {:.2}) to ({:.2}, {:.2}, {:.2})", 
+                                                        min.x, min.y, min.z, max.x, max.y, max.z));
+                                            }
+                                        });
+                                    }
+                                    
                                 } else if let Some(error) = widget.initialization_error() {
                                     ui.colored_label(egui::Color32::RED, format!("❌ WGPU Error: {}", error));
                                     if ui.button("Retry").clicked() {
@@ -667,6 +701,39 @@ impl Tab {
             egui::FontId::default(),
             Color32::from_rgb(150, 150, 150),
         );
+    }
+
+    /// Generate 3D PCB from current layer data
+    fn generate_3d_pcb(&self, app: &mut DemoLensApp) {
+        log::info!("Starting 3D PCB generation...");
+        
+        match app.pcb3d_system.generate_3d_pcb(&app.layer_manager) {
+            Ok(result) => {
+                app.pcb3d_generated = true;
+                log::info!("3D PCB generation successful: {} layers, {} vertices, {} triangles", 
+                          result.layers_processed, result.total_vertices, result.total_triangles);
+                
+                if !result.warnings.is_empty() {
+                    for warning in &result.warnings {
+                        log::warn!("3D PCB generation warning: {}", warning);
+                    }
+                }
+                
+                // Log detailed statistics
+                let stats = app.pcb3d_system.get_statistics();
+                log::info!("3D PCB Statistics - Layers: {}, Vertices: {}, Triangles: {}, Cached: {}", 
+                          stats.layers_processed, stats.total_vertices, stats.total_triangles, stats.cached_primitives);
+                
+                if let Some((min, max)) = stats.bounds {
+                    log::info!("3D PCB Bounds: ({:.2}, {:.2}, {:.2}) to ({:.2}, {:.2}, {:.2})", 
+                              min.x, min.y, min.z, max.x, max.y, max.z);
+                }
+            }
+            Err(e) => {
+                app.pcb3d_generated = false;
+                log::error!("3D PCB generation failed: {}", e);
+            }
+        }
     }
 }
 

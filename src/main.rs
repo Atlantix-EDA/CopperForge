@@ -32,7 +32,7 @@ use ui::{Tab, TabKind, TabViewer, initialize_and_show_banner, show_system_info};
 use layer_operations::{LayerType, LayerInfo};
 use project::{load_default_gerbers, load_demo_gerber, ProjectManager, ProjectState};
 use display::GridSettings;
-use renderer::WgpuWidget;
+use renderer::{WgpuWidget, Pcb3DSystem};
 
 /// The main application struct
 pub struct DemoLensApp {
@@ -86,6 +86,10 @@ pub struct DemoLensApp {
     // WGPU rendering
     pub wgpu_widget: Option<WgpuWidget>,
     pub use_wgpu_rendering: bool,
+    
+    // 3D PCB generation and rendering
+    pub pcb3d_system: Pcb3DSystem,
+    pub pcb3d_generated: bool,
 }
 
 impl Drop for DemoLensApp {
@@ -162,6 +166,8 @@ impl DemoLensApp {
             show_about_modal: false,
             wgpu_widget: None,
             use_wgpu_rendering: false, // Start with traditional rendering, allow user to toggle
+            pcb3d_system: Pcb3DSystem::new(),
+            pcb3d_generated: false,
         };
         
         if let Ok(project_manager) = ProjectManager::load_from_file(&app.config_path) {
