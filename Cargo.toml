@@ -6,15 +6,21 @@ authors = ["James Bonanno <atlantix-eda@proton.me>"]
 
 [dependencies]
 egui = "0.31.1"
-eframe = "0.31.1"
+eframe = { version = "0.31.1", features = ["wgpu"] }
 egui-file-dialog = "0.9.0"
 
 # Image and graphics handling
 egui_extras = { version = "0.31.1", features = ["image"] } # For image loading and other utilities
 image = "0.24" # For image loading
 
+# WGPU rendering
+wgpu = "22.1"
+bytemuck = { version = "1.14", features = ["derive"] }
+glam = "0.27"
+pollster = "0.3"
+
 # Gerber and PCB handling
-gerber_viewer = { git = "https://github.com/MakerPnP/gerber-viewer" }
+gerber_viewer = { path = "../gerber_viewer" }
 gerber_parser = { git = "https://github.com/MakerPnP/gerber-parser" }
 gerber_types = { git = "https://github.com/MakerPnP/gerber-types" }
 nalgebra = "0.33"

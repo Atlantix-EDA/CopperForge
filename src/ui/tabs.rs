@@ -98,7 +98,47 @@ impl Tab {
                 ui::show_drc_panel(ui, params.app, &logger_state_clone, &log_colors_clone);
             }
             TabKind::GerberView => {
-                self.render_gerber_view(ui, params.app);
+                ui.vertical(|ui| {
+                    // Rendering mode toggle
+                    ui.horizontal(|ui| {
+                        ui.label("Rendering mode:");
+                        
+                        ui.radio_value(&mut params.app.use_wgpu_rendering, false, "Traditional (CPU)");
+                        ui.radio_value(&mut params.app.use_wgpu_rendering, true, "WGPU (GPU)");
+                        
+                        if params.app.use_wgpu_rendering {
+                            if params.app.wgpu_widget.is_none() {
+                                if ui.button("Initialize WGPU").clicked() {
+                                    let mut widget = crate::renderer::WgpuWidget::new(egui::Vec2::new(800.0, 600.0));
+                                    widget.try_initialize();
+                                    params.app.wgpu_widget = Some(widget);
+                                }
+                            } else if let Some(ref widget) = params.app.wgpu_widget {
+                                if widget.is_initialized() {
+                                    ui.label("✅ WGPU Ready");
+                                } else if let Some(error) = widget.initialization_error() {
+                                    ui.colored_label(egui::Color32::RED, format!("❌ WGPU Error: {}", error));
+                                    if ui.button("Retry").clicked() {
+                                        let mut new_widget = crate::renderer::WgpuWidget::new(egui::Vec2::new(800.0, 600.0));
+                                        new_widget.try_initialize();
+                                        params.app.wgpu_widget = Some(new_widget);
+                                    }
+                                } else {
+                                    ui.label("⏳ Initializing...");
+                                }
+                            }
+                        }
+                    });
+                    
+                    ui.separator();
+                    
+                    // Render based on selected mode
+                    if params.app.use_wgpu_rendering {
+                        self.render_wgpu_view(ui, params.app);
+                    } else {
+                        self.render_gerber_view(ui, params.app);
+                    }
+                });
             }
             TabKind::EventLog => {
                 let logger = ReactiveEventLogger::with_colors(&params.app.logger_state, &params.app.log_colors);
@@ -114,6 +154,26 @@ impl Tab {
                 let log_colors_clone = params.app.log_colors.clone();
                 ui::show_settings_panel(ui, params.app, &logger_state_clone, &log_colors_clone);
             }
+        }
+    }
+
+    fn render_wgpu_view(&self, ui: &mut egui::Ui, app: &mut DemoLensApp) {
+        if let Some(ref mut wgpu_widget) = app.wgpu_widget {
+            // Calculate the size for the WGPU widget based on available space
+            let available_size = ui.available_size();
+            let widget_size = egui::Vec2::new(
+                available_size.x.max(400.0),
+                available_size.y.max(300.0)
+            );
+            
+            // Update the widget size and show it
+            wgpu_widget.set_size(widget_size);
+            wgpu_widget.show(ui);
+        } else {
+            // Show initialization message
+            ui.centered_and_justified(|ui| {
+                ui.label("WGPU widget not initialized. Click 'Initialize WGPU' above.");
+            });
         }
     }
 

@@ -26,11 +26,13 @@ mod project;
 mod layer_operations;
 mod drc_operations;
 mod ui;
+mod renderer;
 use ui::{Tab, TabKind, TabViewer, initialize_and_show_banner, show_system_info};
 
 use layer_operations::{LayerType, LayerInfo};
 use project::{load_default_gerbers, load_demo_gerber, ProjectManager, ProjectState};
 use display::GridSettings;
+use renderer::WgpuWidget;
 
 /// The main application struct
 pub struct DemoLensApp {
@@ -80,6 +82,10 @@ pub struct DemoLensApp {
     
     // Modal states
     pub show_about_modal: bool,
+    
+    // WGPU rendering
+    pub wgpu_widget: Option<WgpuWidget>,
+    pub use_wgpu_rendering: bool,
 }
 
 impl Drop for DemoLensApp {
@@ -154,6 +160,8 @@ impl DemoLensApp {
             user_timezone: None,
             use_24_hour_clock: true, // Default to 24-hour format
             show_about_modal: false,
+            wgpu_widget: None,
+            use_wgpu_rendering: false, // Start with traditional rendering, allow user to toggle
         };
         
         if let Ok(project_manager) = ProjectManager::load_from_file(&app.config_path) {
