@@ -113,62 +113,125 @@ impl PcbViewer {
         self.controls.show_stats(ui, self.meshes.len(), total_vertices, total_triangles);
 
         // Show camera info
-        self.controls.show_camera_info(ui, &self.camera.eye, &self.camera.target);
+        self.controls.show_camera_info(ui, &self.camera);
 
         // Show help
         self.controls.show_help(ui);
     }
 
-    /// Handle user input for camera control
+    /// Handle user input for camera control using enhanced orbit controls
     fn handle_input(&mut self, response: &egui::Response) {
-        let mut delta_x = 0.0;
-        let mut delta_y = 0.0;
-        let mut zoom = 0.0;
+        // Sync controller with camera if this is the first frame
+        if self.last_mouse_pos.is_none() {
+            self.camera_controller.sync_with_camera(&self.camera);
+        }
 
-        // Handle mouse dragging
+        // Handle mouse dragging for orbit/pan
         if response.dragged() {
             let current_pos = response.hover_pos();
             if let (Some(current), Some(last)) = (current_pos, self.last_mouse_pos) {
-                delta_x = current.x - last.x;
-                delta_y = current.y - last.y;
+                let delta_x = current.x - last.x;
+                let delta_y = current.y - last.y;
+                
+                // Check if we're panning (shift key) or orbiting
+                let is_panning = response.ctx.input(|i| i.modifiers.shift);
+                let is_middle_click = response.ctx.input(|i| i.pointer.button_down(egui::PointerButton::Middle));
+                
+                if is_panning || is_middle_click {
+                    // Pan the camera
+                    self.camera_controller.pan(&mut self.camera, delta_x, delta_y);
+                } else {
+                    // Orbit the camera
+                    self.camera_controller.orbit(&mut self.camera, delta_x, delta_y);
+                }
             }
         }
 
         // Handle scroll wheel for zoom
         if response.hovered() {
             let scroll_delta = response.ctx.input(|i| i.smooth_scroll_delta.y);
-            zoom = scroll_delta * 0.01;
+            if scroll_delta != 0.0 {
+                self.camera_controller.zoom(&mut self.camera, scroll_delta * 0.01);
+            }
         }
 
-        // Update camera with input
-        if delta_x != 0.0 || delta_y != 0.0 || zoom != 0.0 {
-            let is_panning = response.ctx.input(|i| i.modifiers.shift);
-            self.camera_controller.handle_input(
-                &mut self.camera,
-                delta_x,
-                delta_y,
-                zoom,
-                is_panning,
-            );
-        }
+        // Update camera smoothing every frame
+        self.camera_controller.update(&mut self.camera);
 
         // Update last mouse position
         self.last_mouse_pos = response.hover_pos();
     }
 
-    /// Handle responses from the controls UI
+    /// Handle responses from the controls UI using enhanced camera controller
     fn handle_controls_response(&mut self, response: ViewerControlsResponse) {
+        use crate::viewer3d::{ViewPreset, CameraInput};
+        
         if response.reset_view {
-            self.camera = Camera3D::new();
+            self.camera_controller.set_preset(&mut self.camera, ViewPreset::Reset);
         }
         if response.top_view {
-            self.camera.set_top_view();
+            self.camera_controller.set_preset(&mut self.camera, ViewPreset::Top);
         }
-        if response.side_view {
-            self.camera.set_side_view();
+        if response.front_view {
+            self.camera_controller.set_preset(&mut self.camera, ViewPreset::Front);
+        }
+        if response.right_view {
+            self.camera_controller.set_preset(&mut self.camera, ViewPreset::Right);
         }
         if response.isometric_view {
-            self.camera.set_isometric_view();
+            self.camera_controller.set_preset(&mut self.camera, ViewPreset::Isometric);
+        }
+        
+        // Handle framing operations
+        if response.frame_all || response.fit_view {
+            // Calculate bounding box of all meshes
+            let bounds = self.calculate_mesh_bounds();
+            if let Some((min, max)) = bounds {
+                self.camera_controller.handle_input(
+                    &mut self.camera, 
+                    CameraInput::FrameBounds { min, max }
+                );
+            }
+        }
+        
+        // Sync controller after any preset changes
+        self.camera_controller.sync_with_camera(&self.camera);
+    }
+
+    /// Calculate the bounding box of all loaded meshes
+    fn calculate_mesh_bounds(&self) -> Option<(Point3<f32>, Point3<f32>)> {
+        if self.meshes.is_empty() {
+            return None;
+        }
+
+        let mut min_x = f32::INFINITY;
+        let mut min_y = f32::INFINITY;
+        let mut min_z = f32::INFINITY;
+        let mut max_x = f32::NEG_INFINITY;
+        let mut max_y = f32::NEG_INFINITY;
+        let mut max_z = f32::NEG_INFINITY;
+
+        for mesh in &self.meshes {
+            for vertex in &mesh.vertices {
+                min_x = min_x.min(vertex.x);
+                min_y = min_y.min(vertex.y);
+                min_z = min_z.min(vertex.z);
+                max_x = max_x.max(vertex.x);
+                max_y = max_y.max(vertex.y);
+                max_z = max_z.max(vertex.z);
+            }
+        }
+
+        // Ensure we have valid bounds
+        if min_x.is_finite() && max_x.is_finite() && 
+           min_y.is_finite() && max_y.is_finite() && 
+           min_z.is_finite() && max_z.is_finite() {
+            Some((
+                Point3::new(min_x, min_y, min_z),
+                Point3::new(max_x, max_y, max_z),
+            ))
+        } else {
+            None
         }
     }
 

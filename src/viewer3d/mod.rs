@@ -10,6 +10,6 @@ pub mod controls;
 
 // Re-export main types for easy access
 pub use pcb_viewer::PcbViewer;
-pub use camera::{Camera3D, CameraController};
+pub use camera::{Camera3D, CameraController, CameraInput, ViewPreset};
 pub use renderer::Renderer3D;
 pub use controls::ViewerControls;

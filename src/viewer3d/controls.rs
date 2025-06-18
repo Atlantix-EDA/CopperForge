@@ -32,11 +32,23 @@ impl ViewerControls {
             if ui.button("Top View").clicked() {
                 response.top_view = true;
             }
-            if ui.button("Side View").clicked() {
-                response.side_view = true;
+            if ui.button("Front View").clicked() {
+                response.front_view = true;
+            }
+            if ui.button("Right View").clicked() {
+                response.right_view = true;
             }
             if ui.button("Iso View").clicked() {
                 response.isometric_view = true;
+            }
+        });
+
+        ui.horizontal(|ui| {
+            if ui.button("Frame All").clicked() {
+                response.frame_all = true;
+            }
+            if ui.button("Fit View").clicked() {
+                response.fit_view = true;
             }
         });
 
@@ -68,23 +80,31 @@ impl ViewerControls {
         });
     }
 
-    /// Show camera information
-    pub fn show_camera_info(&self, ui: &mut egui::Ui, eye: &nalgebra::Point3<f32>, target: &nalgebra::Point3<f32>) {
+    /// Show camera information with enhanced orbit details
+    pub fn show_camera_info(&self, ui: &mut egui::Ui, camera: &crate::viewer3d::Camera3D) {
         ui.group(|ui| {
-            ui.label("Camera:");
-            ui.label(format!("Eye: ({:.1}, {:.1}, {:.1})", eye.x, eye.y, eye.z));
-            ui.label(format!("Target: ({:.1}, {:.1}, {:.1})", target.x, target.y, target.z));
+            ui.label("Camera Info:");
+            ui.horizontal(|ui| {
+                ui.label(format!("Eye: ({:.1}, {:.1}, {:.1})", camera.eye.x, camera.eye.y, camera.eye.z));
+                ui.label(format!("Target: ({:.1}, {:.1}, {:.1})", camera.target.x, camera.target.y, camera.target.z));
+            });
+            ui.horizontal(|ui| {
+                ui.label(format!("Distance: {:.1}", camera.distance));
+                ui.label(format!("Azimuth: {:.1}°", camera.azimuth.to_degrees()));
+                ui.label(format!("Elevation: {:.1}°", camera.elevation.to_degrees()));
+            });
         });
     }
 
     /// Show help/instructions
     pub fn show_help(&self, ui: &mut egui::Ui) {
         ui.group(|ui| {
-            ui.label("Controls:");
-            ui.label("• Drag: Rotate view");
-            ui.label("• Shift+Drag: Pan view");
+            ui.label("3D Camera Controls:");
+            ui.label("• Drag: Orbit camera around target");
+            ui.label("• Shift+Drag / Middle+Drag: Pan view");
             ui.label("• Scroll: Zoom in/out");
-            ui.label("• Right-click: Context menu");
+            ui.label("• View buttons: Quick camera presets");
+            ui.label("• Frame All: Fit all geometry in view");
         });
     }
 }
@@ -94,13 +114,16 @@ impl ViewerControls {
 pub struct ViewerControlsResponse {
     pub reset_view: bool,
     pub top_view: bool,
-    pub side_view: bool,
+    pub front_view: bool,
+    pub right_view: bool,
     pub isometric_view: bool,
+    pub frame_all: bool,
+    pub fit_view: bool,
 }
 
 impl ViewerControlsResponse {
     /// Check if any view change was requested
     pub fn has_view_change(&self) -> bool {
-        self.reset_view || self.top_view || self.side_view || self.isometric_view
+        self.reset_view || self.top_view || self.front_view || self.right_view || self.isometric_view || self.frame_all || self.fit_view
     }
 }
