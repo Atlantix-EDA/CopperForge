@@ -1,4 +1,5 @@
-// Vertex shader
+// PCB 3D Shader
+// Simple vertex/fragment shader for rendering PCB meshes with basic lighting
 
 struct CameraUniforms {
     view_proj: mat4x4<f32>,
@@ -11,12 +12,6 @@ struct MaterialUniforms {
     roughness: f32,
 };
 
-@group(0) @binding(0)
-var<uniform> camera: CameraUniforms;
-
-@group(1) @binding(0)
-var<uniform> material: MaterialUniforms;
-
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
@@ -26,51 +21,43 @@ struct VertexInput {
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) world_position: vec3<f32>,
-    @location(1) normal: vec3<f32>,
+    @location(1) world_normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
 };
 
+@group(0) @binding(0)
+var<uniform> camera: CameraUniforms;
+
+@group(1) @binding(0)
+var<uniform> material: MaterialUniforms;
+
 @vertex
-fn vs_main(model: VertexInput) -> VertexOutput {
+fn vs_main(vertex: VertexInput) -> VertexOutput {
     var out: VertexOutput;
     
-    // Transform position to world space (assuming model matrix is identity for now)
-    out.world_position = model.position;
-    
-    // Transform to clip space
-    out.clip_position = camera.view_proj * vec4<f32>(model.position, 1.0);
-    
-    // Pass through normal and UV
-    out.normal = normalize(model.normal);
-    out.uv = model.uv;
+    out.world_position = vertex.position;
+    out.world_normal = vertex.normal;
+    out.uv = vertex.uv;
+    out.clip_position = camera.view_proj * vec4<f32>(vertex.position, 1.0);
     
     return out;
 }
-
-// Fragment shader
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Simple lighting calculation
     let light_dir = normalize(vec3<f32>(1.0, 1.0, 1.0));
-    let view_dir = normalize(camera.view_pos - in.world_position);
-    let half_dir = normalize(light_dir + view_dir);
+    let normal = normalize(in.world_normal);
     
-    // Lambertian diffuse
-    let n_dot_l = max(dot(in.normal, light_dir), 0.0);
-    let diffuse = material.color.rgb * n_dot_l;
-    
-    // Simple Blinn-Phong specular
-    let n_dot_h = max(dot(in.normal, half_dir), 0.0);
-    let shininess = (1.0 - material.roughness) * 128.0 + 1.0;
-    let specular_strength = material.metallic;
-    let specular = vec3<f32>(specular_strength) * pow(n_dot_h, shininess);
+    // Diffuse lighting
+    let diffuse = max(dot(normal, light_dir), 0.0);
     
     // Ambient lighting
-    let ambient = material.color.rgb * 0.1;
+    let ambient = 0.3;
     
-    // Combine lighting
-    let color = ambient + diffuse + specular;
+    // Combine lighting with material color
+    let lighting = ambient + diffuse * 0.7;
+    let final_color = material.color.rgb * lighting;
     
-    return vec4<f32>(color, material.color.a);
+    return vec4<f32>(final_color, material.color.a);
 }

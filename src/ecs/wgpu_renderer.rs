@@ -198,11 +198,11 @@ impl PcbCamera {
 
 /// Main PCB renderer using wgpu
 pub struct PcbWgpuRenderer {
-    render_pipeline: wgpu::RenderPipeline,
+    pub render_pipeline: wgpu::RenderPipeline,
     camera_buffer: wgpu::Buffer,
-    camera_bind_group: wgpu::BindGroup,
-    materials: PcbMaterials,
-    meshes: Vec<GpuMesh>,
+    pub camera_bind_group: wgpu::BindGroup,
+    pub materials: PcbMaterials,
+    pub meshes: Vec<GpuMesh>,
     pub camera: PcbCamera,
 }
 

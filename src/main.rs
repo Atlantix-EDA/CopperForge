@@ -27,6 +27,7 @@ mod layer_operations;
 mod drc_operations;
 mod ui;
 mod ecs;
+mod viewer3d;
 use ui::{Tab, TabKind, TabViewer, initialize_and_show_banner, show_system_info};
 
 use layer_operations::{LayerType, LayerInfo};
@@ -83,7 +84,7 @@ pub struct DemoLensApp {
     pub show_about_modal: bool,
     
     // 3D viewer
-    pub pcb_viewer: Option<ecs::PcbViewer>,
+    pub pcb_viewer: Option<viewer3d::PcbViewer>,
 }
 
 impl Drop for DemoLensApp {

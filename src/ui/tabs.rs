@@ -609,7 +609,7 @@ impl Tab {
     fn render_gerber_3d_view(&self, ui: &mut egui::Ui, app: &mut DemoLensApp) {
         // Initialize 3D viewer if needed
         if app.pcb_viewer.is_none() {
-            app.pcb_viewer = Some(crate::ecs::PcbViewer::new());
+            app.pcb_viewer = Some(crate::viewer3d::PcbViewer::new());
         }
 
         // Get mutable reference to the viewer
