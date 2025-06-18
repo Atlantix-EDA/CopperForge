@@ -16,7 +16,7 @@ use egui_mobius_reactive::*;
 use log;
 use gerber_viewer::{
    BoundingBox, GerberLayer, 
-   ViewState, UiState, Transform2D
+   ViewState, UiState, GerberTransform
 };
 // Import platform modules
 mod platform;
@@ -229,11 +229,12 @@ impl DemoLensApp {
         // Create the transform that will be used during rendering
         let origin: nalgebra::Vector2<f64> = self.display_manager.center_offset.clone().into();
         let offset: nalgebra::Vector2<f64> = self.display_manager.design_offset.clone().into();
-        let transform = Transform2D {
+        let transform = GerberTransform {
             rotation_radians: self.rotation_degrees.to_radians(),
             mirroring: self.display_manager.mirroring.clone().into(),
             origin: origin - offset,
             offset,
+            scale: 1.0,
         };
 
         // Compute transformed bounding box

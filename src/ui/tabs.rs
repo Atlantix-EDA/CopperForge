@@ -333,35 +333,49 @@ impl Tab {
                         };
                         
                         // Render the main layer
+                        let render_config = gerber_viewer::RenderConfiguration {
+                            use_unique_shape_colors: false,
+                            use_shape_numbering: false,
+                            use_vertex_numbering: false,
+                        };
+                        let transform = gerber_viewer::GerberTransform {
+                            rotation_radians: app.rotation_degrees.to_radians(),
+                            mirroring: gerber_viewer::Mirroring::from(app.display_manager.mirroring.clone()),
+                            origin: nalgebra::Vector2::from(app.display_manager.center_offset.clone()),
+                            offset: nalgebra::Vector2::from(combined_offset.clone()),
+                            scale: 1.0,
+                        };
                         GerberRenderer::default().paint_layer(
                             &painter,
                             app.view_state,
                             gerber_to_render,
                             layer_type.color(),
-                            false, // Don't use unique colors for multi-layer view
-                            false, // Don't show polygon numbering
-                            false, // New boolean flag
-                            app.rotation_degrees.to_radians(), // f32 rotation
-                            gerber_viewer::Mirroring::from(app.display_manager.mirroring.clone()),
-                            nalgebra::Vector2::from(app.display_manager.center_offset.clone()),
-                            nalgebra::Vector2::from(combined_offset.clone()),
+                            &render_config,
+                            &transform,
                         );
                         
                         // In quadrant view, also render mechanical outline with this layer
                         if app.display_manager.quadrant_view_enabled {
                             if let Some(mechanical_layer) = mechanical_outline_layer {
+                                let mechanical_render_config = gerber_viewer::RenderConfiguration {
+                                    use_unique_shape_colors: false,
+                                    use_shape_numbering: false,
+                                    use_vertex_numbering: false,
+                                };
+                                let mechanical_transform = gerber_viewer::GerberTransform {
+                                    rotation_radians: app.rotation_degrees.to_radians(),
+                                    mirroring: gerber_viewer::Mirroring::from(app.display_manager.mirroring.clone()),
+                                    origin: nalgebra::Vector2::from(app.display_manager.center_offset.clone()),
+                                    offset: nalgebra::Vector2::from(combined_offset),
+                                    scale: 1.0,
+                                };
                                 GerberRenderer::default().paint_layer(
                                     &painter,
                                     app.view_state,
                                     mechanical_layer,
                                     crate::layer_operations::LayerType::MechanicalOutline.color(),
-                                    false,
-                                    false,
-                                    false, // New boolean flag
-                                    app.rotation_degrees.to_radians(), // f32 rotation
-                                    gerber_viewer::Mirroring::from(app.display_manager.mirroring.clone()),
-                                    nalgebra::Vector2::from(app.display_manager.center_offset.clone()),
-                                    nalgebra::Vector2::from(combined_offset),
+                                    &mechanical_render_config,
+                                    &mechanical_transform,
                                 );
                             }
                         }
