@@ -14,7 +14,7 @@ egui_extras = { version = "0.31.1", features = ["image"] } # For image loading a
 image = "0.24" # For image loading
 
 # Gerber and PCB handling
-gerber_viewer = { git = "https://github.com/MakerPnP/gerber-viewer" }
+gerber_viewer = { path = "../gerber_viewer" }
 gerber_parser = { git = "https://github.com/MakerPnP/gerber-parser" }
 gerber_types = { git = "https://github.com/MakerPnP/gerber-types" }
 nalgebra = "0.33"
@@ -41,6 +41,9 @@ notify = "8.0.0"
 
 regex = "1.10"
 once_cell = "1.19"
+bytemuck = "1.23.1"
+egui-wgpu = "0.31.1"
+wgpu = "24.0"
 
 
 # delete this, it's just a cargo workspace workaround

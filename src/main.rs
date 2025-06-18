@@ -16,7 +16,7 @@ use egui_mobius_reactive::*;
 use log;
 use gerber_viewer::{
    BoundingBox, GerberLayer, 
-   ViewState, UiState, Transform2D
+   ViewState, UiState, GerberTransform
 };
 // Import platform modules
 mod platform;
@@ -26,6 +26,7 @@ mod project;
 mod layer_operations;
 mod drc_operations;
 mod ui;
+mod ecs;
 use ui::{Tab, TabKind, TabViewer, initialize_and_show_banner, show_system_info};
 
 use layer_operations::{LayerType, LayerInfo};
@@ -80,6 +81,9 @@ pub struct DemoLensApp {
     
     // Modal states
     pub show_about_modal: bool,
+    
+    // 3D viewer
+    pub pcb_viewer: Option<ecs::PcbViewer>,
 }
 
 impl Drop for DemoLensApp {
@@ -111,9 +115,10 @@ impl DemoLensApp {
             let project_tab = Tab::new(TabKind::Project, SurfaceIndex::main(), NodeIndex(2));
             let settings_tab = Tab::new(TabKind::Settings, SurfaceIndex::main(), NodeIndex(3));
             let gerber_tab = Tab::new(TabKind::GerberView, SurfaceIndex::main(), NodeIndex(4));
-            let log_tab = Tab::new(TabKind::EventLog, SurfaceIndex::main(), NodeIndex(5));
+            let gerber_3d_tab = Tab::new(TabKind::GerberView3D, SurfaceIndex::main(), NodeIndex(5));
+            let log_tab = Tab::new(TabKind::EventLog, SurfaceIndex::main(), NodeIndex(6));
             
-            let mut dock_state = DockState::new(vec![gerber_tab]);
+            let mut dock_state = DockState::new(vec![gerber_tab, gerber_3d_tab]);
             let surface = dock_state.main_surface_mut();
             
             let [left, _right] = surface.split_left(
@@ -154,6 +159,7 @@ impl DemoLensApp {
             user_timezone: None,
             use_24_hour_clock: true, // Default to 24-hour format
             show_about_modal: false,
+            pcb_viewer: None,
         };
         
         if let Ok(project_manager) = ProjectManager::load_from_file(&app.config_path) {
@@ -221,11 +227,12 @@ impl DemoLensApp {
         // Create the transform that will be used during rendering
         let origin: nalgebra::Vector2<f64> = self.display_manager.center_offset.clone().into();
         let offset: nalgebra::Vector2<f64> = self.display_manager.design_offset.clone().into();
-        let transform = Transform2D {
-            rotation_radians: self.rotation_degrees.to_radians(),
+        let transform = GerberTransform {
+            rotation_radians: self.rotation_degrees.to_radians() as f32,
             mirroring: self.display_manager.mirroring.clone().into(),
             origin: origin - offset,
             offset,
+            scale: 1.0,
         };
 
         // Compute transformed bounding box

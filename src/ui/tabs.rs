@@ -23,6 +23,7 @@ pub enum TabKind {
     ViewSettings,
     DRC,
     GerberView,
+    GerberView3D,
     EventLog,
     Project,
     Settings,
@@ -58,6 +59,7 @@ impl Tab {
             TabKind::ViewSettings => "View Settings".to_string(),
             TabKind::DRC => "DRC".to_string(),
             TabKind::GerberView => "Gerber View".to_string(),
+            TabKind::GerberView3D => "3D View".to_string(),
             TabKind::EventLog => "Event Log".to_string(),
             TabKind::Project => "Project".to_string(),
             TabKind::Settings => "Settings".to_string(),
@@ -99,6 +101,9 @@ impl Tab {
             }
             TabKind::GerberView => {
                 self.render_gerber_view(ui, params.app);
+            }
+            TabKind::GerberView3D => {
+                self.render_gerber_3d_view(ui, params.app);
             }
             TabKind::EventLog => {
                 let logger = ReactiveEventLogger::with_colors(&params.app.logger_state, &params.app.log_colors);
@@ -272,19 +277,30 @@ impl Tab {
                             app.display_manager.design_offset.clone()
                         };
                         
+                        // Create render configuration
+                        let render_config = gerber_viewer::RenderConfiguration {
+                            use_unique_shape_colors: false,
+                            use_shape_numbering: false,
+                            use_vertex_numbering: false,
+                        };
+                        
+                        // Create transform
+                        let transform = gerber_viewer::GerberTransform {
+                            rotation_radians: app.rotation_degrees.to_radians() as f32,
+                            mirroring: app.display_manager.mirroring.clone().into(),
+                            origin: app.display_manager.center_offset.clone().into(),
+                            offset: combined_offset.clone().into(),
+                            scale: 1.0,
+                        };
+                        
                         // Render the main layer
                         GerberRenderer::default().paint_layer(
                             &painter,
                             app.view_state,
                             gerber_to_render,
                             layer_type.color(),
-                            false, // Don't use unique colors for multi-layer view
-                            false, // Don't show polygon numbering
-                            false, // New boolean flag
-                            app.rotation_degrees.to_radians(), // f32 rotation
-                            gerber_viewer::Mirroring::from(app.display_manager.mirroring.clone()),
-                            nalgebra::Vector2::from(app.display_manager.center_offset.clone()),
-                            nalgebra::Vector2::from(combined_offset.clone()),
+                            &render_config,
+                            &transform,
                         );
                         
                         // In quadrant view, also render mechanical outline with this layer
@@ -295,13 +311,8 @@ impl Tab {
                                     app.view_state,
                                     mechanical_layer,
                                     crate::layer_operations::LayerType::MechanicalOutline.color(),
-                                    false,
-                                    false,
-                                    false, // New boolean flag
-                                    app.rotation_degrees.to_radians(), // f32 rotation
-                                    gerber_viewer::Mirroring::from(app.display_manager.mirroring.clone()),
-                                    nalgebra::Vector2::from(app.display_manager.center_offset.clone()),
-                                    nalgebra::Vector2::from(combined_offset),
+                                    &render_config,
+                                    &transform,
                                 );
                             }
                         }
@@ -593,6 +604,53 @@ impl Tab {
             egui::FontId::default(),
             Color32::from_rgb(150, 150, 150),
         );
+    }
+
+    fn render_gerber_3d_view(&self, ui: &mut egui::Ui, app: &mut DemoLensApp) {
+        // Initialize 3D viewer if needed
+        if app.pcb_viewer.is_none() {
+            app.pcb_viewer = Some(crate::ecs::PcbViewer::new());
+        }
+
+        // Get mutable reference to the viewer
+        if let Some(ref mut viewer) = app.pcb_viewer {
+            // Generate 3D meshes from current layers
+            let mut all_meshes = Vec::new();
+            let mut extrusion_engine = crate::ecs::ExtrusionEngine::new();
+
+            for (layer_type, layer_info) in &app.layer_manager.layers {
+                if let Some(ref gerber_layer) = layer_info.gerber_layer {
+                    // Determine layer height and material based on type
+                    let (height, material_id) = match layer_type {
+                        crate::layer_operations::LayerType::TopCopper | 
+                        crate::layer_operations::LayerType::BottomCopper => (0.035, 1), // 35µm copper
+                        crate::layer_operations::LayerType::TopSoldermask | 
+                        crate::layer_operations::LayerType::BottomSoldermask => (0.02, 2), // 20µm soldermask
+                        crate::layer_operations::LayerType::TopSilk | 
+                        crate::layer_operations::LayerType::BottomSilk => (0.01, 3), // 10µm silkscreen
+                        crate::layer_operations::LayerType::TopPaste | 
+                        crate::layer_operations::LayerType::BottomPaste => (0.005, 4), // 5µm paste
+                        crate::layer_operations::LayerType::MechanicalOutline => (1.6, 5), // 1.6mm FR4
+                    };
+
+                    // Convert gerber layer to 3D meshes
+                    let layer_meshes = crate::ecs::layer_to_3d_meshes(
+                        gerber_layer, 
+                        height, 
+                        material_id, 
+                        &mut extrusion_engine
+                    );
+                    
+                    all_meshes.extend(layer_meshes);
+                }
+            }
+
+            // Update viewer with new meshes
+            viewer.set_meshes(all_meshes);
+
+            // Show the 3D viewer
+            viewer.show(ui);
+        }
     }
 }
 

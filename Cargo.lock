@@ -1831,7 +1831,6 @@ dependencies = [
 [[package]]
 name = "gerber_viewer"
 version = "0.1.0"
-source = "git+https://github.com/MakerPnP/gerber-viewer#95db14a5d5a0575da98b2c9bdc806c76dbc752a3"
 dependencies = [
  "egui",
  "gerber_parser 0.2.0 (git+https://github.com/makerpnp/gerber-parser.git?rev=abcd8bcef8eb4d40d1ebf53d33bbb13d8c30825f)",
@@ -1999,6 +1998,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "98ff03b468aa837d70984d55f5d3f846f6ec31fe34bbb97c4f85219caeee1ca4"
 dependencies = [
  "bitflags 2.9.1",
+]
+
+[[package]]
+name = "gpu-allocator"
+version = "0.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c151a2a5ef800297b4e79efa4f4bec035c5f51d5ae587287c9b952bdf734cacd"
+dependencies = [
+ "log",
+ "presser",
+ "thiserror 1.0.69",
+ "windows 0.58.0",
 ]
 
 [[package]]
@@ -2398,12 +2409,14 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 name = "kiforge"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "chrono",
  "chrono-tz",
  "dirs",
  "eframe",
  "egui",
  "egui-file-dialog",
+ "egui-wgpu",
  "egui_dock",
  "egui_extras",
  "egui_lens",
@@ -2425,6 +2438,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sysinfo 0.35.2",
+ "wgpu",
 ]
 
 [[package]]
@@ -3595,6 +3609,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "presser"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e8cf8e6a8aa66ce33f63993ffc4ea4271eb5b0530a9002db8455ea6050c77bfa"
+
+[[package]]
 name = "priority-queue"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3756,6 +3776,12 @@ checksum = "99d9a13982dcf210057a8a78572b2217b667c3beacbf3a0d8b454f6f82837d38"
 dependencies = [
  "getrandom 0.3.3",
 ]
+
+[[package]]
+name = "range-alloc"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3d6831663a5098ea164f89cff59c6284e95f4e3c76ce9848d4529f5ccca9bde"
 
 [[package]]
 name = "raw-window-handle"
@@ -4940,6 +4966,7 @@ dependencies = [
  "document-features",
  "js-sys",
  "log",
+ "naga",
  "parking_lot",
  "profiling",
  "raw-window-handle",
@@ -4987,13 +5014,16 @@ dependencies = [
  "android_system_properties",
  "arrayvec",
  "ash",
+ "bit-set",
  "bitflags 2.9.1",
+ "block",
  "bytemuck",
  "cfg_aliases",
  "core-graphics-types",
  "glow",
  "glutin_wgl_sys",
  "gpu-alloc",
+ "gpu-allocator",
  "gpu-descriptor",
  "js-sys",
  "khronos-egl",
@@ -5008,6 +5038,7 @@ dependencies = [
  "ordered-float",
  "parking_lot",
  "profiling",
+ "range-alloc",
  "raw-window-handle",
  "renderdoc-sys",
  "rustc-hash 1.1.0",
@@ -5017,6 +5048,7 @@ dependencies = [
  "web-sys",
  "wgpu-types",
  "windows 0.58.0",
+ "windows-core 0.58.0",
 ]
 
 [[package]]
