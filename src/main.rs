@@ -102,7 +102,7 @@ impl DemoLensApp {
 
         let gerber_layer = load_demo_gerber();
         let mut layer_manager = load_default_gerbers();
-        let mut display_manager = DisplayManager::new();
+        let display_manager = DisplayManager::new();
         
         // Initialize layer positions
         display_manager.update_layer_positions(&mut layer_manager);
@@ -112,7 +112,7 @@ impl DemoLensApp {
         
         let mut initial_logger_state = ReactiveEventLoggerState::new();
         // Set timestamp to be unchecked by default
-        initial_logger_state.show_timestamp = false;
+        initial_logger_state.show_timestamps = false;
         let logger_state = Dynamic::new(initial_logger_state);
         let log_colors = Dynamic::new(LogColors::default());
         let dock_state = Self::create_default_dock_state();

@@ -7,9 +7,10 @@ use crate::{DemoLensApp, layer_operations::LayerType};
 use crate::display::VectorOffset;
 use nalgebra::{Vector2, Point2};
 
+#[allow(dead_code)]
 pub struct PngExporter;
 
-
+#[allow(dead_code)]
 impl PngExporter {
     /// Export each layer in quadrant view as a separate PNG file
     pub fn export_quadrant_layers(app: &DemoLensApp, output_dir: &PathBuf, width: u32, height: u32) -> Result<Vec<PathBuf>, String> {
@@ -152,10 +153,10 @@ impl PngExporter {
     /// Render gerber layer to image buffer using a simplified approach
     fn render_gerber_to_image(
         app: &DemoLensApp,
-        gerber_layer: &gerber_viewer::GerberLayer,
+        _gerber_layer: &gerber_viewer::GerberLayer,
         layer_type: &LayerType,
         mechanical_outline: Option<&gerber_viewer::GerberLayer>,
-        view_state: &ViewState,
+        _view_state: &ViewState,
         img: &mut RgbaImage,
         width: u32,
         height: u32,

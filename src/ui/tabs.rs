@@ -244,7 +244,7 @@ impl Tab {
             let grid_spacings_mils = [100.0, 50.0, 25.0, 10.0, 5.0, 2.0, 1.0];
             let grid_spacings_mm = [2.54, 1.27, 0.635, 0.254, 0.127, 0.0508, 0.0254];
             
-            let (spacings, unit_name) = if app.global_units_mils {
+            let (spacings, _unit_name) = if app.global_units_mils {
                 (&grid_spacings_mils[..], "mils")
             } else {
                 (&grid_spacings_mm[..], "mm")

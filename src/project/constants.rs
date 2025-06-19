@@ -5,7 +5,9 @@ pub const MARKER_RADIUS: f32 = 2.5;
 
 // Custom log types for different event categories
 pub const LOG_TYPE_ROTATION: &str = "rotation";
+#[allow(dead_code)]
 pub const LOG_TYPE_CENTER_OFFSET: &str = "center_offset";
+#[allow(dead_code)]
 pub const LOG_TYPE_DESIGN_OFFSET: &str = "design_offset";
 pub const LOG_TYPE_MIRROR: &str = "mirror";
 pub const LOG_TYPE_DRC: &str = "drc";

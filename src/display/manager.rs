@@ -230,7 +230,7 @@ impl DisplayManager {
     /// This properly positions layers in traditional geometry space
     pub fn update_layer_positions(&self, layer_manager: &mut LayerManager) {
         // Always mark coordinates as updated when we run this
-        let should_update = layer_manager.coordinates_need_update() || 
+        let _should_update = layer_manager.coordinates_need_update() || 
                            self.quadrant_view_enabled; // Always update in quadrant mode
         // First, get the mechanical outline to determine the base size
         let mechanical_size = if let Some(mechanical_layer) = layer_manager.get_layer(&LayerType::MechanicalOutline) {
@@ -252,7 +252,7 @@ impl DisplayManager {
         
         // Update each layer's position
         for (layer_type, layer_info) in layer_manager.layers.iter_mut() {
-            if let Some(ref coords) = layer_info.coordinates {
+            if let Some(ref _coords) = layer_info.coordinates {
                 let (screen_upper_left, screen_lower_right) = if self.quadrant_view_enabled {
                     self.calculate_quadrant_position(layer_type, mechanical_size.0, mechanical_size.1, spacing)
                 } else {

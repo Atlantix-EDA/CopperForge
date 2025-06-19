@@ -230,7 +230,7 @@ impl DrcViolation {
 }
 
 impl DrcSimple {
-    pub fn find_traces(&self, layer: &GerberLayer) -> Vec<Trace> {
+    pub fn find_traces(&self, _layer: &GerberLayer) -> Vec<Trace> {
         let mut traces = Vec::new();
         
         println!("Analyzing primitives for traces");
@@ -348,7 +348,7 @@ impl DrcSimple {
     }
     
     /// Analyze trace quality and detect routing artifacts like unnecessary jogs
-    pub fn analyze_trace_quality(&self, layer: &GerberLayer) -> Vec<TraceQualityIssue> {
+    pub fn analyze_trace_quality(&self, _layer: &GerberLayer) -> Vec<TraceQualityIssue> {
         let mut quality_issues = Vec::new();
         // TODO: Need to find new public API to access primitives
         let primitives: &[GerberPrimitive] = &[];
@@ -582,7 +582,7 @@ impl DrcSimple {
     
     /// Clone a GerberLayer (since it doesn't implement Clone)
     #[allow(dead_code)]
-    fn clone_layer(&self, layer: &GerberLayer) -> GerberLayer {
+    fn clone_layer(&self, _layer: &GerberLayer) -> GerberLayer {
         // TODO: Need to find new public API to access primitives
         let primitives: Vec<GerberPrimitive> = vec![];
         self.create_layer_from_primitives(primitives)

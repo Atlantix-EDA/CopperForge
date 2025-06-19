@@ -1,17 +1,18 @@
-use crate::{DemoLensApp, project::constants::{LOG_TYPE_ROTATION, LOG_TYPE_MIRROR, LOG_TYPE_CENTER_OFFSET, LOG_TYPE_DESIGN_OFFSET}};
+use crate::DemoLensApp;
 use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
-use crate::display::VectorOffset;
 
+#[allow(dead_code)]
 pub fn show_orientation_panel<'a>(    
-    ui: &mut egui::Ui,
-    app: &'a mut DemoLensApp,
-    logger_state: &'a Dynamic<ReactiveEventLoggerState>,
-    log_colors: &'a Dynamic<LogColors>,
+    _ui: &mut egui::Ui,
+    _app: &'a mut DemoLensApp,
+    _logger_state: &'a Dynamic<ReactiveEventLoggerState>,
+    _log_colors: &'a Dynamic<LogColors>,
 ) {
     // Orientation panel is now empty - all controls moved to main toolbar
 }
 
+#[allow(dead_code)]
 /// Export layers from quadrant view to PNG files
 pub fn export_quadrant_layers_to_png(app: &mut DemoLensApp, logger: &ReactiveEventLogger) {
     if !app.display_manager.quadrant_view_enabled {
