@@ -35,12 +35,16 @@ pub fn load_default_gerbers() -> LayerManager {
             }
         };
         
-        let layer_info = LayerInfo::new(
+        let mut layer_info = LayerInfo::new(
             layer_type,
             layer_gerber,
             Some(gerber_data.to_string()),  // Store raw Gerber data for DRC
             matches!(layer_type, LayerType::TopCopper | LayerType::MechanicalOutline),
         );
+        
+        // Initialize coordinates from the gerber layer if available
+        layer_info.initialize_coordinates_from_gerber();
+        
         layer_manager.add_layer(layer_type, layer_info);
     }
     
@@ -65,7 +69,9 @@ fn get_embedded_gerber_data(filename: &str) -> &'static str {
 pub fn load_demo_gerber() -> GerberLayer {
     let demo_str = include_str!("../../assets/demo.gbr").as_bytes();
     let reader = BufReader::new(demo_str);
+    
     let doc = parse(reader).unwrap();
+    
     let commands = doc.into_commands();
     GerberLayer::new(commands)
 }

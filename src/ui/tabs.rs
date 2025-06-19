@@ -11,7 +11,7 @@ use serde::{Serialize, Deserialize};
 use egui_lens::ReactiveEventLogger;
 use gerber_viewer::{
     draw_arrow, draw_crosshair, GerberRenderer, 
-    draw_marker, ViewState
+    draw_marker, ViewState, RenderConfiguration, GerberTransform
 };
 use crate::drc_operations::types::Position;
 use crate::display::manager::ToPosition;
@@ -77,19 +77,6 @@ impl Tab {
                     ui.separator();
                     ui::show_layers_panel(ui, params.app, &logger_state_clone, &log_colors_clone);
                     
-                    ui.add_space(20.0);
-                    
-                    // Orientation Section
-                    ui.heading("Orientation");
-                    ui.separator();
-                    ui::show_orientation_panel(ui, params.app, &logger_state_clone, &log_colors_clone);
-                    
-                    ui.add_space(20.0);
-                    
-                    // Grid Settings Section
-                    ui.heading("Grid Settings");
-                    ui.separator();
-                    ui::show_grid_panel(ui, params.app, &logger_state_clone, &log_colors_clone);
                 });
             }
             TabKind::DRC => {
@@ -118,6 +105,189 @@ impl Tab {
     }
 
     fn render_gerber_view(&self, ui: &mut egui::Ui, app: &mut DemoLensApp) {
+        // Controls at the top
+        ui.horizontal(|ui| {
+            // Quadrant View controls
+            if ui.checkbox(&mut app.display_manager.quadrant_view_enabled, "Quadrant View").clicked() {
+                // Update layer positions when quadrant view is toggled
+                app.display_manager.update_layer_positions(&mut app.layer_manager);
+                app.layer_manager.mark_coordinates_dirty();
+                app.needs_initial_view = true;
+            }
+            
+            if app.display_manager.quadrant_view_enabled {
+                ui.separator();
+                ui.label("Offset:");
+                
+                // Quadrant offset control
+                let (mut offset_value, units_suffix, conversion_factor) = if app.global_units_mils {
+                    (app.display_manager.quadrant_offset_magnitude / 0.0254, "mils", 0.0254)
+                } else {
+                    (app.display_manager.quadrant_offset_magnitude, "mm", 1.0)
+                };
+                
+                let speed = if app.global_units_mils { 10.0 } else { 1.0 };
+                let max_range = if app.global_units_mils { 20000.0 } else { 500.0 };
+                
+                if ui.add(egui::DragValue::new(&mut offset_value)
+                    .suffix(units_suffix)
+                    .speed(speed)
+                    .range(0.0..=max_range))
+                    .changed() 
+                {
+                    let offset_mm = offset_value * conversion_factor;
+                    app.display_manager.set_quadrant_offset_magnitude(offset_mm);
+                    app.display_manager.update_layer_positions(&mut app.layer_manager);
+                }
+                
+                ui.separator();
+                
+                // PNG Export section for quadrant view
+                if ui.button("📷 Export Layers as PNG").clicked() {
+                    let logger_state = app.logger_state.clone();
+                    let log_colors = app.log_colors.clone();
+                    let logger = ReactiveEventLogger::with_colors(&logger_state, &log_colors);
+                    crate::ui::orientation_panel::export_quadrant_layers_to_png(app, &logger);
+                }
+            }
+            
+            ui.separator();
+            
+            // Flip Top/Bottom button - toggles layer visibility
+            let flip_text = if app.display_manager.showing_top { "🔄 Flip to Bottom (F)" } else { "🔄 Flip to Top (F)" };
+            if ui.button(flip_text).clicked() {
+                app.display_manager.showing_top = !app.display_manager.showing_top;
+                
+                // Auto-toggle layer visibility based on flip state
+                for layer_type in crate::layer_operations::LayerType::all() {
+                    if let Some(layer_info) = app.layer_manager.layers.get_mut(&layer_type) {
+                        match layer_type {
+                            crate::layer_operations::LayerType::TopCopper |
+                            crate::layer_operations::LayerType::TopSilk |
+                            crate::layer_operations::LayerType::TopSoldermask |
+                            crate::layer_operations::LayerType::TopPaste => {
+                                layer_info.visible = app.display_manager.showing_top;
+                            },
+                            crate::layer_operations::LayerType::BottomCopper |
+                            crate::layer_operations::LayerType::BottomSilk |
+                            crate::layer_operations::LayerType::BottomSoldermask |
+                            crate::layer_operations::LayerType::BottomPaste => {
+                                layer_info.visible = !app.display_manager.showing_top;
+                            },
+                            crate::layer_operations::LayerType::MechanicalOutline => {
+                                // Leave outline visibility unchanged
+                            }
+                        }
+                    }
+                }
+                
+                app.layer_manager.mark_coordinates_dirty();
+            }
+            
+            // Rotate button
+            if ui.button("🔄 Rotate (R)").clicked() {
+                // Rotate 90 degrees clockwise
+                app.rotation_degrees = (app.rotation_degrees + 90.0) % 360.0;
+                app.needs_initial_view = true;
+                
+                let logger_state = app.logger_state.clone();
+                let log_colors = app.log_colors.clone();
+                let logger = ReactiveEventLogger::with_colors(&logger_state, &log_colors);
+                logger.log_custom(
+                    crate::project::constants::LOG_TYPE_ROTATION, 
+                    &format!("Rotated to {:.0}°", app.rotation_degrees)
+                );
+            }
+            
+            // X Mirror button
+            let x_mirror_text = if app.display_manager.mirroring.x { "↔️ X Mirror ✓" } else { "↔️ X Mirror" };
+            if ui.button(x_mirror_text).clicked() {
+                app.display_manager.mirroring.x = !app.display_manager.mirroring.x;
+                
+                // Recenter view after mirror
+                app.display_manager.center_offset = crate::display::VectorOffset { x: 0.0, y: 0.0 };
+                app.display_manager.design_offset = crate::display::VectorOffset { x: 0.0, y: 0.0 };
+                app.needs_initial_view = true;
+                
+                let logger_state = app.logger_state.clone();
+                let log_colors = app.log_colors.clone();
+                let logger = ReactiveEventLogger::with_colors(&logger_state, &log_colors);
+                logger.log_custom(
+                    crate::project::constants::LOG_TYPE_MIRROR,
+                    &format!("X mirroring {}", if app.display_manager.mirroring.x { "enabled" } else { "disabled" })
+                );
+            }
+            
+            // Y Mirror button
+            let y_mirror_text = if app.display_manager.mirroring.y { "↕️ Y Mirror ✓" } else { "↕️ Y Mirror" };
+            if ui.button(y_mirror_text).clicked() {
+                app.display_manager.mirroring.y = !app.display_manager.mirroring.y;
+                
+                // Recenter view after mirror
+                app.display_manager.center_offset = crate::display::VectorOffset { x: 0.0, y: 0.0 };
+                app.display_manager.design_offset = crate::display::VectorOffset { x: 0.0, y: 0.0 };
+                app.needs_initial_view = true;
+                
+                let logger_state = app.logger_state.clone();
+                let log_colors = app.log_colors.clone();
+                let logger = ReactiveEventLogger::with_colors(&logger_state, &log_colors);
+                logger.log_custom(
+                    crate::project::constants::LOG_TYPE_MIRROR,
+                    &format!("Y mirroring {}", if app.display_manager.mirroring.y { "enabled" } else { "disabled" })
+                );
+            }
+            
+            ui.separator();
+            
+            // Grid spacing dropdown
+            ui.label("Grid:");
+            let grid_spacings_mils = [100.0, 50.0, 25.0, 10.0, 5.0, 2.0, 1.0];
+            let grid_spacings_mm = [2.54, 1.27, 0.635, 0.254, 0.127, 0.0508, 0.0254];
+            
+            let (spacings, unit_name) = if app.global_units_mils {
+                (&grid_spacings_mils[..], "mils")
+            } else {
+                (&grid_spacings_mm[..], "mm")
+            };
+            
+            // Find current selection
+            let mut current_spacing_display = "Custom".to_string();
+            for &spacing in spacings {
+                let spacing_mm = if app.global_units_mils { spacing * 0.0254 } else { spacing };
+                if (app.grid_settings.spacing_mm - spacing_mm).abs() < 0.001 {
+                    current_spacing_display = if app.global_units_mils {
+                        format!("{} mils", spacing as i32)
+                    } else {
+                        format!("{:.3} mm", spacing)
+                    };
+                    break;
+                }
+            }
+            
+            egui::ComboBox::from_label("")
+                .selected_text(current_spacing_display)
+                .show_ui(ui, |ui| {
+                    for &spacing in spacings {
+                        let spacing_mm = if app.global_units_mils { spacing * 0.0254 } else { spacing };
+                        let label = if app.global_units_mils {
+                            format!("{} mils", spacing as i32)
+                        } else {
+                            format!("{:.3} mm", spacing)
+                        };
+                        if ui.selectable_label(false, label).clicked() {
+                            app.grid_settings.spacing_mm = spacing_mm;
+                        }
+                    }
+                });
+            
+            ui.separator();
+            
+            // Grid dot size slider
+            ui.label("Dot Size:");
+            ui.add(egui::Slider::new(&mut app.grid_settings.dot_size, 0.5..=5.0).suffix("px"));
+        });
+        ui.separator();
+        
         // Fill all available space in the panel
         ui.ctx().request_repaint(); // Ensure continuous updates
         
@@ -211,6 +381,31 @@ impl Tab {
         // Only update normal mouse handling if not doing zoom window
         if !app.zoom_window_dragging {
             app.ui_state.update(ui, &viewport, &response, &mut app.view_state);
+            
+            // Force everything to use viewport center as (0,0)
+            let viewport_center = viewport.center();
+            app.ui_state.origin_screen_pos = viewport_center;
+            app.ui_state.center_screen_pos = viewport_center;
+            
+            // Override cursor coordinates to be relative to viewport center
+            if let Some(cursor_pos) = ui.input(|i| i.pointer.hover_pos()) {
+                let relative_x = (cursor_pos.x - viewport_center.x) / app.view_state.scale;
+                let relative_y = -(cursor_pos.y - viewport_center.y) / app.view_state.scale; // Flip Y
+                app.ui_state.cursor_gerber_coords = Some(nalgebra::Point2::new(relative_x as f64, relative_y as f64));
+            }
+            
+            // Handle origin setting click
+            if app.setting_origin_mode && response.clicked() {
+                if let Some(gerber_coords) = app.ui_state.cursor_gerber_coords {
+                    // Set the design offset to make this point the new (0,0)
+                    app.display_manager.design_offset = crate::display::VectorOffset {
+                        x: gerber_coords.x,
+                        y: gerber_coords.y,
+                    };
+                    app.setting_origin_mode = false; // Exit origin setting mode
+                    app.needs_initial_view = true;
+                }
+            }
         }
 
         let painter = ui.painter().with_clip_rect(viewport);
@@ -248,62 +443,70 @@ impl Tab {
                         continue;
                     }
                     
-                    // Filter based on showing_top
-                    let should_render = layer_type.should_render(app.display_manager.showing_top);
+                    // Always render visible layers - manual control overrides flip state
                     
-                    if should_render {
-                        // Use the layer's specific gerber data if available, otherwise fall back to demo
-                        let gerber_to_render = layer_info.gerber_layer.as_ref()
-                            .unwrap_or(&app.gerber_layer);
-                        
-                        // Get quadrant offset for this layer type
-                        let quadrant_offset = app.display_manager.get_quadrant_offset(&layer_type);
-                        
-                        // The key is to offset from center_offset (which positions the viewport center)
-                        // rather than from design_offset
-                        let combined_offset = if app.display_manager.quadrant_view_enabled {
-                            // When quadrant view is enabled, position relative to center_offset
-                            crate::display::VectorOffset {
-                                x: app.display_manager.center_offset.x + quadrant_offset.x,
-                                y: app.display_manager.center_offset.y + quadrant_offset.y,
-                            }
-                        } else {
-                            // Normal mode: use design offset
-                            app.display_manager.design_offset.clone()
-                        };
-                        
-                        // Render the main layer
-                        GerberRenderer::default().paint_layer(
-                            &painter,
-                            app.view_state,
-                            gerber_to_render,
-                            layer_type.color(),
-                            false, // Don't use unique colors for multi-layer view
-                            false, // Don't show polygon numbering
-                            false, // New boolean flag
-                            app.rotation_degrees.to_radians(), // f32 rotation
-                            gerber_viewer::Mirroring::from(app.display_manager.mirroring.clone()),
-                            nalgebra::Vector2::from(app.display_manager.center_offset.clone()),
-                            nalgebra::Vector2::from(combined_offset.clone()),
-                        );
-                        
-                        // In quadrant view, also render mechanical outline with this layer
-                        if app.display_manager.quadrant_view_enabled {
-                            if let Some(mechanical_layer) = mechanical_outline_layer {
-                                GerberRenderer::default().paint_layer(
-                                    &painter,
-                                    app.view_state,
-                                    mechanical_layer,
-                                    crate::layer_operations::LayerType::MechanicalOutline.color(),
-                                    false,
-                                    false,
-                                    false, // New boolean flag
-                                    app.rotation_degrees.to_radians(), // f32 rotation
-                                    gerber_viewer::Mirroring::from(app.display_manager.mirroring.clone()),
-                                    nalgebra::Vector2::from(app.display_manager.center_offset.clone()),
-                                    nalgebra::Vector2::from(combined_offset),
-                                );
-                            }
+                    // Use the layer's specific gerber data if available, otherwise fall back to demo
+                    let gerber_to_render = layer_info.gerber_layer.as_ref()
+                        .unwrap_or(&app.gerber_layer);
+                    
+                    // Get quadrant offset for this layer type
+                    let quadrant_offset = app.display_manager.get_quadrant_offset(&layer_type);
+                    
+                    // The key is to offset from center_offset (which positions the viewport center)
+                    // rather than from design_offset
+                    let combined_offset = if app.display_manager.quadrant_view_enabled {
+                        // When quadrant view is enabled, position relative to center_offset
+                        crate::display::VectorOffset {
+                            x: app.display_manager.center_offset.x + quadrant_offset.x,
+                            y: app.display_manager.center_offset.y + quadrant_offset.y,
+                        }
+                    } else {
+                        // Normal mode: use design offset
+                        app.display_manager.design_offset.clone()
+                    };
+                    
+                    // Create render configuration
+                    let config = RenderConfiguration::default();
+                    
+                    // Create transform
+                    let transform = GerberTransform {
+                        rotation: app.rotation_degrees.to_radians(),
+                        mirroring: app.display_manager.mirroring.clone().into(),
+                        origin: app.display_manager.center_offset.clone().into(),
+                        offset: combined_offset.clone().into(),
+                        scale: 1.0,
+                    };
+                    
+                    // Render the main layer
+                    GerberRenderer::default().paint_layer(
+                        &painter,
+                        app.view_state,
+                        gerber_to_render,
+                        layer_info.color,
+                        &config,
+                        &transform,
+                    );
+                    
+                    // In quadrant view, also render mechanical outline with this layer
+                    if app.display_manager.quadrant_view_enabled {
+                        if let Some(mechanical_layer) = mechanical_outline_layer {
+                            // Create transform for mechanical outline
+                            let mechanical_transform = GerberTransform {
+                                rotation: app.rotation_degrees.to_radians(),
+                                mirroring: app.display_manager.mirroring.clone().into(),
+                                origin: app.display_manager.center_offset.clone().into(),
+                                offset: combined_offset.into(),
+                                scale: 1.0,
+                            };
+                            
+                            GerberRenderer::default().paint_layer(
+                                &painter,
+                                app.view_state,
+                                mechanical_layer,
+                                crate::layer_operations::LayerType::MechanicalOutline.color(),
+                                &config,
+                                &mechanical_transform,
+                            );
                         }
                     }
                 }
@@ -312,12 +515,21 @@ impl Tab {
 
         let screen_radius = MARKER_RADIUS * app.view_state.scale;
 
-        let design_offset_screen_position = app.view_state.gerber_to_screen_coords(Vector2::from(app.display_manager.design_offset.clone()).to_position().to_point2());
-        draw_arrow(&painter, design_offset_screen_position, app.ui_state.origin_screen_pos, Color32::ORANGE);
-        draw_marker(&painter, design_offset_screen_position, Color32::ORANGE, Color32::YELLOW, screen_radius);
+        // Only show design offset marker if it's not at (0,0) to avoid visual clutter
+        let design_offset = &app.display_manager.design_offset;
+        if design_offset.x != 0.0 || design_offset.y != 0.0 {
+            let design_offset_screen_position = app.view_state.gerber_to_screen_coords(Vector2::from(design_offset.clone()).to_position().to_point2());
+            draw_arrow(&painter, design_offset_screen_position, app.ui_state.origin_screen_pos, Color32::ORANGE);
+            draw_marker(&painter, design_offset_screen_position, Color32::ORANGE, Color32::YELLOW, screen_radius);
+        }
 
-        let design_origin_screen_position = app.view_state.gerber_to_screen_coords((Vector2::from(app.display_manager.center_offset.clone()) - Vector2::from(app.display_manager.design_offset.clone())).to_position().to_point2());
-        draw_marker(&painter, design_origin_screen_position, Color32::PURPLE, Color32::MAGENTA, screen_radius);
+        // Purple dot should match the blue crosshair position
+        let purple_dot_pos = if app.display_manager.quadrant_view_enabled {
+            app.ui_state.center_screen_pos  // In quadrant view, use center
+        } else {
+            app.ui_state.origin_screen_pos  // In normal view, use origin
+        };
+        draw_marker(&painter, purple_dot_pos, Color32::PURPLE, Color32::MAGENTA, screen_radius);
         
         // Render corner overlay shapes (rounded corners)
         if !app.drc_manager.corner_overlay_shapes.is_empty() {

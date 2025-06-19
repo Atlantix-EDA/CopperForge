@@ -1,5 +1,6 @@
 use eframe::epaint::Color32;
 use gerber_viewer::GerberLayer;
+use crate::navigation::LayerCoord;
 
 /// Represents different PCB layers
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -81,13 +82,15 @@ impl LayerType {
     }
 }
 
-/// Layer information including the gerber data and visibility
+/// Layer information including the gerber data, visibility, and coordinate tracking
 #[derive(Debug)]
 pub struct LayerInfo {
     pub layer_type: LayerType,
     pub gerber_layer: Option<GerberLayer>,
     pub raw_gerber_data: Option<String>,  // Store raw Gerber content for DRC parsing
     pub visible: bool,
+    pub coordinates: Option<LayerCoord>,  // Coordinate tracking for positioning and export
+    pub color: Color32,  // Customizable layer color
 }
 
 impl LayerInfo {
@@ -97,6 +100,81 @@ impl LayerInfo {
             gerber_layer,
             raw_gerber_data,
             visible,
+            coordinates: None,  // Will be initialized when layer is positioned
+            color: layer_type.color(),  // Initialize with default color
         }
+    }
+    
+    /// Create LayerInfo with coordinate tracking
+    pub fn with_coordinates(
+        layer_type: LayerType, 
+        gerber_layer: Option<GerberLayer>, 
+        raw_gerber_data: Option<String>, 
+        visible: bool,
+        coordinates: LayerCoord
+    ) -> Self {
+        Self {
+            layer_type,
+            gerber_layer,
+            raw_gerber_data,
+            visible,
+            coordinates: Some(coordinates),
+            color: layer_type.color(),
+        }
+    }
+    
+    /// Initialize coordinates from gerber layer bounding box
+    pub fn initialize_coordinates_from_gerber(&mut self) {
+        if let Some(ref gerber) = self.gerber_layer {
+            let bbox = gerber.bounding_box();
+            let x_width = bbox.width() as f32;
+            let y_height = bbox.height() as f32;
+            let centroid = (
+                bbox.center().x as f32,
+                bbox.center().y as f32
+            );
+            
+            // Initialize with default screen coordinates (will be updated by quadrant positioning)
+            let default_screen_upper_left = (0.0, 0.0);
+            let default_screen_lower_right = (x_width, y_height);
+            
+            
+            self.coordinates = Some(LayerCoord::new(
+                x_width,
+                y_height,
+                centroid,
+                default_screen_upper_left,
+                default_screen_lower_right
+            ));
+        }
+    }
+    
+    /// Update screen positioning for quadrant view
+    pub fn update_screen_position(&mut self, screen_upper_left: (f32, f32), screen_lower_right: (f32, f32)) {
+        if let Some(ref mut coords) = self.coordinates {
+            coords.update_screen_position(screen_upper_left, screen_lower_right);
+        }
+    }
+    
+    /// Get the positioned centroid (in traditional geometry space) if coordinates are available
+    pub fn get_positioned_centroid(&self) -> Option<(f32, f32)> {
+        self.coordinates.as_ref().map(|coords| coords.find_screen_centroid())
+    }
+    
+    /// Convert gerber coordinates to positioned coordinates (in traditional geometry space) for this layer
+    pub fn gerber_to_positioned(&self, gerber_x: f32, gerber_y: f32) -> Option<(f32, f32)> {
+        self.coordinates.as_ref().map(|coords| coords.gerber_to_positioned(gerber_x, gerber_y))
+    }
+    
+    /// Convert positioned coordinates (in traditional geometry space) to gerber coordinates for this layer
+    pub fn positioned_to_gerber(&self, positioned_x: f32, positioned_y: f32) -> Option<(f32, f32)> {
+        self.coordinates.as_ref().map(|coords| coords.positioned_to_gerber(positioned_x, positioned_y))
+    }
+    
+    /// Check if a positioned point (in traditional geometry space) is within this layer's bounds
+    pub fn contains_positioned_point(&self, positioned_x: f32, positioned_y: f32) -> bool {
+        self.coordinates.as_ref()
+            .map(|coords| coords.contains_positioned_point(positioned_x, positioned_y))
+            .unwrap_or(false)
     }
 }

@@ -1831,7 +1831,7 @@ dependencies = [
 [[package]]
 name = "gerber_viewer"
 version = "0.1.0"
-source = "git+https://github.com/MakerPnP/gerber-viewer#95db14a5d5a0575da98b2c9bdc806c76dbc752a3"
+source = "git+https://github.com/MakerPnP/gerber-viewer#ef23948e76b3c7639123513d8a465cc92269b9a3"
 dependencies = [
  "egui",
  "gerber_parser 0.2.0 (git+https://github.com/makerpnp/gerber-parser.git?rev=abcd8bcef8eb4d40d1ebf53d33bbb13d8c30825f)",
@@ -2396,7 +2396,7 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "kiforge"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "chrono",
  "chrono-tz",

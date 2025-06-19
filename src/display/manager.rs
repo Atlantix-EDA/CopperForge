@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use crate::layer_operations::{LayerType, LayerManager};
 
 /// Serializable mirroring settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,8 +63,11 @@ pub struct DisplayManager {
     /// Center offset for the display
     pub center_offset: VectorOffset,
     
-    /// Design offset for positioning
+    /// Design offset for positioning (calculated from mechanical centroid + user delta)
     pub design_offset: VectorOffset,
+    
+    /// User-adjustable delta offset for fine-tuning the design center
+    pub user_delta_offset: VectorOffset,
     
     /// View orientation: true = top layers, false = bottom layers
     pub showing_top: bool,
@@ -84,6 +88,7 @@ impl DisplayManager {
             mirroring: MirroringSettings { x: false, y: false },
             center_offset: VectorOffset { x: 0.0, y: 0.0 },
             design_offset: VectorOffset { x: 0.0, y: 0.0 },
+            user_delta_offset: VectorOffset { x: 0.0, y: 0.0 },
             showing_top: true,
             quadrant_view_enabled: false,
             quadrant_offset_magnitude: 141.42, // Default ~100mil in x and y (sqrt(100^2 + 100^2) * 0.0254)
@@ -99,6 +104,26 @@ impl DisplayManager {
     pub fn reset_offsets(&mut self) {
         self.center_offset = VectorOffset { x: 0.0, y: 0.0 };
         self.design_offset = VectorOffset { x: 0.0, y: 0.0 };
+        self.user_delta_offset = VectorOffset { x: 0.0, y: 0.0 };
+    }
+    
+    /// Update design offset based on mechanical outline centroid + user delta
+    pub fn update_design_offset(&mut self, layer_manager: &crate::layer_operations::LayerManager) {
+        if let Some((centroid_x, centroid_y)) = layer_manager.get_mechanical_outline_centroid() {
+            self.design_offset = VectorOffset {
+                x: centroid_x + self.user_delta_offset.x,
+                y: centroid_y + self.user_delta_offset.y,
+            };
+            println!("🔧 Updated design offset: mechanical_centroid({:.2}, {:.2}) + user_delta({:.2}, {:.2}) = ({:.2}, {:.2})", 
+                     centroid_x, centroid_y, 
+                     self.user_delta_offset.x, self.user_delta_offset.y,
+                     self.design_offset.x, self.design_offset.y);
+        } else {
+            // Fallback: use only user delta if no mechanical outline
+            self.design_offset = self.user_delta_offset.clone();
+            println!("⚠️ No mechanical outline found, using user delta as design offset: ({:.2}, {:.2})", 
+                     self.design_offset.x, self.design_offset.y);
+        }
     }
     
     /// Toggle X-axis mirroring
@@ -198,6 +223,113 @@ impl DisplayManager {
         if magnitude_mils.is_finite() && magnitude_mils >= 0.0 {
             let magnitude_mm = magnitude_mils * 0.0254;
             self.set_quadrant_offset_magnitude(magnitude_mm);
+        }
+    }
+    
+    /// Update all layer positions based on quadrant view settings
+    /// This properly positions layers in traditional geometry space
+    pub fn update_layer_positions(&self, layer_manager: &mut LayerManager) {
+        // Always mark coordinates as updated when we run this
+        let should_update = layer_manager.coordinates_need_update() || 
+                           self.quadrant_view_enabled; // Always update in quadrant mode
+        // First, get the mechanical outline to determine the base size
+        let mechanical_size = if let Some(mechanical_layer) = layer_manager.get_layer(&LayerType::MechanicalOutline) {
+            if let Some(ref coords) = mechanical_layer.coordinates {
+                (coords.x_width, coords.y_height)
+            } else {
+                (100.0, 100.0) // Default size if no coordinates
+            }
+        } else {
+            (100.0, 100.0) // Default size if no mechanical outline
+        };
+        
+        // Calculate spacing between quadrants
+        let spacing = if self.quadrant_view_enabled {
+            self.quadrant_offset_magnitude.max(1.0)
+        } else {
+            0.0 // No spacing if quadrant view disabled
+        };
+        
+        // Update each layer's position
+        for (layer_type, layer_info) in layer_manager.layers.iter_mut() {
+            if let Some(ref coords) = layer_info.coordinates {
+                let (screen_upper_left, screen_lower_right) = if self.quadrant_view_enabled {
+                    self.calculate_quadrant_position(layer_type, mechanical_size.0, mechanical_size.1, spacing)
+                } else {
+                    // All layers centered at origin when quadrant view is disabled
+                    let half_width = mechanical_size.0 / 2.0;
+                    let half_height = mechanical_size.1 / 2.0;
+                    (
+                        (-half_width, half_height),   // Upper left in traditional coords
+                        (half_width, -half_height)     // Lower right in traditional coords
+                    )
+                };
+                
+                layer_info.update_screen_position(screen_upper_left, screen_lower_right);
+            }
+        }
+    }
+    
+    /// Calculate the positioned bounds for a layer in quadrant view
+    fn calculate_quadrant_position(
+        &self,
+        layer_type: &LayerType,
+        width: f32,
+        height: f32,
+        spacing: f64,
+    ) -> ((f32, f32), (f32, f32)) {
+        let half_width = width / 2.0;
+        let half_height = height / 2.0;
+        let offset = spacing as f32; // Full spacing from center to quadrant center
+        
+        // Calculate quadrant centers and then position the layer bounds
+        // Remember: In traditional geometry, Y increases upward
+        match layer_type {
+            // Quadrant 1 (top-right): Copper layers
+            LayerType::TopCopper | LayerType::BottomCopper => {
+                let center_x = offset;
+                let center_y = offset;
+                (
+                    (center_x - half_width, center_y + half_height),   // Upper left
+                    (center_x + half_width, center_y - half_height)    // Lower right
+                )
+            },
+            
+            // Quadrant 2 (top-left): Silkscreen layers  
+            LayerType::TopSilk | LayerType::BottomSilk => {
+                let center_x = -offset;
+                let center_y = offset;
+                (
+                    (center_x - half_width, center_y + half_height),   // Upper left
+                    (center_x + half_width, center_y - half_height)    // Lower right
+                )
+            },
+            
+            // Quadrant 3 (bottom-left): Soldermask layers
+            LayerType::TopSoldermask | LayerType::BottomSoldermask => {
+                let center_x = -offset;
+                let center_y = -offset;
+                (
+                    (center_x - half_width, center_y + half_height),   // Upper left
+                    (center_x + half_width, center_y - half_height)    // Lower right
+                )
+            },
+            
+            // Quadrant 4 (bottom-right): Paste layers
+            LayerType::TopPaste | LayerType::BottomPaste => {
+                let center_x = offset;
+                let center_y = -offset;
+                (
+                    (center_x - half_width, center_y + half_height),   // Upper left
+                    (center_x + half_width, center_y - half_height)    // Lower right
+                )
+            },
+            
+            // Mechanical outline centered at origin
+            LayerType::MechanicalOutline => (
+                (-half_width, half_height),                      // Upper left
+                (half_width, -half_height)                       // Lower right
+            ),
         }
     }
 }

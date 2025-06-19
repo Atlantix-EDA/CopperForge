@@ -39,13 +39,6 @@ impl<'a> ViewSettingsPanel<'a> {
             
             ui.add_space(20.0);
             
-            // Orientation Section
-            ui.heading("Orientation");
-            ui.separator();
-            ui::show_orientation_panel(ui, self.app, self.logger_state, self.log_colors);
-            
-            ui.add_space(20.0);
-            
             // Grid Settings Section
             ui.heading("Grid Settings");
             ui.separator();

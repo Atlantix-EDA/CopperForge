@@ -365,12 +365,15 @@ fn load_gerbers_into_viewer(app: &mut DemoLensApp, gerber_dir: &Path, logger: &R
                                         unassigned_count += 1;
                                     } else {
                                         // Create layer info
-                                        let layer_info = LayerInfo::new(
+                                        let mut layer_info = LayerInfo::new(
                                             detected_type,
                                             Some(gerber_layer),
                                             Some(gerber_content.clone()),
                                             true, // All layers have their checkbox checked by default
                                         );
+                                        
+                                        // Initialize coordinates from the gerber layer
+                                        layer_info.initialize_coordinates_from_gerber();
                                         
                                         // Insert into layers map
                                         app.layer_manager.layers.insert(detected_type, layer_info);

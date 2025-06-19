@@ -42,6 +42,8 @@ pub struct ProjectConfig {
     pub state: ProjectState,
     pub auto_generate_on_startup: bool,
     pub auto_reload_on_change: bool,
+    pub user_timezone: Option<String>,
+    pub use_24_hour_clock: bool,
 }
 
 impl Default for ProjectConfig {
@@ -50,6 +52,8 @@ impl Default for ProjectConfig {
             state: ProjectState::NoProject,
             auto_generate_on_startup: true,
             auto_reload_on_change: true,
+            user_timezone: None,
+            use_24_hour_clock: false, // Default to 12-hour
         }
     }
 }
@@ -90,38 +94,40 @@ pub struct ProjectManager {
     
     /// Last file picked (to avoid re-processing)
     pub last_picked_file: Option<PathBuf>,
+    
+    /// Full config for persistence
+    pub config: ProjectConfig,
 }
 
 impl ProjectManager {
     /// Create a new ProjectManager
     pub fn new() -> Self {
+        let config = ProjectConfig::default();
         Self {
-            state: ProjectState::NoProject,
-            auto_generate_on_startup: true,
-            auto_reload_on_change: true,
+            state: config.state.clone(),
+            auto_generate_on_startup: config.auto_generate_on_startup,
+            auto_reload_on_change: config.auto_reload_on_change,
             file_dialog: FileDialog::new(),
             last_picked_file: None,
+            config,
         }
     }
     
     /// Create from a ProjectConfig
     pub fn from_config(config: ProjectConfig) -> Self {
         Self {
-            state: config.state,
+            state: config.state.clone(),
             auto_generate_on_startup: config.auto_generate_on_startup,
             auto_reload_on_change: config.auto_reload_on_change,
             file_dialog: FileDialog::new(),
             last_picked_file: None,
+            config,
         }
     }
     
     /// Convert to ProjectConfig for saving
     pub fn to_config(&self) -> ProjectConfig {
-        ProjectConfig {
-            state: self.state.clone(),
-            auto_generate_on_startup: self.auto_generate_on_startup,
-            auto_reload_on_change: self.auto_reload_on_change,
-        }
+        self.config.clone()
     }
     
     /// Save project configuration to disk

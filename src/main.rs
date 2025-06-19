@@ -16,7 +16,7 @@ use egui_mobius_reactive::*;
 use log;
 use gerber_viewer::{
    BoundingBox, GerberLayer, 
-   ViewState, UiState, Transform2D
+   ViewState, UiState, GerberTransform
 };
 // Import platform modules
 mod platform;
@@ -25,11 +25,14 @@ use platform::parameters::gui::{APPLICATION_NAME, VERSION};
 mod project;
 mod layer_operations;
 mod drc_operations;
+mod export;
+mod navigation;
 mod ui;
+
 use ui::{Tab, TabKind, TabViewer, initialize_and_show_banner, show_system_info};
 
 use layer_operations::{LayerType, LayerInfo};
-use project::{load_default_gerbers, load_demo_gerber, ProjectManager, ProjectState};
+use project::{load_default_gerbers, load_demo_gerber, ProjectManager, ProjectState, manager::ProjectConfig};
 use display::GridSettings;
 
 /// The main application struct
@@ -80,16 +83,17 @@ pub struct DemoLensApp {
     
     // Modal states
     pub show_about_modal: bool,
+    
+    // Origin setting mode
+    pub setting_origin_mode: bool,
 }
 
 impl Drop for DemoLensApp {
     fn drop(&mut self) {
         // Save dock state when application closes
         self.save_dock_state();
-        // Save project config
-        if let Err(e) = self.project_manager.save_to_file(&self.config_path) {
-            eprintln!("Failed to save project config: {}", e);
-        }
+        // Save project config with time settings
+        self.save_settings();
     }
 }
 
@@ -97,40 +101,22 @@ impl DemoLensApp {
     pub fn new() -> Self {
 
         let gerber_layer = load_demo_gerber();
-        let layer_manager = load_default_gerbers();
+        let mut layer_manager = load_default_gerbers();
+        let mut display_manager = DisplayManager::new();
         
-        let logger_state = Dynamic::new(ReactiveEventLoggerState::new());
+        // Initialize layer positions
+        display_manager.update_layer_positions(&mut layer_manager);
+        
+        // Force initial view setup to center gerber at origin
+        let dummy_viewport = Rect::from_min_size(Pos2::ZERO, Vec2::new(1280.0, 768.0));
+        
+        let mut initial_logger_state = ReactiveEventLoggerState::new();
+        // Set timestamp to be unchecked by default
+        initial_logger_state.show_timestamp = false;
+        let logger_state = Dynamic::new(initial_logger_state);
         let log_colors = Dynamic::new(LogColors::default());
+        let dock_state = Self::create_default_dock_state();
         
-        let dock_state = if let Some(saved_dock_state) = Self::load_dock_state() {
-            saved_dock_state
-        } else {
-            // Create default dock layout if no saved state exists
-            let view_settings_tab = Tab::new(TabKind::ViewSettings, SurfaceIndex::main(), NodeIndex(0));
-            let drc_tab = Tab::new(TabKind::DRC, SurfaceIndex::main(), NodeIndex(1));
-            let project_tab = Tab::new(TabKind::Project, SurfaceIndex::main(), NodeIndex(2));
-            let settings_tab = Tab::new(TabKind::Settings, SurfaceIndex::main(), NodeIndex(3));
-            let gerber_tab = Tab::new(TabKind::GerberView, SurfaceIndex::main(), NodeIndex(4));
-            let log_tab = Tab::new(TabKind::EventLog, SurfaceIndex::main(), NodeIndex(5));
-            
-            let mut dock_state = DockState::new(vec![gerber_tab]);
-            let surface = dock_state.main_surface_mut();
-            
-            let [left, _right] = surface.split_left(
-                NodeIndex::root(),
-                0.3, // Left panel takes 30% of width
-                vec![view_settings_tab, drc_tab, project_tab, settings_tab],
-            );
-            
-            surface.split_below(
-                left,
-                0.7, // Top takes 70% of height
-                vec![log_tab],
-            );
-            
-            dock_state
-        };
-
         let mut app = Self {
             layer_manager,
             gerber_layer,
@@ -140,7 +126,7 @@ impl DemoLensApp {
             rotation_degrees: 0.0,
             logger_state,
             log_colors,
-            display_manager: DisplayManager::new(),
+            display_manager,
             drc_manager: DrcManager::new(),
             global_units_mils: false, // Default to mm
             grid_settings: GridSettings::default(),
@@ -152,18 +138,24 @@ impl DemoLensApp {
             zoom_window_start: None,
             zoom_window_dragging: false,
             user_timezone: None,
-            use_24_hour_clock: true, // Default to 24-hour format
+            use_24_hour_clock: false, // Default to 12-hour format
             show_about_modal: false,
+            setting_origin_mode: false,
         };
         
-        if let Ok(project_manager) = ProjectManager::load_from_file(&app.config_path) {
-            app.project_manager = project_manager;
-            
+        if let Ok(project_config) = ProjectConfig::load_from_file(&app.config_path) {
+            // Load time settings from saved config
+            app.user_timezone = project_config.user_timezone.clone();
+            app.use_24_hour_clock = project_config.use_24_hour_clock;
+            app.project_manager = ProjectManager::from_config(project_config);
         }
         
         let logger = ReactiveEventLogger::with_colors(&app.logger_state, &app.log_colors);
         initialize_and_show_banner(&logger);
         app.initialize_project();
+        
+        // Force reset view to center the gerber at origin
+        app.reset_view(dummy_viewport);
         
         app
     }
@@ -209,6 +201,15 @@ impl DemoLensApp {
         let bbox = combined_bbox.unwrap_or_else(|| self.gerber_layer.bounding_box().clone());
         let content_width = bbox.width();
         let content_height = bbox.height();
+        
+        // Calculate the center offset to make gerber center = (0,0)
+        let gerber_center = bbox.center();
+        
+        // Set center offset to negate the gerber center, forcing it to (0,0)
+        self.display_manager.center_offset = display::VectorOffset {
+            x: -gerber_center.x,
+            y: -gerber_center.y,
+        };
 
         // Calculate scale to fit the content (100% zoom)
         let scale = f32::min(
@@ -221,11 +222,12 @@ impl DemoLensApp {
         // Create the transform that will be used during rendering
         let origin: nalgebra::Vector2<f64> = self.display_manager.center_offset.clone().into();
         let offset: nalgebra::Vector2<f64> = self.display_manager.design_offset.clone().into();
-        let transform = Transform2D {
-            rotation_radians: self.rotation_degrees.to_radians(),
+        let transform = GerberTransform {
+            rotation: self.rotation_degrees.to_radians(),
             mirroring: self.display_manager.mirroring.clone().into(),
             origin: origin - offset,
             offset,
+            scale: 1.0,
         };
 
         // Compute transformed bounding box
@@ -258,7 +260,7 @@ impl DemoLensApp {
         
         // Show version as clickable button
         if ui.button(egui::RichText::new(format!("KiForge v{}", VERSION))
-            .color(egui::Color32::from_rgb(100, 150, 200))).clicked() {
+            .color(egui::Color32::from_rgb(180, 200, 255))).clicked() {
             self.show_about_modal = true;
         }
         
@@ -266,21 +268,22 @@ impl DemoLensApp {
         
         // Show clock with user's preferred format
         let time_format = if self.use_24_hour_clock { "%H:%M:%S" } else { "%I:%M:%S %p" };
+        let date_format = "%Y-%m-%d";
         
         let clock_text = if let Some(tz_name) = &self.user_timezone {
             if let Ok(tz) = tz_name.parse::<Tz>() {
                 let now = Utc::now().with_timezone(&tz);
-                format!("🕐 {} {}", now.format(time_format), tz.name())
+                format!("{} 🕐 {} {}", now.format(date_format), now.format(time_format), tz.name())
             } else {
                 let now = Local::now();
-                format!("🕐 {}", now.format(time_format))
+                format!("{} 🕐 {}", now.format(date_format), now.format(time_format))
             }
         } else {
             let now = Local::now();
-            format!("🕐 {}", now.format(time_format))
+            format!("{} 🕐 {}", now.format(date_format), now.format(time_format))
         };
         
-        ui.label(egui::RichText::new(clock_text).color(egui::Color32::from_rgb(150, 150, 150)));
+        ui.label(egui::RichText::new(clock_text).color(egui::Color32::from_rgb(220, 220, 220)));
     }
     
     /// Show the main content area (dock layout without Project tab)
@@ -350,6 +353,42 @@ impl DemoLensApp {
         }
         None
     }
+    
+    fn save_settings(&self) {
+        let mut config = self.project_manager.config.clone();
+        config.state = self.project_manager.state.clone(); // Save current project state!
+        config.user_timezone = self.user_timezone.clone();
+        config.use_24_hour_clock = self.use_24_hour_clock;
+        
+        if let Err(e) = config.save_to_file(&self.config_path) {
+            eprintln!("Failed to save settings: {}", e);
+        }
+    }
+    
+    fn create_default_dock_state() -> DockState<Tab> {
+        if let Some(saved_dock_state) = Self::load_dock_state() {
+            return saved_dock_state;
+        }
+        
+        let view_settings_tab = Tab::new(TabKind::ViewSettings, SurfaceIndex::main(), NodeIndex(0));
+        let drc_tab = Tab::new(TabKind::DRC, SurfaceIndex::main(), NodeIndex(1));
+        let project_tab = Tab::new(TabKind::Project, SurfaceIndex::main(), NodeIndex(2));
+        let settings_tab = Tab::new(TabKind::Settings, SurfaceIndex::main(), NodeIndex(3));
+        let gerber_tab = Tab::new(TabKind::GerberView, SurfaceIndex::main(), NodeIndex(4));
+        let log_tab = Tab::new(TabKind::EventLog, SurfaceIndex::main(), NodeIndex(5));
+        
+        let mut dock_state = DockState::new(vec![gerber_tab]);
+        let surface = dock_state.main_surface_mut();
+        
+        let [left, _right] = surface.split_left(
+            NodeIndex::root(),
+            0.3,
+            vec![view_settings_tab, drc_tab, project_tab, settings_tab],
+        );
+        
+        surface.split_below(left, 0.7, vec![log_tab]);
+        dock_state
+    }
 }
 
 /// Implement the eframe::App trait for DemoLensApp
@@ -379,14 +418,45 @@ impl eframe::App for DemoLensApp {
             show_system_info(&logger);
         }
         
+        // Only update coordinates when explicitly marked as dirty (not time-based)
+        if self.layer_manager.coordinates_dirty {
+            self.layer_manager.update_coordinates_from_display(&self.display_manager);
+        }
+        
         // Handle hotkeys first
         ctx.input(|i| {
             // F key - flip board view (top/bottom)
             if i.key_pressed(egui::Key::F) {
                 self.display_manager.showing_top = !self.display_manager.showing_top;
+                
+                // Auto-toggle layer visibility based on flip state (same as button logic)
+                for layer_type in crate::layer_operations::LayerType::all() {
+                    if let Some(layer_info) = self.layer_manager.layers.get_mut(&layer_type) {
+                        match layer_type {
+                            crate::layer_operations::LayerType::TopCopper |
+                            crate::layer_operations::LayerType::TopSilk |
+                            crate::layer_operations::LayerType::TopSoldermask |
+                            crate::layer_operations::LayerType::TopPaste => {
+                                layer_info.visible = self.display_manager.showing_top;
+                            },
+                            crate::layer_operations::LayerType::BottomCopper |
+                            crate::layer_operations::LayerType::BottomSilk |
+                            crate::layer_operations::LayerType::BottomSoldermask |
+                            crate::layer_operations::LayerType::BottomPaste => {
+                                layer_info.visible = !self.display_manager.showing_top;
+                            },
+                            crate::layer_operations::LayerType::MechanicalOutline => {
+                                // Leave outline visibility unchanged
+                            }
+                        }
+                    }
+                }
+                
                 let view_name = if self.display_manager.showing_top { "top" } else { "bottom" };
                 let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
                 logger.log_info(&format!("Flipped to {} view (F key)", view_name));
+                // Mark coordinates as dirty since view changed
+                self.layer_manager.mark_coordinates_dirty();
             }
             
             // U key - toggle units (mm/mils)
@@ -404,6 +474,9 @@ impl eframe::App for DemoLensApp {
                 
                 // Trigger view update to recalculate centering with new rotation
                 self.needs_initial_view = true;
+                
+                // Mark coordinates as dirty since rotation changed
+                self.layer_manager.mark_coordinates_dirty();
                 
                 let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
                 logger.log_custom(

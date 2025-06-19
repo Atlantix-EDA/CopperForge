@@ -20,6 +20,12 @@ pub struct LayerManager {
     
     /// Manual layer assignments (filename -> layer type)
     pub layer_assignments: HashMap<String, LayerType>,
+    
+    /// Coordinate update tracking
+    pub coordinates_last_updated: std::time::Instant,
+    
+    /// Flag to track if coordinates need updating
+    pub coordinates_dirty: bool,
 }
 
 impl LayerManager {
@@ -31,6 +37,8 @@ impl LayerManager {
             layer_detector: LayerDetector::new(),
             unassigned_gerbers: Vec::new(),
             layer_assignments: HashMap::new(),
+            coordinates_last_updated: std::time::Instant::now(),
+            coordinates_dirty: false,
         }
     }
     
@@ -150,6 +158,59 @@ impl LayerManager {
     pub fn detect_layer_type(&self, filename: &str) -> Option<LayerType> {
         self.layer_detector.detect_layer_type(filename)
     }
+    
+    /// Initialize all layer coordinates from their gerber data
+    pub fn initialize_all_coordinates(&mut self) {
+        for (_, layer_info) in self.layers.iter_mut() {
+            layer_info.initialize_coordinates_from_gerber();
+        }
+        self.mark_coordinates_updated();
+    }
+    
+    /// Mark coordinates as needing update
+    pub fn mark_coordinates_dirty(&mut self) {
+        self.coordinates_dirty = true;
+    }
+    
+    /// Mark coordinates as updated
+    pub fn mark_coordinates_updated(&mut self) {
+        self.coordinates_dirty = false;
+        self.coordinates_last_updated = std::time::Instant::now();
+    }
+    
+    /// Check if coordinates need updating (based on time or dirty flag)
+    pub fn coordinates_need_update(&self) -> bool {
+        self.coordinates_dirty || 
+        self.coordinates_last_updated.elapsed() > std::time::Duration::from_secs(2)
+    }
+    
+    /// Update layer coordinates based on current view and display settings
+    /// This should be called when gerber view positions change
+    pub fn update_coordinates_from_display(&mut self, display_manager: &crate::display::DisplayManager) {
+        if !self.coordinates_need_update() {
+            return;
+        }
+        
+        // Simply trigger the display manager to update positions
+        // This uses the proper quadrant positioning logic
+        display_manager.update_layer_positions(self);
+        
+        self.mark_coordinates_updated();
+    }
+    
+    /// Calculate the mechanical outline centroid for design offset calculation
+    pub fn get_mechanical_outline_centroid(&self) -> Option<(f64, f64)> {
+        if let Some(mechanical_layer) = self.get_layer(&LayerType::MechanicalOutline) {
+            if let Some(ref gerber) = mechanical_layer.gerber_layer {
+                let bbox = gerber.bounding_box();
+                let centroid = bbox.center();
+                println!("🎯 Mechanical outline centroid: ({:.2}, {:.2})", centroid.x, centroid.y);
+                return Some((centroid.x, centroid.y));
+            }
+        }
+        println!("⚠️ No mechanical outline layer found for centroid calculation");
+        None
+    }
 }
 
 impl Default for LayerManager {
@@ -178,6 +239,8 @@ impl<'de> serde::Deserialize<'de> for LayerManager {
             layer_detector: LayerDetector::new(),
             unassigned_gerbers: Vec::new(),
             layer_assignments: data.layer_assignments,
+            coordinates_last_updated: std::time::Instant::now(),
+            coordinates_dirty: true, // Mark as dirty on load
         })
     }
 }
