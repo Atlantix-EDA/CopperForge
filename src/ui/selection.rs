@@ -13,24 +13,23 @@ pub fn initialize_and_show_banner(
     let mut system_details = details::Details::new();
     system_details.get_os();
     
-    // Log banner message (welcome message)
-    logger.log_info(&app_banner.message);
-    
-    // Log system details
+    // Log system details first (will appear below in reverse chronological view)
     let details_text = system_details.format_os();
     logger.log_info(&details_text);
+    
+    // Log banner message last (will appear on top in reverse chronological view)
+    logger.log_info(&app_banner.message);
 }
 
 /// Show system information on demand
 pub fn show_system_info(logger: &ReactiveEventLogger) {
+    // Log system details FIRST (will appear BELOW in circular buffer)
     let mut system_details = details::Details::new();
     system_details.get_os();
-    
-    // Display system details first
     let details_text = system_details.format_os();
     logger.log_info(&details_text);
     
-    // Then display banner (so it appears above the details in the log)
+    // Log banner with dependencies LAST (will appear ON TOP in circular buffer)
     let mut app_banner = banner::Banner::new();
     app_banner.format();
     logger.log_info(&app_banner.message);

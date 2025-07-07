@@ -799,7 +799,7 @@ impl DrcSimple {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gerber_viewer::Exposure;
+    // use gerber_viewer::Exposure; // Not available in crates.io version
     
     // Helper to create a mock gerber layer for testing
     fn create_test_layer_with_primitives(_primitives: Vec<GerberPrimitive>) -> GerberLayer {

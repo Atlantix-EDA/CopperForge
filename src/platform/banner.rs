@@ -14,7 +14,14 @@ impl Banner {
 
     pub fn format(&mut self) {
         self.message = format!("\n**** Welcome to {}, Version {}", gui::APPLICATION_NAME, gui::VERSION);
-        self.message += &format!("\n**** Today is {}\n", chrono::Utc::now().format("%m-%d-%Y %H:%M:%S"));
+        self.message += &format!("\n**** Today is {}", chrono::Utc::now().format("%m-%d-%Y %H:%M:%S"));
+        
+        // Add dependencies information
+        self.message += "\n\nDEPENDENCIES";
+        self.message += &format!("\nKiForge          : {}", gui::VERSION);
+        self.message += &format!("\ngerber_viewer    : {}", env!("GERBER_VIEWER_VERSION"));
+        self.message += &format!("\ngerber_types     : {}", env!("GERBER_TYPES_VERSION"));
+        self.message += &format!("\ngerber_parser    : {}\n", env!("GERBER_PARSER_VERSION"));
     }
 
     #[allow(dead_code)]

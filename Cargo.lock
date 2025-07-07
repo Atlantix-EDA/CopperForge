@@ -1775,37 +1775,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "gerber_parser"
-version = "0.2.0"
-source = "git+https://github.com/makerpnp/gerber-parser.git?rev=abcd8bcef8eb4d40d1ebf53d33bbb13d8c30825f#abcd8bcef8eb4d40d1ebf53d33bbb13d8c30825f"
-dependencies = [
- "anyhow",
- "gerber_types 0.4.0 (git+https://github.com/MakerPnP/gerber-types.git?rev=357215682b77093c3693efa4fe9d74076c1685fa)",
- "lazy-regex",
- "log",
- "regex 1.11.1",
- "strum 0.27.1",
- "thiserror 2.0.12",
-]
-
-[[package]]
-name = "gerber_parser"
-version = "0.2.0"
-source = "git+https://github.com/MakerPnP/gerber-parser#abcd8bcef8eb4d40d1ebf53d33bbb13d8c30825f"
-dependencies = [
- "anyhow",
- "gerber_types 0.4.0 (git+https://github.com/MakerPnP/gerber-types.git?rev=357215682b77093c3693efa4fe9d74076c1685fa)",
- "lazy-regex",
- "log",
- "regex 1.11.1",
- "strum 0.27.1",
- "thiserror 2.0.12",
-]
-
-[[package]]
-name = "gerber_types"
+name = "gerber-types"
 version = "0.4.0"
-source = "git+https://github.com/MakerPnP/gerber-types.git?rev=357215682b77093c3693efa4fe9d74076c1685fa#357215682b77093c3693efa4fe9d74076c1685fa"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d74f04b97a30284131cde121b30e44c4a75b57b39911a3252595d15c7052398"
 dependencies = [
  "chrono",
  "num-rational",
@@ -1816,26 +1789,29 @@ dependencies = [
 ]
 
 [[package]]
-name = "gerber_types"
-version = "0.4.0"
-source = "git+https://github.com/MakerPnP/gerber-types#357215682b77093c3693efa4fe9d74076c1685fa"
+name = "gerber_parser"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02e463684ef4c6c6b8ec828379edd11ce469b1cff6a1f04689479c5b67cc2391"
 dependencies = [
- "chrono",
- "num-rational",
+ "anyhow",
+ "gerber-types",
+ "lazy-regex",
+ "log",
+ "regex 1.11.1",
  "strum 0.27.1",
- "strum_macros 0.27.1",
  "thiserror 2.0.12",
- "uuid",
 ]
 
 [[package]]
 name = "gerber_viewer"
 version = "0.1.0"
-source = "git+https://github.com/MakerPnP/gerber-viewer#ef23948e76b3c7639123513d8a465cc92269b9a3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dcf1b874fefb2cffa6a83e9aebb941f1045fee8e037c2986c1eadcec40d7c5c2"
 dependencies = [
  "egui",
- "gerber_parser 0.2.0 (git+https://github.com/makerpnp/gerber-parser.git?rev=abcd8bcef8eb4d40d1ebf53d33bbb13d8c30825f)",
- "gerber_types 0.4.0 (git+https://github.com/MakerPnP/gerber-types.git?rev=357215682b77093c3693efa4fe9d74076c1685fa)",
+ "gerber-types",
+ "gerber_parser",
  "log",
  "lyon",
  "nalgebra",
@@ -2396,7 +2372,7 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "kiforge"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -2410,8 +2386,8 @@ dependencies = [
  "egui_mobius",
  "egui_mobius_reactive",
  "env_logger",
- "gerber_parser 0.2.0 (git+https://github.com/MakerPnP/gerber-parser)",
- "gerber_types 0.4.0 (git+https://github.com/MakerPnP/gerber-types)",
+ "gerber-types",
+ "gerber_parser",
  "gerber_viewer",
  "image 0.24.9",
  "local-ip",
