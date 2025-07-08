@@ -1,14 +1,48 @@
 use bevy_ecs::prelude::*;
 use crate::ecs::components::*;
 use crate::ecs::resources::*;
+use gerber_viewer::{GerberRenderer, RenderConfiguration, GerberTransform};
+use egui::Painter;
 
-// Placeholder for render system
+// ECS-based rendering system
 pub fn render_layers_system(
-    _query: Query<(&GerberData, &Transform, &Visibility, &RenderProperties)>,
-    _view_state: Res<ViewStateResource>,
+    painter: &Painter,
+    layer_query: Query<(&GerberData, &Transform, &Visibility, &RenderProperties)>,
+    view_state: Res<ViewStateResource>,
+    _render_config: Res<RenderConfig>,
 ) {
-    // Will be implemented in Phase 2
-    // For now, this demonstrates the system signature
+    let config = RenderConfiguration::default();
+    let renderer = GerberRenderer::default();
+    
+    // Collect and sort layers by z-order
+    let mut layers: Vec<_> = layer_query.iter().collect();
+    layers.sort_by_key(|(_, _, _, props)| props.z_order);
+    
+    // Render each visible layer
+    for (gerber_data, transform, visibility, render_props) in layers {
+        if !visibility.visible {
+            continue;
+        }
+        
+        // Create GerberTransform from ECS Transform
+        let gerber_transform = GerberTransform {
+            rotation: transform.rotation,
+            mirroring: transform.mirroring.clone().into(),
+            origin: transform.origin.clone().into(),
+            offset: transform.position.clone().into(),
+            scale: transform.scale,
+        };
+        
+        // Render the layer
+        renderer.paint_layer(
+            painter,
+            view_state.view_state,
+            &gerber_data.0,
+            render_props.color,
+            &config,
+            &gerber_transform,
+        );
+    }
 }
 
 // System to update bounding boxes when transforms change

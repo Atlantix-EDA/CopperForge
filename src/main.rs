@@ -89,6 +89,9 @@ pub struct DemoLensApp {
     
     // Origin setting mode
     pub setting_origin_mode: bool,
+    
+    // ECS rendering toggle (for testing)
+    pub use_ecs_rendering: bool,
 }
 
 impl Drop for DemoLensApp {
@@ -101,6 +104,50 @@ impl Drop for DemoLensApp {
 }
 
 impl DemoLensApp {
+    /// Render layers using ECS system
+    pub fn render_layers_ecs(&mut self, painter: &egui::Painter) {
+        // Update view state resource
+        self.ecs_world.insert_resource(ecs::ViewStateResource {
+            view_state: self.view_state.clone(),
+            view_mode: ecs::ViewMode::Normal, // Will be updated based on display manager
+        });
+        
+        // Manually call the ECS render system with world queries
+        let view_state = self.ecs_world.resource::<ecs::ViewStateResource>().clone();
+        let _render_config = self.ecs_world.resource::<ecs::RenderConfig>().clone();
+        
+        let mut layer_query = self.ecs_world.query::<(&ecs::GerberData, &ecs::Transform, &ecs::Visibility, &ecs::RenderProperties)>();
+        let mut layers: Vec<_> = layer_query.iter(&self.ecs_world).collect();
+        layers.sort_by_key(|(_, _, _, props)| props.z_order);
+        
+        // Render each visible layer
+        let config = gerber_viewer::RenderConfiguration::default();
+        let renderer = gerber_viewer::GerberRenderer::default();
+        
+        for (gerber_data, transform, visibility, render_props) in layers {
+            if !visibility.visible {
+                continue;
+            }
+            
+            let gerber_transform = gerber_viewer::GerberTransform {
+                rotation: transform.rotation,
+                mirroring: transform.mirroring.clone().into(),
+                origin: transform.origin.clone().into(),
+                offset: transform.position.clone().into(),
+                scale: transform.scale,
+            };
+            
+            renderer.paint_layer(
+                painter,
+                view_state.view_state,
+                &gerber_data.0,
+                render_props.color,
+                &config,
+                &gerber_transform,
+            );
+        }
+    }
+
     pub fn new() -> Self {
 
         let gerber_layer = load_demo_gerber();
@@ -120,6 +167,10 @@ impl DemoLensApp {
         let log_colors = Dynamic::new(LogColors::default());
         let dock_state = Self::create_default_dock_state();
         
+        // Setup ECS world and migrate layer data
+        let mut ecs_world = ecs::setup_ecs_world();
+        ecs::migrate_layers_to_ecs(&mut ecs_world, &layer_manager);
+        
         let mut app = Self {
             layer_manager,
             gerber_layer,
@@ -134,7 +185,7 @@ impl DemoLensApp {
             global_units_mils: false, // Default to mm
             grid_settings: GridSettings::default(),
             project_manager: ProjectManager::new(),
-            ecs_world: ecs::setup_ecs_world(),
+            ecs_world,
             dock_state,
             config_path: dirs::config_dir()
                 .map(|d| d.join("kiforge"))
@@ -145,6 +196,7 @@ impl DemoLensApp {
             use_24_hour_clock: false, // Default to 12-hour format
             show_about_modal: false,
             setting_origin_mode: false,
+            use_ecs_rendering: false, // Default to old rendering for compatibility
         };
         
         if let Ok(project_config) = ProjectConfig::load_from_file(&app.config_path) {

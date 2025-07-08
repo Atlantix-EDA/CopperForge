@@ -1,5 +1,6 @@
 use bevy_ecs::prelude::*;
 use gerber_viewer::ViewState;
+use crate::layer_operations::LayerType;
 
 // Simple view mode enum
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -9,7 +10,7 @@ pub enum ViewMode {
 }
 
 // Wrapper for gerber_viewer's ViewState
-#[derive(Resource)]
+#[derive(Resource, Clone)]
 pub struct ViewStateResource {
     pub view_state: ViewState,
     pub view_mode: ViewMode,
@@ -25,7 +26,7 @@ impl Default for ViewStateResource {
 }
 
 // Global rendering configuration
-#[derive(Resource)]
+#[derive(Resource, Clone)]
 pub struct RenderConfig {
     pub show_grid: bool,
     pub grid_spacing: f32,
@@ -41,3 +42,7 @@ impl Default for RenderConfig {
         }
     }
 }
+
+// Active layer resource (replaces LayerManager.active_layer)
+#[derive(Resource)]
+pub struct ActiveLayer(pub LayerType);

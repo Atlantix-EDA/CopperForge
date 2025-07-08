@@ -199,6 +199,19 @@ impl Tab {
                 );
             }
             
+            // ECS Rendering toggle button (for testing)
+            if ui.button(if app.use_ecs_rendering { "🔥 ECS Mode" } else { "🔧 Legacy Mode" }).clicked() {
+                app.use_ecs_rendering = !app.use_ecs_rendering;
+                
+                let logger_state = app.logger_state.clone();
+                let log_colors = app.log_colors.clone();
+                let logger = ReactiveEventLogger::with_colors(&logger_state, &log_colors);
+                logger.log_custom(
+                    crate::project::constants::LOG_TYPE_ROTATION, 
+                    &format!("Switched to {} rendering", if app.use_ecs_rendering { "ECS" } else { "Legacy" })
+                );
+            }
+            
             // X Mirror button
             let x_mirror_text = if app.display_manager.mirroring.x { "↔️ X Mirror ✓" } else { "↔️ X Mirror" };
             if ui.button(x_mirror_text).clicked() {
@@ -434,6 +447,18 @@ impl Tab {
             None
         };
 
+        // Choose rendering path based on toggle
+        if app.use_ecs_rendering {
+            // ECS rendering path
+            app.render_layers_ecs(&painter);
+        } else {
+            // Legacy rendering path
+            render_layers_legacy(app, &painter);
+        }
+    }
+}
+
+fn render_layers_legacy(app: &mut DemoLensApp, painter: &egui::Painter) {
         // Render all visible layers based on showing_top
         for layer_type in crate::layer_operations::LayerType::all() {
             if let Some(layer_info) = app.layer_manager.layers.get(&layer_type) {

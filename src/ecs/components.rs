@@ -1,6 +1,8 @@
 use bevy_ecs::prelude::*;
 use gerber_viewer::{GerberLayer, BoundingBox};
 use crate::layer_operations::LayerType;
+use crate::display::manager::MirroringSettings;
+use crate::display::VectorOffset;
 use egui::Color32;
 use std::path::PathBuf;
 
@@ -23,21 +25,21 @@ pub struct LayerInfo {
 // Transform components
 #[derive(Component, Clone, Debug)]
 pub struct Transform {
-    pub position: (f64, f64),
+    pub position: VectorOffset,
     pub rotation: f32,
-    pub scale: f32,
-    pub mirrored_x: bool,
-    pub mirrored_y: bool,
+    pub scale: f64,
+    pub mirroring: MirroringSettings,
+    pub origin: VectorOffset,
 }
 
 impl Default for Transform {
     fn default() -> Self {
         Self {
-            position: (0.0, 0.0),
+            position: VectorOffset { x: 0.0, y: 0.0 },
             rotation: 0.0,
             scale: 1.0,
-            mirrored_x: false,
-            mirrored_y: false,
+            mirroring: MirroringSettings { x: false, y: false },
+            origin: VectorOffset { x: 0.0, y: 0.0 },
         }
     }
 }
