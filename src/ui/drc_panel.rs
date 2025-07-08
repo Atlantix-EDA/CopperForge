@@ -25,8 +25,10 @@ pub fn show_drc_panel<'a>(
                     logger.log_info("Analyzing Gerber files with imageproc trace detection");
                     
                     // Run the actual DRC check (now includes OpenCV)
+                    // Convert ECS layers to legacy format for DRC compatibility
+                    let legacy_layers = convert_ecs_to_legacy_layers(&app.layer_manager, &app.ecs_world);
                     let violations = crate::drc_operations::run_simple_drc_check(
-                        &app.layer_manager.layers,
+                        &legacy_layers,
                         &app.drc_manager.rules,
                         &mut app.drc_manager.trace_quality_issues
                     );
@@ -201,8 +203,10 @@ pub fn show_drc_panel<'a>(
                     logger.log_info("Analyzing Gerber files...");
                     
                     // Run the actual DRC check (now includes OpenCV)
+                    // Convert ECS layers to legacy format for DRC compatibility
+                    let legacy_layers = convert_ecs_to_legacy_layers(&app.layer_manager, &app.ecs_world);
                     let violations = crate::drc_operations::run_simple_drc_check(
-                        &app.layer_manager.layers,
+                        &legacy_layers,
                         &app.drc_manager.rules,
                         &mut app.drc_manager.trace_quality_issues
                     );
@@ -337,8 +341,10 @@ pub fn show_drc_panel<'a>(
                     logger.log_info("Starting trace quality analysis...");
                     
                     // Run the DRC check which includes quality analysis
+                    // Convert ECS layers to legacy format for DRC compatibility
+                    let legacy_layers = convert_ecs_to_legacy_layers(&app.layer_manager, &app.ecs_world);
                     let _violations = crate::drc_operations::run_simple_drc_check(
-                        &app.layer_manager.layers,
+                        &legacy_layers,
                         &app.drc_manager.rules,
                         &mut app.drc_manager.trace_quality_issues
                     );
@@ -385,34 +391,30 @@ pub fn show_drc_panel<'a>(
                         let scaling_factor = 0.1; // 0.1mm scaling factor (like KiCad's default)
                         let mut total_fixed = 0;
                         
-                        // Generate overlay for top copper
-                        if let Some(layer_info) = app.layer_manager.layers.get(&crate::LayerType::TopCopper) {
-                            if let Some(gerber_layer) = &layer_info.gerber_layer {
-                                logger.log_info("Processing top copper layer for corner rounding...");
-                                let (overlay_shapes, fixed_count) = drc.generate_corner_overlay_data(gerber_layer, scaling_factor);
-                                logger.log_info(&format!("Generated overlay for {} corners on top copper", fixed_count));
-                                
-                                // Add overlay shapes to app state for rendering
-                                app.drc_manager.corner_overlay_shapes.extend(overlay_shapes);
-                                total_fixed += fixed_count;
-                                
-                                logger.log_info("✅ Corner overlay generated for top copper");
-                            }
+                        // Generate overlay for top copper (using ECS)
+                        if let Some((_entity, _layer_info, gerber_data, _visibility)) = app.layer_manager.get_layer_ecs(&app.ecs_world, &crate::LayerType::TopCopper) {
+                            logger.log_info("Processing top copper layer for corner rounding...");
+                            let (overlay_shapes, fixed_count) = drc.generate_corner_overlay_data(&gerber_data.0, scaling_factor);
+                            logger.log_info(&format!("Generated overlay for {} corners on top copper", fixed_count));
+                            
+                            // Add overlay shapes to app state for rendering
+                            app.drc_manager.corner_overlay_shapes.extend(overlay_shapes);
+                            total_fixed += fixed_count;
+                            
+                            logger.log_info("✅ Corner overlay generated for top copper");
                         }
                         
-                        // Generate overlay for bottom copper  
-                        if let Some(layer_info) = app.layer_manager.layers.get(&crate::LayerType::BottomCopper) {
-                            if let Some(gerber_layer) = &layer_info.gerber_layer {
-                                logger.log_info("Processing bottom copper layer for corner rounding...");
-                                let (overlay_shapes, fixed_count) = drc.generate_corner_overlay_data(gerber_layer, scaling_factor);
-                                logger.log_info(&format!("Generated overlay for {} corners on bottom copper", fixed_count));
-                                
-                                // Add overlay shapes to app state for rendering
-                                app.drc_manager.corner_overlay_shapes.extend(overlay_shapes);
-                                total_fixed += fixed_count;
-                                
-                                logger.log_info("✅ Corner overlay generated for bottom copper");
-                            }
+                        // Generate overlay for bottom copper (using ECS)
+                        if let Some((_entity, _layer_info, gerber_data, _visibility)) = app.layer_manager.get_layer_ecs(&app.ecs_world, &crate::LayerType::BottomCopper) {
+                            logger.log_info("Processing bottom copper layer for corner rounding...");
+                            let (overlay_shapes, fixed_count) = drc.generate_corner_overlay_data(&gerber_data.0, scaling_factor);
+                            logger.log_info(&format!("Generated overlay for {} corners on bottom copper", fixed_count));
+                            
+                            // Add overlay shapes to app state for rendering
+                            app.drc_manager.corner_overlay_shapes.extend(overlay_shapes);
+                            total_fixed += fixed_count;
+                            
+                            logger.log_info("✅ Corner overlay generated for bottom copper");
                         }
                         
                         if total_fixed > 0 {
@@ -491,4 +493,34 @@ pub fn show_drc_panel<'a>(
                     });
             }
         });
+}
+
+/// Helper function to convert ECS layers to legacy format for DRC compatibility
+use std::collections::HashMap;
+use crate::layer_operations::{LayerType, LayerInfo};
+use bevy_ecs::world::World;
+
+fn convert_ecs_to_legacy_layers(layer_manager: &crate::layer_operations::LayerManager, world: &World) -> HashMap<LayerType, LayerInfo> {
+    let mut legacy_layers = HashMap::new();
+    
+    for (layer_type, entity) in &layer_manager.layer_entities {
+        if let Some((_entity, layer_info, gerber_data, visibility)) = layer_manager.get_layer_ecs(world, layer_type) {
+            // Create legacy LayerInfo from ECS data
+            let mut legacy_layer_info = LayerInfo::new(
+                layer_info.layer_type,
+                Some(gerber_data.0.clone()),
+                None, // Raw gerber data not needed for DRC
+                visibility.visible,
+            );
+            
+            // Get color from ECS render properties
+            if let Some(render_props) = layer_manager.get_layer_render_properties_ecs(world, layer_type) {
+                legacy_layer_info.color = render_props.color;
+            }
+            
+            legacy_layers.insert(*layer_type, legacy_layer_info);
+        }
+    }
+    
+    legacy_layers
 }
