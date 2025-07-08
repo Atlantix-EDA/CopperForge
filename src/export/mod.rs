@@ -20,9 +20,9 @@ impl PngExporter {
 
         std::fs::create_dir_all(output_dir).map_err(|e| format!("Failed to create output directory: {}", e))?;
         
-        // Get mechanical outline layer - this defines the consistent bounding box for all exports
-        let mechanical_outline_layer = app.layer_manager.layers.get(&LayerType::MechanicalOutline)
-            .and_then(|info| info.gerber_layer.as_ref())
+        // Get mechanical outline layer using ECS - this defines the consistent bounding box for all exports
+        let mechanical_outline_layer = app.layer_manager.get_layer_ecs(&app.ecs_world, &LayerType::MechanicalOutline)
+            .map(|(_entity, _layer_info, gerber_data, _visibility)| &gerber_data.0)
             .ok_or("Mechanical outline layer is required for consistent PNG export boundaries")?;
         
         // Calculate the master bounding box from the mechanical outline
@@ -32,15 +32,14 @@ impl PngExporter {
         
         // Render each visible layer type using the consistent master bounding box
         for layer_type in LayerType::all() {
-            if let Some(layer_info) = app.layer_manager.layers.get(&layer_type) {
-                if layer_info.visible && layer_type != LayerType::MechanicalOutline {
+            if let Some((_entity, _layer_info, gerber_data, visibility)) = app.layer_manager.get_layer_ecs(&app.ecs_world, &layer_type) {
+                if visibility.visible && layer_type != LayerType::MechanicalOutline {
                     // Skip if layer shouldn't render for current view
                     if !layer_type.should_render(app.display_manager.showing_top) {
                         continue;
                     }
                     
-                    let gerber_to_render = layer_info.gerber_layer.as_ref()
-                        .unwrap_or(&app.gerber_layer);
+                    let gerber_to_render = &gerber_data.0;
                     
                     let filename = format!("{}.png", layer_type.display_name().replace(" ", "_").to_lowercase());
                     let output_path = output_dir.join(&filename);

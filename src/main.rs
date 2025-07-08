@@ -212,27 +212,8 @@ impl DemoLensApp {
     }
 
     fn reset_view(&mut self, viewport: Rect) {
-        // Find bounding box from all loaded layers
-        let mut combined_bbox: Option<BoundingBox> = None;
-        
-        for layer_info in self.layer_manager.layers.values() {
-            if let Some(ref layer_gerber) = layer_info.gerber_layer {
-                let layer_bbox = layer_gerber.bounding_box();
-                combined_bbox = Some(match combined_bbox {
-                    None => layer_bbox.clone(),
-                    Some(existing) => BoundingBox {
-                        min: nalgebra::Point2::new(
-                            existing.min.x.min(layer_bbox.min.x),
-                            existing.min.y.min(layer_bbox.min.y),
-                        ),
-                        max: nalgebra::Point2::new(
-                            existing.max.x.max(layer_bbox.max.x),
-                            existing.max.y.max(layer_bbox.max.y),
-                        ),
-                    },
-                });
-            }
-        }
+        // Find bounding box from all loaded layers using ECS
+        let combined_bbox = self.layer_manager.get_combined_bounding_box_ecs(&self.ecs_world);
         
         // Fall back to demo gerber if no layers loaded
         let bbox = combined_bbox.unwrap_or_else(|| self.gerber_layer.bounding_box().clone());
@@ -461,8 +442,7 @@ impl eframe::App for DemoLensApp {
             self.layer_manager.update_coordinates_from_display_ecs(&mut self.ecs_world, &self.display_manager);
         }
         
-        // Sync legacy layer changes to ECS world (for UI compatibility)
-        self.layer_manager.sync_legacy_to_ecs(&mut self.ecs_world);
+        // No longer need legacy sync - UI uses ECS directly
         
         // Handle hotkeys first
         ctx.input(|i| {
@@ -470,27 +450,27 @@ impl eframe::App for DemoLensApp {
             if i.key_pressed(egui::Key::F) {
                 self.display_manager.showing_top = !self.display_manager.showing_top;
                 
-                // Auto-toggle layer visibility based on flip state (same as button logic)
+                // Auto-toggle layer visibility based on flip state using ECS
                 for layer_type in crate::layer_operations::LayerType::all() {
-                    if let Some(layer_info) = self.layer_manager.layers.get_mut(&layer_type) {
-                        match layer_type {
-                            crate::layer_operations::LayerType::TopCopper |
-                            crate::layer_operations::LayerType::TopSilk |
-                            crate::layer_operations::LayerType::TopSoldermask |
-                            crate::layer_operations::LayerType::TopPaste => {
-                                layer_info.visible = self.display_manager.showing_top;
-                            },
-                            crate::layer_operations::LayerType::BottomCopper |
-                            crate::layer_operations::LayerType::BottomSilk |
-                            crate::layer_operations::LayerType::BottomSoldermask |
-                            crate::layer_operations::LayerType::BottomPaste => {
-                                layer_info.visible = !self.display_manager.showing_top;
-                            },
-                            crate::layer_operations::LayerType::MechanicalOutline => {
-                                // Leave outline visibility unchanged
-                            }
+                    let visible = match layer_type {
+                        crate::layer_operations::LayerType::TopCopper |
+                        crate::layer_operations::LayerType::TopSilk |
+                        crate::layer_operations::LayerType::TopSoldermask |
+                        crate::layer_operations::LayerType::TopPaste => {
+                            self.display_manager.showing_top
+                        },
+                        crate::layer_operations::LayerType::BottomCopper |
+                        crate::layer_operations::LayerType::BottomSilk |
+                        crate::layer_operations::LayerType::BottomSoldermask |
+                        crate::layer_operations::LayerType::BottomPaste => {
+                            !self.display_manager.showing_top
+                        },
+                        crate::layer_operations::LayerType::MechanicalOutline => {
+                            // Leave outline visibility unchanged, get current state from ECS
+                            self.layer_manager.get_layer_visibility(&self.ecs_world, &layer_type)
                         }
-                    }
+                    };
+                    self.layer_manager.set_layer_visibility_ecs(&mut self.ecs_world, &layer_type, visible);
                 }
                 
                 let view_name = if self.display_manager.showing_top { "top" } else { "bottom" };
