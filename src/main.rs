@@ -112,40 +112,17 @@ impl DemoLensApp {
             view_mode: ecs::ViewMode::Normal, // Will be updated based on display manager
         });
         
-        // Manually call the ECS render system with world queries
-        let view_state = self.ecs_world.resource::<ecs::ViewStateResource>().clone();
-        let _render_config = self.ecs_world.resource::<ecs::RenderConfig>().clone();
+        // Run ECS systems to update entity states
+        ecs::run_ecs_systems(&mut self.ecs_world, &self.display_manager);
         
-        let mut layer_query = self.ecs_world.query::<(&ecs::GerberData, &ecs::Transform, &ecs::Visibility, &ecs::RenderProperties)>();
-        let mut layers: Vec<_> = layer_query.iter(&self.ecs_world).collect();
-        layers.sort_by_key(|(_, _, _, props)| props.z_order);
-        
-        // Render each visible layer
-        let config = gerber_viewer::RenderConfiguration::default();
-        let renderer = gerber_viewer::GerberRenderer::default();
-        
-        for (gerber_data, transform, visibility, render_props) in layers {
-            if !visibility.visible {
-                continue;
-            }
-            
-            let gerber_transform = gerber_viewer::GerberTransform {
-                rotation: transform.rotation,
-                mirroring: transform.mirroring.clone().into(),
-                origin: transform.origin.clone().into(),
-                offset: transform.position.clone().into(),
-                scale: transform.scale,
-            };
-            
-            renderer.paint_layer(
-                painter,
-                view_state.view_state,
-                &gerber_data.0,
-                render_props.color,
-                &config,
-                &gerber_transform,
-            );
-        }
+        // Use the new ECS render system
+        ecs::execute_render_system(
+            &mut self.ecs_world,
+            painter,
+            self.view_state,
+            &self.display_manager,
+            true, // Use enhanced rendering with quadrant support
+        );
     }
 
     pub fn new() -> Self {
