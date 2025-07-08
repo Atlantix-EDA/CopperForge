@@ -171,6 +171,10 @@ impl DemoLensApp {
         let mut ecs_world = ecs::setup_ecs_world();
         ecs::migrate_layers_to_ecs(&mut ecs_world, &layer_manager);
         
+        // Sync LayerManager with ECS entities
+        let mut layer_manager = layer_manager;
+        layer_manager.sync_with_ecs(&mut ecs_world);
+        
         let mut app = Self {
             layer_manager,
             gerber_layer,
