@@ -28,6 +28,7 @@ mod drc_operations;
 mod export;
 mod navigation;
 mod ui;
+mod ecs;
 
 use ui::{Tab, TabKind, TabViewer, initialize_and_show_banner, show_system_info};
 
@@ -67,6 +68,8 @@ pub struct DemoLensApp {
     // Project management
     pub project_manager: ProjectManager,
     
+    // ECS World
+    pub ecs_world: bevy_ecs::world::World,
 
     // Dock state
     dock_state: DockState<Tab>,
@@ -131,6 +134,7 @@ impl DemoLensApp {
             global_units_mils: false, // Default to mm
             grid_settings: GridSettings::default(),
             project_manager: ProjectManager::new(),
+            ecs_world: ecs::setup_ecs_world(),
             dock_state,
             config_path: dirs::config_dir()
                 .map(|d| d.join("kiforge"))
