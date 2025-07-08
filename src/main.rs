@@ -461,6 +461,9 @@ impl eframe::App for DemoLensApp {
             self.layer_manager.update_coordinates_from_display_ecs(&mut self.ecs_world, &self.display_manager);
         }
         
+        // Sync legacy layer changes to ECS world (for UI compatibility)
+        self.layer_manager.sync_legacy_to_ecs(&mut self.ecs_world);
+        
         // Handle hotkeys first
         ctx.input(|i| {
             // F key - flip board view (top/bottom)

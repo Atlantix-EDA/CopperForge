@@ -7,6 +7,25 @@ use crate::ecs::{self, Visibility};
 
 /// Manager for all layer-related functionality
 /// Now acts as a facade over ECS entities
+/// 
+/// # ECS Migration Strategy
+/// 
+/// This LayerManager maintains compatibility between legacy HashMap-based layer storage
+/// and the new ECS-based layer entities. During Phase 2 of the ECS migration:
+/// 
+/// - **Dual API**: Both legacy methods (e.g., `get_layer()`) and ECS methods (e.g., `get_layer_ecs()`) are available
+/// - **Bidirectional sync**: Changes in legacy HashMap are synced to ECS, and vice versa
+/// - **UI Compatibility**: Existing UI code continues to work by directly accessing `layers` HashMap
+/// 
+/// ## Sync Methods
+/// 
+/// - `sync_with_ecs()`: Populates `layer_entities` HashMap from ECS world (called at startup)
+/// - `sync_legacy_to_ecs()`: Updates ECS entities when legacy HashMap changes (called every frame)
+/// - `sync_ecs_to_legacy()`: Updates legacy HashMap when ECS entities change (for future use)
+/// 
+/// ## Migration Path
+/// 
+/// Phase 3 will gradually convert UI code to use ECS methods exclusively, then remove legacy methods.
 #[derive(Debug)]
 pub struct LayerManager {
     /// Map of layer types to their ECS entity IDs
@@ -442,6 +461,60 @@ impl LayerManager {
         let mut query = world.query::<(Entity, &crate::ecs::LayerInfo)>();
         for (entity, layer_info) in query.iter(world) {
             self.layer_entities.insert(layer_info.layer_type, entity);
+        }
+    }
+    
+    /// Sync legacy layer changes to ECS world - call this after UI modifications
+    pub fn sync_legacy_to_ecs(&mut self, world: &mut World) {
+        // For each layer in the legacy HashMap, ensure ECS entity exists and is synced
+        for (layer_type, layer_info) in &self.layers {
+            if let Some(ref gerber_layer) = layer_info.gerber_layer {
+                // Check if entity exists
+                if let Some(entity) = self.layer_entities.get(layer_type) {
+                    // Update existing entity
+                    if let Some(mut visibility) = world.get_mut::<crate::ecs::Visibility>(*entity) {
+                        visibility.visible = layer_info.visible;
+                    }
+                    if let Some(mut render_props) = world.get_mut::<crate::ecs::RenderProperties>(*entity) {
+                        render_props.color = layer_info.color;
+                    }
+                } else {
+                    // Create new entity for this layer
+                    let entity = crate::ecs::create_layer_from_info(world, layer_info, gerber_layer.clone());
+                    self.layer_entities.insert(*layer_type, entity);
+                }
+            }
+        }
+        
+        // Remove ECS entities that no longer exist in legacy HashMap
+        let mut entities_to_remove = Vec::new();
+        for (layer_type, entity) in &self.layer_entities {
+            if !self.layers.contains_key(layer_type) {
+                entities_to_remove.push((*layer_type, *entity));
+            }
+        }
+        
+        for (layer_type, entity) in entities_to_remove {
+            world.despawn(entity);
+            self.layer_entities.remove(&layer_type);
+        }
+    }
+    
+    /// Sync ECS changes back to legacy cache - call this after ECS systems run
+    pub fn sync_ecs_to_legacy(&mut self, world: &World) {
+        // Update legacy cache with ECS entity states
+        for (layer_type, entity) in &self.layer_entities {
+            if let Some(layer_info) = self.layers.get_mut(layer_type) {
+                // Update visibility from ECS
+                if let Some(visibility) = world.get::<crate::ecs::Visibility>(*entity) {
+                    layer_info.visible = visibility.visible;
+                }
+                
+                // Update color from ECS
+                if let Some(render_props) = world.get::<crate::ecs::RenderProperties>(*entity) {
+                    layer_info.color = render_props.color;
+                }
+            }
         }
     }
     
