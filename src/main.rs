@@ -457,7 +457,8 @@ impl eframe::App for DemoLensApp {
         
         // Only update coordinates when explicitly marked as dirty (not time-based)
         if self.layer_manager.coordinates_dirty {
-            self.layer_manager.update_coordinates_from_display(&self.display_manager);
+            // Use ECS-based coordinate updates for better sync
+            self.layer_manager.update_coordinates_from_display_ecs(&mut self.ecs_world, &self.display_manager);
         }
         
         // Handle hotkeys first
