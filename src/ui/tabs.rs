@@ -176,27 +176,27 @@ fn render_layer_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
     if ui.button(flip_text).clicked() {
         app.display_manager.showing_top = !app.display_manager.showing_top;
         
-        // Auto-toggle layer visibility based on flip state
+        // Auto-toggle layer visibility based on flip state (using ECS)
         for layer_type in crate::layer_operations::LayerType::all() {
-            if let Some(layer_info) = app.layer_manager.layers.get_mut(&layer_type) {
-                match layer_type {
-                    crate::layer_operations::LayerType::TopCopper |
-                    crate::layer_operations::LayerType::TopSilk |
-                    crate::layer_operations::LayerType::TopSoldermask |
-                    crate::layer_operations::LayerType::TopPaste => {
-                        layer_info.visible = app.display_manager.showing_top;
-                    },
-                    crate::layer_operations::LayerType::BottomCopper |
-                    crate::layer_operations::LayerType::BottomSilk |
-                    crate::layer_operations::LayerType::BottomSoldermask |
-                    crate::layer_operations::LayerType::BottomPaste => {
-                        layer_info.visible = !app.display_manager.showing_top;
-                    },
-                    crate::layer_operations::LayerType::MechanicalOutline => {
-                        // Leave outline visibility unchanged
-                    }
+            let visible = match layer_type {
+                crate::layer_operations::LayerType::TopCopper |
+                crate::layer_operations::LayerType::TopSilk |
+                crate::layer_operations::LayerType::TopSoldermask |
+                crate::layer_operations::LayerType::TopPaste => {
+                    app.display_manager.showing_top
+                },
+                crate::layer_operations::LayerType::BottomCopper |
+                crate::layer_operations::LayerType::BottomSilk |
+                crate::layer_operations::LayerType::BottomSoldermask |
+                crate::layer_operations::LayerType::BottomPaste => {
+                    !app.display_manager.showing_top
+                },
+                crate::layer_operations::LayerType::MechanicalOutline => {
+                    // Leave outline visibility unchanged, get current state from ECS
+                    app.layer_manager.get_layer_visibility(&app.ecs_world, &layer_type)
                 }
-            }
+            };
+            app.layer_manager.set_layer_visibility_ecs(&mut app.ecs_world, &layer_type, visible);
         }
         
         app.layer_manager.mark_coordinates_dirty();
@@ -466,25 +466,26 @@ fn render_gerber_content(ui: &mut egui::Ui, app: &mut DemoLensApp, viewport: &Re
 }
 
 fn render_layers_legacy(app: &mut DemoLensApp, painter: &Painter) {
-    // Get mechanical outline layer for quadrant view
+    // Get mechanical outline layer for quadrant view (using ECS)
     let mechanical_outline_layer = if app.display_manager.quadrant_view_enabled {
-        app.layer_manager.layers.get(&crate::layer_operations::LayerType::MechanicalOutline)
-            .and_then(|info| if info.visible { info.gerber_layer.as_ref() } else { None })
+        app.layer_manager.get_layer_ecs(&app.ecs_world, &crate::layer_operations::LayerType::MechanicalOutline)
+            .and_then(|(_entity, _layer_info, gerber_data, visibility)| {
+                if visibility.visible { Some(&gerber_data.0) } else { None }
+            })
     } else {
         None
     };
     
-    // Render all visible layers
+    // Render all visible layers (using ECS)
     for layer_type in crate::layer_operations::LayerType::all() {
-        if let Some(layer_info) = app.layer_manager.layers.get(&layer_type) {
-            if layer_info.visible {
+        if let Some((_entity, _layer_info, gerber_data, visibility)) = app.layer_manager.get_layer_ecs(&app.ecs_world, &layer_type) {
+            if visibility.visible {
                 // Skip mechanical outline in quadrant view (it will be rendered with each layer)
                 if app.display_manager.quadrant_view_enabled && layer_type == crate::layer_operations::LayerType::MechanicalOutline {
                     continue;
                 }
                 
-                let gerber_to_render = layer_info.gerber_layer.as_ref()
-                    .unwrap_or(&app.gerber_layer);
+                let gerber_to_render = &gerber_data.0;
                 
                 let quadrant_offset = app.display_manager.get_quadrant_offset(&layer_type);
                 
@@ -506,12 +507,17 @@ fn render_layers_legacy(app: &mut DemoLensApp, painter: &Painter) {
                     scale: 1.0,
                 };
                 
+                // Get layer color from ECS render properties
+                let layer_color = app.layer_manager.get_layer_render_properties_ecs(&app.ecs_world, &layer_type)
+                    .map(|props| props.color)
+                    .unwrap_or(layer_type.color());
+                
                 // Render main layer
                 GerberRenderer::default().paint_layer(
                     painter,
                     app.view_state,
                     gerber_to_render,
-                    layer_info.color,
+                    layer_color,
                     &config,
                     &transform,
                 );
@@ -658,29 +664,27 @@ fn render_drc_violations(app: &mut DemoLensApp, painter: &Painter) {
 }
 
 fn render_board_dimensions(app: &mut DemoLensApp, painter: &Painter, viewport: &Rect) {
-    if let Some(layer_info) = app.layer_manager.layers.get(&crate::layer_operations::LayerType::MechanicalOutline) {
-        if let Some(ref outline_layer) = layer_info.gerber_layer {
-            let bbox = outline_layer.bounding_box();
-            let width_mm = bbox.width();
-            let height_mm = bbox.height();
-            
-            let dimension_text = if app.global_units_mils {
-                let width_mils = width_mm / 0.0254;
-                let height_mils = height_mm / 0.0254;
-                format!("{:.0} x {:.0} mils", width_mils, height_mils)
-            } else {
-                format!("{:.1} x {:.1} mm", width_mm, height_mm)
-            };
-            
-            let text_pos = viewport.max - Vec2::new(10.0, 50.0);
-            painter.text(
-                text_pos,
-                egui::Align2::RIGHT_BOTTOM,
-                dimension_text,
-                egui::FontId::default(),
-                Color32::from_rgb(200, 200, 200),
-            );
-        }
+    if let Some((_entity, _layer_info, gerber_data, _visibility)) = app.layer_manager.get_layer_ecs(&app.ecs_world, &crate::layer_operations::LayerType::MechanicalOutline) {
+        let bbox = gerber_data.0.bounding_box();
+        let width_mm = bbox.width();
+        let height_mm = bbox.height();
+        
+        let dimension_text = if app.global_units_mils {
+            let width_mils = width_mm / 0.0254;
+            let height_mils = height_mm / 0.0254;
+            format!("{:.0} x {:.0} mils", width_mils, height_mils)
+        } else {
+            format!("{:.1} x {:.1} mm", width_mm, height_mm)
+        };
+        
+        let text_pos = viewport.max - Vec2::new(10.0, 50.0);
+        painter.text(
+            text_pos,
+            egui::Align2::RIGHT_BOTTOM,
+            dimension_text,
+            egui::FontId::default(),
+            Color32::from_rgb(200, 200, 200),
+        );
     }
 }
 

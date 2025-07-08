@@ -320,7 +320,7 @@ fn load_gerbers_into_viewer(app: &mut DemoLensApp, gerber_dir: &Path, logger: &R
     
     // Clear all existing layers and unassigned gerbers first
     logger.log_info("Clearing existing gerber layers...");
-    app.layer_manager.layers.clear();
+    app.layer_manager.clear_all_ecs(&mut app.ecs_world);
     app.layer_manager.unassigned_gerbers.clear();
     app.layer_manager.layer_assignments.clear();
     
@@ -364,20 +364,30 @@ fn load_gerbers_into_viewer(app: &mut DemoLensApp, gerber_dir: &Path, logger: &R
                                         });
                                         unassigned_count += 1;
                                     } else {
-                                        // Create layer info
+                                        // Create layer entity using ECS factory
+                                        let entity = crate::ecs::create_gerber_layer_entity(
+                                            &mut app.ecs_world,
+                                            detected_type,
+                                            gerber_layer.clone(),
+                                            Some(gerber_content.clone()),
+                                            Some(filename.clone().into()),
+                                            true, // All layers have their checkbox checked by default
+                                        );
+                                        
+                                        // Update layer manager tracking
+                                        app.layer_manager.layer_entities.insert(detected_type, entity);
+                                        app.layer_manager.layer_assignments.insert(filename.clone(), detected_type);
+                                        
+                                        // Also update legacy cache for backward compatibility
                                         let mut layer_info = LayerInfo::new(
                                             detected_type,
                                             Some(gerber_layer),
                                             Some(gerber_content.clone()),
-                                            true, // All layers have their checkbox checked by default
+                                            true,
                                         );
-                                        
-                                        // Initialize coordinates from the gerber layer
                                         layer_info.initialize_coordinates_from_gerber();
-                                        
-                                        // Insert into layers map
                                         app.layer_manager.layers.insert(detected_type, layer_info);
-                                        app.layer_manager.layer_assignments.insert(filename.clone(), detected_type);
+                                        
                                         loaded_count += 1;
                                         logger.log_info(&format!("Loaded {} as {:?}", filename, detected_type));
                                     }

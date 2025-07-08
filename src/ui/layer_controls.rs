@@ -15,12 +15,14 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
     
     // Quick controls
     ui.horizontal(|ui| {
-        // All On/Off toggle
-        let all_visible = app.layer_manager.layers.values().all(|layer| layer.visible);
+        // All On/Off toggle (using ECS)
+        let visible_layers = app.layer_manager.get_visible_layers_ecs(&app.ecs_world);
+        let total_layers = app.layer_manager.layer_count_ecs();
+        let all_visible = visible_layers.len() == total_layers && total_layers > 0;
         let mut all_on = all_visible;
         if ui.checkbox(&mut all_on, "All").clicked() {
-            for layer_info in app.layer_manager.layers.values_mut() {
-                layer_info.visible = all_on;
+            for layer_type in LayerType::all() {
+                app.layer_manager.set_layer_visibility_ecs(&mut app.ecs_world, &layer_type, all_on);
             }
             logger.log_info(if all_on { "All layers shown" } else { "All layers hidden" });
         }
@@ -28,49 +30,46 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
         ui.separator();
         
         if ui.button("Show All").clicked() {
-            for layer_info in app.layer_manager.layers.values_mut() {
-                layer_info.visible = true;
+            for layer_type in LayerType::all() {
+                app.layer_manager.set_layer_visibility_ecs(&mut app.ecs_world, &layer_type, true);
             }
             logger.log_info("All layers shown");
         }
         if ui.button("Hide All").clicked() {
-            for layer_info in app.layer_manager.layers.values_mut() {
-                layer_info.visible = false;
+            for layer_type in LayerType::all() {
+                app.layer_manager.set_layer_visibility_ecs(&mut app.ecs_world, &layer_type, false);
             }
             logger.log_info("All layers hidden");
         }
         if ui.button("TOP").clicked() {
             for layer_type in LayerType::all() {
-                if let Some(layer_info) = app.layer_manager.layers.get_mut(&layer_type) {
-                    layer_info.visible = match layer_type {
-                        LayerType::TopCopper | LayerType::TopSilk | LayerType::TopSoldermask | LayerType::TopPaste => true,
-                        LayerType::BottomCopper | LayerType::BottomSilk | LayerType::BottomSoldermask | LayerType::BottomPaste => false,
-                        LayerType::MechanicalOutline => true, // Keep outline visible
-                    };
-                }
+                let visible = match layer_type {
+                    LayerType::TopCopper | LayerType::TopSilk | LayerType::TopSoldermask | LayerType::TopPaste => true,
+                    LayerType::BottomCopper | LayerType::BottomSilk | LayerType::BottomSoldermask | LayerType::BottomPaste => false,
+                    LayerType::MechanicalOutline => true, // Keep outline visible
+                };
+                app.layer_manager.set_layer_visibility_ecs(&mut app.ecs_world, &layer_type, visible);
             }
             logger.log_info("Top layers shown");
         }
         if ui.button("BOTTOM").clicked() {
             for layer_type in LayerType::all() {
-                if let Some(layer_info) = app.layer_manager.layers.get_mut(&layer_type) {
-                    layer_info.visible = match layer_type {
-                        LayerType::TopCopper | LayerType::TopSilk | LayerType::TopSoldermask | LayerType::TopPaste => false,
-                        LayerType::BottomCopper | LayerType::BottomSilk | LayerType::BottomSoldermask | LayerType::BottomPaste => true,
-                        LayerType::MechanicalOutline => true, // Keep outline visible
-                    };
-                }
+                let visible = match layer_type {
+                    LayerType::TopCopper | LayerType::TopSilk | LayerType::TopSoldermask | LayerType::TopPaste => false,
+                    LayerType::BottomCopper | LayerType::BottomSilk | LayerType::BottomSoldermask | LayerType::BottomPaste => true,
+                    LayerType::MechanicalOutline => true, // Keep outline visible
+                };
+                app.layer_manager.set_layer_visibility_ecs(&mut app.ecs_world, &layer_type, visible);
             }
             logger.log_info("Bottom layers shown");
         }
         if ui.button("ASSEMBLY").clicked() {
             for layer_type in LayerType::all() {
-                if let Some(layer_info) = app.layer_manager.layers.get_mut(&layer_type) {
-                    layer_info.visible = match layer_type {
-                        LayerType::TopSilk | LayerType::BottomSilk | LayerType::MechanicalOutline => true,
-                        _ => false, // Hide copper, soldermask, and paste layers
-                    };
-                }
+                let visible = match layer_type {
+                    LayerType::TopSilk | LayerType::BottomSilk | LayerType::MechanicalOutline => true,
+                    _ => false, // Hide copper, soldermask, and paste layers
+                };
+                app.layer_manager.set_layer_visibility_ecs(&mut app.ecs_world, &layer_type, visible);
             }
             logger.log_info("Assembly layers shown (silkscreen + outline)");
         }
@@ -81,16 +80,31 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
     let mut show_only_layer: Option<LayerType> = None;
     let mut toggle_color_picker: Option<LayerType> = None;
     
+    // Track visibility changes to apply after reading
+    let mut visibility_changes = Vec::new();
+    let mut color_changes = Vec::new();
+    
     for layer_type in LayerType::all() {
-        if let Some(layer_info) = app.layer_manager.layers.get_mut(&layer_type) {
+        // Get layer data from ECS
+        if let Some((_entity, _layer_info, _gerber_data, visibility)) = app.layer_manager.get_layer_ecs(&app.ecs_world, &layer_type) {
+            let was_visible = visibility.visible;
+            let current_color = app.layer_manager.get_layer_render_properties_ecs(&app.ecs_world, &layer_type)
+                .map(|props| props.color)
+                .unwrap_or(layer_type.color());
+            
             // Show ALL layers regardless of top/bottom view
             ui.horizontal(|ui| {
-                let was_visible = layer_info.visible;
-                ui.checkbox(&mut layer_info.visible, "");
+                let mut current_visible = was_visible;
+                ui.checkbox(&mut current_visible, "");
+                
+                // Track visibility changes
+                if current_visible != was_visible {
+                    visibility_changes.push((layer_type, current_visible));
+                }
                 
                 // Color picker - clickable color indicator box
                 let response = ui.allocate_response(Vec2::new(20.0, 16.0), egui::Sense::click());
-                ui.painter().rect_filled(response.rect, 2.0, layer_info.color);
+                ui.painter().rect_filled(response.rect, 2.0, current_color);
                 
                 // Handle single and double clicks on color box
                 if response.double_clicked() {
@@ -113,22 +127,23 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
                         .resizable(false)
                         .show(ui.ctx(), |ui| {
                             let mut color_array = [
-                                layer_info.color.r() as f32 / 255.0,
-                                layer_info.color.g() as f32 / 255.0,
-                                layer_info.color.b() as f32 / 255.0,
+                                current_color.r() as f32 / 255.0,
+                                current_color.g() as f32 / 255.0,
+                                current_color.b() as f32 / 255.0,
                             ];
                             
                             if ui.color_edit_button_rgb(&mut color_array).changed() {
-                                layer_info.color = egui::Color32::from_rgb(
+                                let new_color = egui::Color32::from_rgb(
                                     (color_array[0] * 255.0) as u8,
                                     (color_array[1] * 255.0) as u8,
                                     (color_array[2] * 255.0) as u8,
                                 );
+                                color_changes.push((layer_type, new_color));
                             }
                             
                             ui.horizontal(|ui| {
                                 if ui.button("Reset to Default").clicked() {
-                                    layer_info.color = layer_type.color();
+                                    color_changes.push((layer_type, layer_type.color()));
                                 }
                                 if ui.button("Close").clicked() {
                                     ui.ctx().memory_mut(|mem| {
@@ -141,22 +156,31 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
                 
                 ui.label(layer_type.display_name());
                 
-                if was_visible != layer_info.visible {
+                if current_visible != was_visible {
                     logger.log_info(&format!("{} layer {}", 
                         layer_type.display_name(),
-                        if layer_info.visible { "shown" } else { "hidden" }
+                        if current_visible { "shown" } else { "hidden" }
                     ));
                 }
             });
         }
     }
     
+    // Apply visibility changes
+    for (layer_type, visible) in visibility_changes {
+        app.layer_manager.set_layer_visibility_ecs(&mut app.ecs_world, &layer_type, visible);
+    }
+    
+    // Apply color changes
+    for (layer_type, color) in color_changes {
+        app.layer_manager.update_layer_render_properties_ecs(&mut app.ecs_world, &layer_type, color);
+    }
+    
     // Handle deferred actions after the UI loop
     if let Some(target_layer) = show_only_layer {
         for layer_type_iter in LayerType::all() {
-            if let Some(layer_info_iter) = app.layer_manager.layers.get_mut(&layer_type_iter) {
-                layer_info_iter.visible = layer_type_iter == target_layer;
-            }
+            let visible = layer_type_iter == target_layer;
+            app.layer_manager.set_layer_visibility_ecs(&mut app.ecs_world, &layer_type_iter, visible);
         }
         logger.log_info(&format!("Showing only {} layer", target_layer.display_name()));
     }
@@ -195,7 +219,7 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
                     .show_ui(ui, |ui| {
                         for layer_type in LayerType::all() {
                             // Check if this layer type is already assigned to another file
-                            let already_assigned = app.layer_manager.layers.contains_key(&layer_type);
+                            let already_assigned = app.layer_manager.get_layer_entity(&layer_type).is_some();
                             
                             if already_assigned {
                                 ui.add_enabled(false, egui::SelectableLabel::new(
@@ -215,19 +239,30 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
             if let Some(unassigned_idx) = app.layer_manager.unassigned_gerbers.iter().position(|u| u.filename == filename) {
                 let unassigned = app.layer_manager.unassigned_gerbers.remove(unassigned_idx);
                 
-                // Create layer info from unassigned gerber
+                // Create layer entity using ECS factory
+                let entity = crate::ecs::create_gerber_layer_entity(
+                    &mut app.ecs_world,
+                    layer_type,
+                    unassigned.parsed_layer.clone(),
+                    Some(unassigned.content.clone()),
+                    Some(filename.clone().into()),
+                    true,
+                );
+                
+                // Update layer manager tracking
+                app.layer_manager.layer_entities.insert(layer_type, entity);
+                app.layer_manager.layer_assignments.insert(filename.clone(), layer_type);
+                
+                // Also update legacy cache for backward compatibility
                 let mut layer_info = crate::layer_operations::LayerInfo::new(
                     layer_type,
                     Some(unassigned.parsed_layer),
                     Some(unassigned.content),
                     true,
                 );
-                
-                // Initialize coordinates from the gerber layer
                 layer_info.initialize_coordinates_from_gerber();
-                
                 app.layer_manager.layers.insert(layer_type, layer_info);
-                app.layer_manager.layer_assignments.insert(filename.clone(), layer_type);
+                
                 logger.log_info(&format!("Assigned {} to {:?}", filename, layer_type));
                 app.needs_initial_view = true;
             }
@@ -240,7 +275,7 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
                 
                 for unassigned in &app.layer_manager.unassigned_gerbers {
                     if let Some(detected_type) = app.layer_manager.layer_detector.detect_layer_type(&unassigned.filename) {
-                        if !app.layer_manager.layers.contains_key(&detected_type) {
+                        if app.layer_manager.get_layer_entity(&detected_type).is_none() {
                             newly_assigned.push((unassigned.filename.clone(), detected_type));
                         }
                     }
@@ -250,19 +285,31 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
                     if let Some(unassigned_idx) = app.layer_manager.unassigned_gerbers.iter().position(|u| &u.filename == filename) {
                         let unassigned = app.layer_manager.unassigned_gerbers.remove(unassigned_idx);
                         
+                        // Create layer entity using ECS factory
+                        let entity = crate::ecs::create_gerber_layer_entity(
+                            &mut app.ecs_world,
+                            *layer_type,
+                            unassigned.parsed_layer.clone(),
+                            Some(unassigned.content.clone()),
+                            Some(filename.clone().into()),
+                            true,
+                        );
+                        
+                        // Update layer manager tracking
+                        app.layer_manager.layer_entities.insert(*layer_type, entity);
+                        app.layer_manager.layer_assignments.insert(filename.clone(), *layer_type);
+                        
+                        // Also update legacy cache for backward compatibility
                         let mut layer_info = crate::layer_operations::LayerInfo::new(
                             *layer_type,
                             Some(unassigned.parsed_layer),
                             Some(unassigned.content),
                             true,
                         );
-                        
-                        // Initialize coordinates from the gerber layer
                         layer_info.initialize_coordinates_from_gerber();
-                        
                         app.layer_manager.layers.insert(*layer_type, layer_info);
+                        
                         logger.log_info(&format!("Auto-detected {} as {:?}", filename, layer_type));
-                        app.layer_manager.layer_assignments.insert(filename.clone(), *layer_type);
                     }
                 }
                 
