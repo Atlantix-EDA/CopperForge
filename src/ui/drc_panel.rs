@@ -503,7 +503,7 @@ use bevy_ecs::world::World;
 fn convert_ecs_to_legacy_layers(layer_manager: &crate::layer_operations::LayerManager, world: &World) -> HashMap<LayerType, LayerInfo> {
     let mut legacy_layers = HashMap::new();
     
-    for (layer_type, entity) in &layer_manager.layer_entities {
+    for (layer_type, _entity) in &layer_manager.layer_entities {
         if let Some((_entity, layer_info, gerber_data, visibility)) = layer_manager.get_layer_ecs(world, layer_type) {
             // Create legacy LayerInfo from ECS data
             let mut legacy_layer_info = LayerInfo::new(

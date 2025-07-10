@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use crate::DemoLensApp;
 use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState};
 use egui_lens::LogColors;
@@ -9,13 +10,11 @@ use egui_mobius::types::Value;
 use egui_extras::TableBuilder;
 use kicad_ecs::prelude::*;
 use kicad_ecs::client::{KiCadClient, FootprintData};
-use std::thread;
 use std::time::Duration;
 use std::sync::Arc;
-use bevy_ecs::prelude::*;
 
 /// Component data for the BOM table
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct BomComponent {
     pub item_number: String,
     pub reference: String,
@@ -128,7 +127,7 @@ impl BomPanelState {
             components,
             connection_status,
             last_update,
-            auto_refresh: Value::new(true),
+            auto_refresh: Value::new(false),
             refresh_interval: Value::new(Duration::from_millis(5000)),
             filter_text: Value::new(String::new()),
             signal_to_backend,
@@ -305,7 +304,7 @@ fn try_fetch_components_blocking() -> Result<Vec<BomComponent>, String> {
         // Create a simple async executor
         let rt = futures::executor::block_on(async {
             // Get board info
-            let board = client.get_board().await.map_err(|e| format!("Failed to get board: {}", e))?;
+            let _board = client.get_board().await.map_err(|e| format!("Failed to get board: {}", e))?;
             
             // Get footprints  
             let footprints = client.get_footprints().await.map_err(|e| format!("Failed to get footprints: {}", e))?;
@@ -378,7 +377,7 @@ pub fn show_bom_panel(
     logger_state: &Dynamic<ReactiveEventLoggerState>,
     log_colors: &Dynamic<LogColors>,
 ) {
-    let _logger = ReactiveEventLogger::with_colors(logger_state, log_colors);
+    let logger = ReactiveEventLogger::with_colors(logger_state, log_colors);
     
     // Initialize BOM state if not already done
     if app.bom_state.is_none() {
@@ -394,6 +393,16 @@ pub fn show_bom_panel(
         });
         
         app.bom_state = Some(bom_state);
+        
+        // Check for pending BOM components loaded from a project
+        if let Some(pending_components) = app.pending_bom_components.take() {
+            if let Some(ref mut bom_state) = app.bom_state {
+                let mut components = bom_state.components.lock().unwrap();
+                *components = pending_components;
+                *bom_state.last_update.lock().unwrap() = std::time::Instant::now();
+                logger.log_info(&format!("Loaded {} pending BOM components from project", components.len()));
+            }
+        }
     }
     
     if let Some(bom_state) = &mut app.bom_state {
@@ -489,7 +498,7 @@ pub fn show_bom_panel(
         if matches!(connection_status, ConnectionStatus::Connected) {
             let last_update = bom_state.last_update.lock().unwrap();
             let elapsed = last_update.elapsed();
-            ui.label(format!("Last updated: {:.1}s ago", elapsed.as_secs_f32()));
+            ui.label(format!("Last updated: {}s ago", elapsed.as_secs()));
         }
         
         ui.separator();

@@ -9,6 +9,7 @@ pub mod about_panel;
 pub mod tabs;
 pub mod selection;
 pub mod bom_panel_v2;
+pub mod project_manager_panel;
 
 // Re-export the show functions for each panel
 pub use layer_controls::show_layers_panel;

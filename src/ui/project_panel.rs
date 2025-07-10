@@ -1,5 +1,6 @@
 use crate::{DemoLensApp, LayerInfo};
 use crate::project::ProjectState;
+use crate::project_manager::ProjectManagerState;
 use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
 use std::path::{Path, PathBuf};
@@ -35,6 +36,23 @@ pub fn show_project_panel<'a>(
 
     ui.add_space(10.0);
 
+    // Project Database Section - only if visible
+    let show_database = ui.ctx().memory(|mem| 
+        mem.data.get_temp::<bool>(egui::Id::new("show_project_database")).unwrap_or(true)
+    );
+    
+    if ui.button(if show_database { "▼ Project Database" } else { "▶ Project Database" }).clicked() {
+        ui.ctx().memory_mut(|mem| {
+            mem.data.insert_temp(egui::Id::new("show_project_database"), !show_database);
+        });
+    }
+    
+    if show_database {
+        show_project_database_section(ui, app, &logger);
+    }
+
+    ui.add_space(10.0);
+
     // Auto-generation settings
     ui.horizontal(|ui| {
         ui.checkbox(&mut app.project_manager.auto_generate_on_startup, "Auto-generate on startup");
@@ -45,7 +63,20 @@ pub fn show_project_panel<'a>(
 
     ui.add_space(10.0);
 
-    ui.label("KiCad PCB File:");
+    ui.horizontal(|ui| {
+        ui.label("KiCad PCB File:");
+        
+        // Add clear button to reset state
+        if ui.small_button("Clear").clicked() {
+            app.project_manager.state = ProjectState::NoProject;
+            // Also clear current project in database state
+            if let Some(ref mut manager_state) = app.project_manager_state {
+                manager_state.current_project = None;
+                manager_state.selected_project_id = None;
+            }
+            logger.log_info("Cleared PCB file selection and current project");
+        }
+    });
     ui.add_space(5.0);
 
     // Get current PCB path from state
@@ -426,4 +457,285 @@ fn load_gerbers_into_viewer(app: &mut DemoLensApp, gerber_dir: &Path, logger: &R
     } else {
         logger.log_error("No gerber files were found");
     }
+}
+
+fn show_project_database_section(ui: &mut egui::Ui, app: &mut DemoLensApp, logger: &ReactiveEventLogger) {
+    ui.group(|ui| {
+        ui.label("💾 Project Database");
+        ui.separator();
+        
+        // Initialize project manager state if not already done
+        if app.project_manager_state.is_none() {
+            let mut state = ProjectManagerState::default();
+            
+            // Initialize database
+            let db_path = app.config_path.join("projects.db");
+            if let Err(e) = state.initialize_database(&db_path) {
+                logger.log_error(&format!("Failed to initialize project database: {}", e));
+            }
+            
+            app.project_manager_state = Some(state);
+        }
+        
+        if let Some(ref mut manager_state) = app.project_manager_state {
+            // Handle any errors
+            if let Some(error) = manager_state.last_error.take() {
+                logger.log_error(&error);
+            }
+            
+            // Top controls
+            ui.horizontal(|ui| {
+                // Current project info
+                let current_project_name = manager_state.current_project
+                    .as_ref()
+                    .map(|p| p.metadata.name.clone());
+                
+                if let Some(ref project_name) = current_project_name {
+                    ui.label(format!("Current: {}", project_name));
+                    
+                    // Save BOM button
+                    if ui.button("💾 Save BOM").clicked() {
+                        if let Some(ref bom_state) = app.bom_state {
+                            let components = bom_state.components.lock().unwrap().clone();
+                            if let Err(e) = manager_state.update_project_bom(components) {
+                                manager_state.last_error = Some(format!("Failed to save BOM: {}", e));
+                            } else {
+                                logger.log_info(&format!("Saved BOM to project: {}", project_name));
+                            }
+                        }
+                    }
+                } else {
+                    ui.label("No project loaded");
+                }
+                
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("➕ New").clicked() {
+                        // Toggle create mode instead of showing modal
+                        manager_state.show_create_dialog = !manager_state.show_create_dialog;
+                    }
+                });
+            });
+            
+            ui.add_space(5.0);
+            
+            // Project list (scrollable)
+            if !manager_state.project_list.is_empty() {
+                ui.label("Projects:");
+                
+                // Get current project ID without cloning entire list
+                let current_project_id = manager_state.current_project
+                    .as_ref()
+                    .map(|p| p.metadata.id.clone());
+                
+                // Grouped scrollable area for projects  
+                ui.group(|ui| {
+                    egui::ScrollArea::vertical()
+                        .max_height(120.0)
+                        .min_scrolled_height(60.0)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                        for project in &manager_state.project_list {
+                    ui.horizontal(|ui| {
+                        let is_current = current_project_id
+                            .as_ref()
+                            .map(|id| id == &project.id)
+                            .unwrap_or(false);
+                        
+                        let text = if is_current {
+                            egui::RichText::new(&project.name).strong().color(egui::Color32::LIGHT_BLUE)
+                        } else {
+                            egui::RichText::new(&project.name)
+                        };
+                        
+                        ui.label(text);
+                        
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            // Delete button
+                            if ui.small_button("🗑️").on_hover_text("Delete this project").clicked() {
+                                ui.ctx().memory_mut(|mem| {
+                                    mem.data.insert_temp(egui::Id::new("delete_project_id"), project.id.clone());
+                                    mem.data.insert_temp(egui::Id::new("delete_project_name"), project.name.clone());
+                                });
+                            }
+                            
+                            // Edit button
+                            if ui.small_button("✏️").on_hover_text("Edit project details").clicked() {
+                                ui.ctx().memory_mut(|mem| {
+                                    mem.data.insert_temp(egui::Id::new("edit_project_id"), project.id.clone());
+                                });
+                            }
+                            
+                            // Load button
+                            if ui.small_button("📂").on_hover_text("Load this project").clicked() {
+                                ui.ctx().memory_mut(|mem| {
+                                    mem.data.insert_temp(egui::Id::new("load_project_id"), project.id.clone());
+                                    mem.data.insert_temp(egui::Id::new("load_project_name"), project.name.clone());
+                                });
+                            }
+                        });
+                    });
+                        }
+                    });
+                });
+                
+                // Handle project actions
+                let load_project_id = ui.ctx().memory(|mem| {
+                    mem.data.get_temp::<String>(egui::Id::new("load_project_id"))
+                });
+                let load_project_name = ui.ctx().memory(|mem| {
+                    mem.data.get_temp::<String>(egui::Id::new("load_project_name"))
+                });
+                let delete_project_id = ui.ctx().memory(|mem| {
+                    mem.data.get_temp::<String>(egui::Id::new("delete_project_id"))
+                });
+                let delete_project_name = ui.ctx().memory(|mem| {
+                    mem.data.get_temp::<String>(egui::Id::new("delete_project_name"))
+                });
+                
+                // Handle load project
+                if let (Some(project_id), Some(project_name)) = (load_project_id, load_project_name) {
+                    ui.ctx().memory_mut(|mem| {
+                        mem.data.remove::<String>(egui::Id::new("load_project_id"));
+                        mem.data.remove::<String>(egui::Id::new("load_project_name"));
+                    });
+                    
+                    if let Err(e) = manager_state.load_project(&project_id) {
+                        manager_state.last_error = Some(format!("Failed to load project: {}", e));
+                    } else {
+                        // Successfully loaded project data, now restore the project state
+                        if let Some(ref project) = manager_state.current_project {
+                            // 1. Set the PCB file path in the project manager
+                            app.project_manager.state = crate::project::ProjectState::PcbSelected { 
+                                pcb_path: project.metadata.pcb_file_path.clone() 
+                            };
+                            
+                            // 2. Restore BOM components if available
+                            if !project.bom_components.is_empty() {
+                                // Note: BOM state initialization happens in show_bom_panel when the BOM tab is first shown
+                                // If BOM state exists, restore the components
+                                if let Some(ref mut bom_state) = app.bom_state {
+                                    let mut components = bom_state.components.lock().unwrap();
+                                    *components = project.bom_components.clone();
+                                    logger.log_info(&format!("Restored {} BOM components", project.bom_components.len()));
+                                } else {
+                                    // Store pending BOM components to be loaded when BOM tab is opened
+                                    app.pending_bom_components = Some(project.bom_components.clone());
+                                    logger.log_info(&format!("BOM state not initialized yet. {} components stored and will be loaded when BOM tab is opened.", project.bom_components.len()));
+                                }
+                            }
+                            
+                            // 3. Log PCB file status
+                            if project.metadata.pcb_file_path.exists() {
+                                logger.log_info(&format!("PCB file found at: {}. Click 'Generate Gerbers' to load gerbers.", project.metadata.pcb_file_path.display()));
+                            } else {
+                                logger.log_warning(&format!("PCB file not found at: {}", project.metadata.pcb_file_path.display()));
+                            }
+                            
+                            logger.log_info(&format!("✅ Loaded project: {} with PCB file: {}", 
+                                project_name, 
+                                project.metadata.pcb_file_path.display()
+                            ));
+                        }
+                    }
+                }
+                
+                // Handle delete project
+                if let (Some(project_id), Some(project_name)) = (delete_project_id, delete_project_name) {
+                    ui.ctx().memory_mut(|mem| {
+                        mem.data.remove::<String>(egui::Id::new("delete_project_id"));
+                        mem.data.remove::<String>(egui::Id::new("delete_project_name"));
+                    });
+                    
+                    if let Err(e) = manager_state.delete_project(&project_id) {
+                        manager_state.last_error = Some(format!("Failed to delete project: {}", e));
+                    } else {
+                        logger.log_info(&format!("Deleted project: {}", project_name));
+                    }
+                }
+            }
+            
+            // Inline create project section
+            if manager_state.show_create_dialog {
+                ui.separator();
+                ui.group(|ui| {
+                    ui.label("🆕 Create New Project");
+                    ui.separator();
+                    
+                    ui.horizontal(|ui| {
+                        ui.label("Name:");
+                        ui.text_edit_singleline(&mut manager_state.new_project_name);
+                    });
+                    
+                    ui.horizontal(|ui| {
+                        ui.label("Description:");
+                        ui.text_edit_singleline(&mut manager_state.new_project_description);
+                    });
+                    
+                    ui.horizontal(|ui| {
+                        ui.label("Tags:");
+                        ui.text_edit_singleline(&mut manager_state.new_project_tags);
+                    });
+                    
+                    ui.add_space(5.0);
+                    
+                    ui.horizontal(|ui| {
+                        if ui.button("✅ Create").clicked() {
+                            if !manager_state.new_project_name.trim().is_empty() {
+                                // Get PCB file path
+                                if let Some(pcb_path) = match &app.project_manager.state {
+                                    crate::project::ProjectState::Ready { pcb_path, .. } |
+                                    crate::project::ProjectState::PcbSelected { pcb_path } |
+                                    crate::project::ProjectState::GeneratingGerbers { pcb_path } |
+                                    crate::project::ProjectState::GerbersGenerated { pcb_path, .. } |
+                                    crate::project::ProjectState::LoadingGerbers { pcb_path, .. } => {
+                                        Some(pcb_path.clone())
+                                    },
+                                    _ => None,
+                                } {
+                                    // Parse tags
+                                    let tags: Vec<String> = manager_state.new_project_tags
+                                        .split(',')
+                                        .map(|s| s.trim().to_string())
+                                        .filter(|s| !s.is_empty())
+                                        .collect();
+                                    
+                                    // Get BOM components
+                                    let bom_components = if let Some(ref bom_state) = app.bom_state {
+                                        bom_state.components.lock().unwrap().clone()
+                                    } else {
+                                        Vec::new()
+                                    };
+                                    
+                                    // Create project
+                                    match manager_state.create_project(
+                                        manager_state.new_project_name.clone(),
+                                        manager_state.new_project_description.clone(),
+                                        pcb_path,
+                                        tags,
+                                        bom_components,
+                                    ) {
+                                        Ok(project_id) => {
+                                            logger.log_info(&format!("Created project: {} (ID: {})", manager_state.new_project_name, project_id));
+                                            manager_state.reset_create_dialog();
+                                        }
+                                        Err(e) => {
+                                            manager_state.last_error = Some(format!("Failed to create project: {}", e));
+                                        }
+                                    }
+                                } else {
+                                    manager_state.last_error = Some("Please select a PCB file first".to_string());
+                                }
+                            } else {
+                                manager_state.last_error = Some("Project name cannot be empty".to_string());
+                            }
+                        }
+                        
+                        if ui.button("❌ Cancel").clicked() {
+                            manager_state.reset_create_dialog();
+                        }
+                    });
+                });
+            }
+        }
+    });
 }

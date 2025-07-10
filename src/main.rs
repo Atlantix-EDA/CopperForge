@@ -29,6 +29,7 @@ mod export;
 mod navigation;
 mod ui;
 mod ecs;
+mod project_manager;
 
 use ui::{Tab, TabKind, TabViewer, initialize_and_show_banner, show_system_info};
 
@@ -95,6 +96,12 @@ pub struct DemoLensApp {
     
     // BOM panel state
     pub bom_state: Option<ui::BomPanelState>,
+    
+    // Pending BOM components (loaded from project before BOM tab is opened)
+    pub pending_bom_components: Option<Vec<ui::bom_panel_v2::BomComponent>>,
+    
+    // Project manager state
+    pub project_manager_state: Option<project_manager::ProjectManagerState>,
 }
 
 impl Drop for DemoLensApp {
@@ -182,6 +189,8 @@ impl DemoLensApp {
             setting_origin_mode: false,
             use_ecs_rendering: false, // Default to old rendering for compatibility
             bom_state: None,
+            pending_bom_components: None,
+            project_manager_state: None,
         };
         
         if let Ok(project_config) = ProjectConfig::load_from_file(&app.config_path) {
@@ -449,10 +458,13 @@ impl eframe::App for DemoLensApp {
         
         // No longer need legacy sync - UI uses ECS directly
         
-        // Handle hotkeys first
-        ctx.input(|i| {
-            // F key - flip board view (top/bottom)
-            if i.key_pressed(egui::Key::F) {
+        // Handle hotkeys first (but only if no text field has focus)
+        let text_input_active = ctx.memory(|mem| mem.focused().is_some());
+        
+        if !text_input_active {
+            ctx.input(|i| {
+                // F key - flip board view (top/bottom)
+                if i.key_pressed(egui::Key::F) {
                 self.display_manager.showing_top = !self.display_manager.showing_top;
                 
                 // Auto-toggle layer visibility based on flip state using ECS
@@ -509,8 +521,9 @@ impl eframe::App for DemoLensApp {
                     project::constants::LOG_TYPE_ROTATION,
                     &format!("Rotated board to {:.0}° (R key)", self.rotation_degrees)
                 );
-            }
-        });
+                }
+            });
+        }
         
         // Project Ribbon at the top
         egui::TopBottomPanel::top("project_ribbon").show(ctx, |ui| {

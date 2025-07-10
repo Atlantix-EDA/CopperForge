@@ -1,6 +1,7 @@
 // Display-related constants have been moved to DisplayManager defaults
 
 // radius of the markers, in gerber coordinates
+#[allow(dead_code)]
 pub const MARKER_RADIUS: f32 = 2.5;
 
 // Custom log types for different event categories

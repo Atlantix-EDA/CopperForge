@@ -1,5 +1,4 @@
 use crate::DemoLensApp;
-use crate::project::constants::*;
 use crate::ui;
 
 use eframe::emath::{Rect, Vec2};
