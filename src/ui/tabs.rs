@@ -28,6 +28,7 @@ pub enum TabKind {
     EventLog,
     Project,
     Settings,
+    BOM,
 }
 
 pub struct TabParams<'a> {
@@ -63,6 +64,7 @@ impl Tab {
             TabKind::EventLog => "Event Log".to_string(),
             TabKind::Project => "Project".to_string(),
             TabKind::Settings => "Settings".to_string(),
+            TabKind::BOM => "BOM".to_string(),
         }
     }
 
@@ -99,6 +101,11 @@ impl Tab {
                 let logger_state_clone = params.app.logger_state.clone();
                 let log_colors_clone = params.app.log_colors.clone();
                 ui::show_settings_panel(ui, params.app, &logger_state_clone, &log_colors_clone);
+            }
+            TabKind::BOM => {
+                let logger_state_clone = params.app.logger_state.clone();
+                let log_colors_clone = params.app.log_colors.clone();
+                ui::show_bom_panel(ui, params.app, &logger_state_clone, &log_colors_clone);
             }
         }
     }
@@ -263,6 +270,30 @@ fn render_transform_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
             &format!("Y mirroring {}", if app.display_manager.mirroring.y { "enabled" } else { "disabled" })
         );
     }
+    
+    ui.separator();
+    
+    // Origin setting button
+    let origin_set = app.display_manager.design_offset.x != 0.0 || app.display_manager.design_offset.y != 0.0;
+    if origin_set {
+        if ui.button("🎯 Reset Origin").clicked() {
+            app.display_manager.design_offset = crate::display::VectorOffset { x: 0.0, y: 0.0 };
+            
+            let logger_state = app.logger_state.clone();
+            let log_colors = app.log_colors.clone();
+            let logger = ReactiveEventLogger::with_colors(&logger_state, &log_colors);
+            logger.log_info("Reset origin to (0, 0)");
+        }
+    } else {
+        if ui.button("🎯 Set Origin").clicked() {
+            app.setting_origin_mode = true;
+            
+            let logger_state = app.logger_state.clone();
+            let log_colors = app.log_colors.clone();
+            let logger = ReactiveEventLogger::with_colors(&logger_state, &log_colors);
+            logger.log_info("Click on the PCB to set the origin");
+        }
+    }
 }
 
 fn render_grid_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
@@ -349,11 +380,28 @@ fn handle_viewport_interactions(ui: &mut egui::Ui, app: &mut DemoLensApp, viewpo
         app.ui_state.origin_screen_pos = viewport_center;
         app.ui_state.center_screen_pos = viewport_center;
         
-        // Update cursor coordinates
+        // Update cursor coordinates using raw transform (not affected by design_offset)
         if let Some(cursor_pos) = ui.input(|i| i.pointer.hover_pos()) {
-            let relative_x = (cursor_pos.x - viewport_center.x) / app.view_state.scale;
-            let relative_y = -(cursor_pos.y - viewport_center.y) / app.view_state.scale;
-            app.ui_state.cursor_gerber_coords = Some(nalgebra::Point2::new(relative_x as f64, relative_y as f64));
+            // Use the original gerber coordinate system for origin setting
+            let raw_gerber_pos = app.view_state.screen_to_gerber_coords(cursor_pos);
+            app.ui_state.cursor_gerber_coords = Some(raw_gerber_pos);
+        }
+        
+        // Show visual feedback when in origin setting mode
+        if app.setting_origin_mode {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+            
+            // Draw preview text at cursor
+            if let Some(mouse_pos) = ui.input(|i| i.pointer.hover_pos()) {
+                let painter = ui.painter();
+                painter.text(
+                    mouse_pos + Vec2::new(20.0, -20.0),
+                    egui::Align2::LEFT_BOTTOM,
+                    "Click to set origin",
+                    egui::FontId::default(),
+                    Color32::YELLOW,
+                );
+            }
         }
         
         // Handle origin setting
@@ -364,7 +412,11 @@ fn handle_viewport_interactions(ui: &mut egui::Ui, app: &mut DemoLensApp, viewpo
                     y: gerber_coords.y,
                 };
                 app.setting_origin_mode = false;
-                app.needs_initial_view = true;
+                
+                let logger_state = app.logger_state.clone();
+                let log_colors = app.log_colors.clone();
+                let logger = ReactiveEventLogger::with_colors(&logger_state, &log_colors);
+                logger.log_info(&format!("Set origin to ({:.2}, {:.2}) mm", gerber_coords.x, gerber_coords.y));
             }
         }
     }
@@ -728,10 +780,11 @@ fn render_cursor_info(ui: &mut egui::Ui, app: &mut DemoLensApp, painter: &Painte
         if viewport.contains(mouse_screen_pos) {
             let gerber_pos = app.view_state.screen_to_gerber_coords(mouse_screen_pos);
             
-            let origin = Vector2::from(app.display_manager.center_offset.clone()) - Vector2::from(app.display_manager.design_offset.clone());
+            // Apply the design_offset as a simple coordinate offset for display
+            // The design_offset is where we want (0,0) to be, so we subtract it from current position
             let adjusted_pos = Position::new(
-                gerber_pos.x - origin.to_position().x,
-                gerber_pos.y - origin.to_position().y
+                gerber_pos.x - app.display_manager.design_offset.x,
+                gerber_pos.y - app.display_manager.design_offset.y
             );
             
             let cursor_text = if app.global_units_mils {
@@ -741,6 +794,7 @@ fn render_cursor_info(ui: &mut egui::Ui, app: &mut DemoLensApp, painter: &Painte
             } else {
                 format!("({:.2}, {:.2}) mm", adjusted_pos.x, adjusted_pos.y)
             };
+            
             
             let text_offset = Vec2::new(15.0, -15.0);
             let cursor_text_pos = mouse_screen_pos + text_offset;

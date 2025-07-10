@@ -92,6 +92,9 @@ pub struct DemoLensApp {
     
     // ECS rendering toggle (for testing)
     pub use_ecs_rendering: bool,
+    
+    // BOM panel state
+    pub bom_state: Option<ui::BomPanelState>,
 }
 
 impl Drop for DemoLensApp {
@@ -178,6 +181,7 @@ impl DemoLensApp {
             show_about_modal: false,
             setting_origin_mode: false,
             use_ecs_rendering: false, // Default to old rendering for compatibility
+            bom_state: None,
         };
         
         if let Ok(project_config) = ProjectConfig::load_from_file(&app.config_path) {
@@ -394,6 +398,7 @@ impl DemoLensApp {
         let settings_tab = Tab::new(TabKind::Settings, SurfaceIndex::main(), NodeIndex(3));
         let gerber_tab = Tab::new(TabKind::GerberView, SurfaceIndex::main(), NodeIndex(4));
         let log_tab = Tab::new(TabKind::EventLog, SurfaceIndex::main(), NodeIndex(5));
+        let bom_tab = Tab::new(TabKind::BOM, SurfaceIndex::main(), NodeIndex(6));
         
         let mut dock_state = DockState::new(vec![gerber_tab]);
         let surface = dock_state.main_surface_mut();
@@ -401,7 +406,7 @@ impl DemoLensApp {
         let [left, _right] = surface.split_left(
             NodeIndex::root(),
             0.3,
-            vec![view_settings_tab, drc_tab, project_tab, settings_tab],
+            vec![view_settings_tab, drc_tab, project_tab, settings_tab, bom_tab],
         );
         
         surface.split_below(left, 0.7, vec![log_tab]);
@@ -627,7 +632,7 @@ impl eframe::App for DemoLensApp {
         
         DockArea::new(&mut dock_state)
             .style(style)
-            .show_add_buttons(false)
+            .show_add_buttons(true)
             .show_close_buttons(true)
             .show(ctx, &mut tab_viewer);
             

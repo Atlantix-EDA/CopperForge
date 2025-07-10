@@ -8,6 +8,7 @@ pub mod settings_panel;
 pub mod about_panel;
 pub mod tabs;
 pub mod selection;
+pub mod bom_panel_v2;
 
 // Re-export the show functions for each panel
 pub use layer_controls::show_layers_panel;
@@ -16,6 +17,7 @@ pub use grid_settings::show_grid_panel;
 pub use project_panel::show_project_panel;
 pub use settings_panel::show_settings_panel;
 pub use about_panel::AboutPanel;
+pub use bom_panel_v2::{show_bom_panel, BomPanelState};
 
 // Re-export tab-related types
 pub use tabs::{Tab, TabKind, TabViewer};
