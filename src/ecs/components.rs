@@ -1,5 +1,5 @@
 use bevy_ecs::prelude::*;
-use gerber_viewer::{GerberLayer, BoundingBox};
+use gerber_viewer::{GerberLayer, BoundingBox, GerberImageTransform};
 use crate::layer_operations::LayerType;
 use crate::display::manager::MirroringSettings;
 use crate::display::VectorOffset;
@@ -30,6 +30,20 @@ pub struct Transform {
     pub scale: f64,
     pub mirroring: MirroringSettings,
     pub origin: VectorOffset,
+}
+
+// Gerber image transform component for legacy transformations
+#[derive(Component, Clone, Debug)]
+pub struct ImageTransform {
+    pub transform: GerberImageTransform,
+}
+
+impl Default for ImageTransform {
+    fn default() -> Self {
+        Self {
+            transform: GerberImageTransform::default(),
+        }
+    }
 }
 
 impl Default for Transform {

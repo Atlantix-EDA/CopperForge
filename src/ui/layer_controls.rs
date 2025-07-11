@@ -25,6 +25,7 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
                 app.layer_manager.set_layer_visibility_ecs(&mut app.ecs_world, &layer_type, all_on);
             }
             logger.log_info(if all_on { "All layers shown" } else { "All layers hidden" });
+            ui.ctx().request_repaint();
         }
         
         ui.separator();
@@ -51,6 +52,7 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
                 app.layer_manager.set_layer_visibility_ecs(&mut app.ecs_world, &layer_type, visible);
             }
             logger.log_info("Top layers shown");
+            ui.ctx().request_repaint();
         }
         if ui.button("BOTTOM").clicked() {
             for layer_type in LayerType::all() {
@@ -62,6 +64,7 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
                 app.layer_manager.set_layer_visibility_ecs(&mut app.ecs_world, &layer_type, visible);
             }
             logger.log_info("Bottom layers shown");
+            ui.ctx().request_repaint();
         }
         if ui.button("ASSEMBLY").clicked() {
             for layer_type in LayerType::all() {
@@ -72,6 +75,7 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
                 app.layer_manager.set_layer_visibility_ecs(&mut app.ecs_world, &layer_type, visible);
             }
             logger.log_info("Assembly layers shown (silkscreen + outline)");
+            ui.ctx().request_repaint();
         }
     });
     ui.add_space(4.0);

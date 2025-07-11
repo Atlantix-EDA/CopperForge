@@ -167,46 +167,50 @@ impl DisplayManager {
     
     /// Get the quadrant offset for a specific layer type
     /// Returns (x_offset, y_offset) in mm
+    /// Now implements linear horizontal layout instead of quadrant view
     pub fn get_quadrant_offset(&self, layer_type: &crate::layer_operations::LayerType) -> VectorOffset {
+        // Use the quadrant_offset_magnitude directly as the spacing value
+        let spacing = self.quadrant_offset_magnitude.max(1.0); // Minimum 1mm spacing
+        self.get_quadrant_offset_with_spacing(layer_type, spacing)
+    }
+    
+    /// Get the quadrant offset with explicit spacing
+    /// Returns (x_offset, y_offset) in mm
+    /// Now implements linear horizontal layout instead of quadrant view
+    pub fn get_quadrant_offset_with_spacing(&self, layer_type: &crate::layer_operations::LayerType, spacing: f64) -> VectorOffset {
         if !self.quadrant_view_enabled {
             return VectorOffset { x: 0.0, y: 0.0 };
         }
         
-        // Ensure we have a valid offset magnitude (minimum 1mm to avoid issues)
-        let safe_magnitude = self.quadrant_offset_magnitude.max(1.0);
-        
-        // Calculate base offset - divide by sqrt(2) to get X and Y components
-        let base_offset = safe_magnitude / std::f64::consts::SQRT_2;
-        
-        // Determine quadrant based on layer type
-        // Quadrant 1 (top-right): Copper layers
-        // Quadrant 2 (top-left): Silkscreen layers  
-        // Quadrant 3 (bottom-left): Soldermask layers
-        // Quadrant 4 (bottom-right): Paste layers
+        // Linear horizontal layout using simple spacing:
+        // - Copper at origin (0,0) 
+        // - Silkscreen at spacing
+        // - Soldermask at spacing * 2
+        // - Paste layers hidden (not shown)
         
         use crate::layer_operations::LayerType;
         
-        let (x_mult, y_mult) = match layer_type {
-            // Copper layers - Quadrant 1 (top-right)
-            LayerType::TopCopper | LayerType::BottomCopper => (1.0, 1.0),
+        let x_offset = match layer_type {
+            // Copper layers - Stay at origin (0,0)
+            LayerType::TopCopper | LayerType::BottomCopper => 0.0,
             
-            // Silkscreen layers - Quadrant 2 (top-left)
-            LayerType::TopSilk | LayerType::BottomSilk => (-1.0, 1.0),
+            // Silkscreen layers - at spacing
+            LayerType::TopSilk | LayerType::BottomSilk => spacing,
             
-            // Soldermask layers - Quadrant 3 (bottom-left)
-            LayerType::TopSoldermask | LayerType::BottomSoldermask => (-1.0, -1.0),
+            // Soldermask layers - at spacing * 2
+            LayerType::TopSoldermask | LayerType::BottomSoldermask => spacing * 2.0,
             
-            // Paste layers - Quadrant 4 (bottom-right)
-            LayerType::TopPaste | LayerType::BottomPaste => (1.0, -1.0),
+            // Paste layers - hidden (positioned far off-screen)
+            LayerType::TopPaste | LayerType::BottomPaste => -9999.0,
             
             // Mechanical outline should not be displayed in quadrant view
             // (it will be rendered separately with each layer)
-            LayerType::MechanicalOutline => (0.0, 0.0),
+            LayerType::MechanicalOutline => 0.0,
         };
         
         VectorOffset {
-            x: base_offset * x_mult,
-            y: base_offset * y_mult,
+            x: x_offset,
+            y: 0.0, // All layers at the same Y level (horizontal layout)
         }
     }
     
@@ -270,7 +274,7 @@ impl DisplayManager {
         }
     }
     
-    /// Calculate the positioned bounds for a layer in quadrant view
+    /// Calculate the positioned bounds for a layer in linear horizontal layout
     fn calculate_quadrant_position(
         &self,
         layer_type: &LayerType,
@@ -280,57 +284,32 @@ impl DisplayManager {
     ) -> ((f32, f32), (f32, f32)) {
         let half_width = width / 2.0;
         let half_height = height / 2.0;
-        let offset = spacing as f32; // Full spacing from center to quadrant center
-        
-        // Calculate quadrant centers and then position the layer bounds
-        // Remember: In traditional geometry, Y increases upward
-        match layer_type {
-            // Quadrant 1 (top-right): Copper layers
-            LayerType::TopCopper | LayerType::BottomCopper => {
-                let center_x = offset;
-                let center_y = offset;
-                (
-                    (center_x - half_width, center_y + half_height),   // Upper left
-                    (center_x + half_width, center_y - half_height)    // Lower right
-                )
-            },
+        // Calculate horizontal positions using simple spacing:
+        // All layers at Y=0 (horizontal layout)  
+        let spacing = spacing as f32; // Use the provided spacing parameter
+        let center_x = match layer_type {
+            // Copper layers at origin (0,0)
+            LayerType::TopCopper | LayerType::BottomCopper => 0.0,
             
-            // Quadrant 2 (top-left): Silkscreen layers  
-            LayerType::TopSilk | LayerType::BottomSilk => {
-                let center_x = -offset;
-                let center_y = offset;
-                (
-                    (center_x - half_width, center_y + half_height),   // Upper left
-                    (center_x + half_width, center_y - half_height)    // Lower right
-                )
-            },
+            // Silkscreen layers at spacing
+            LayerType::TopSilk | LayerType::BottomSilk => spacing,
             
-            // Quadrant 3 (bottom-left): Soldermask layers
-            LayerType::TopSoldermask | LayerType::BottomSoldermask => {
-                let center_x = -offset;
-                let center_y = -offset;
-                (
-                    (center_x - half_width, center_y + half_height),   // Upper left
-                    (center_x + half_width, center_y - half_height)    // Lower right
-                )
-            },
+            // Soldermask layers at spacing * 2
+            LayerType::TopSoldermask | LayerType::BottomSoldermask => spacing * 2.0,
             
-            // Quadrant 4 (bottom-right): Paste layers
-            LayerType::TopPaste | LayerType::BottomPaste => {
-                let center_x = offset;
-                let center_y = -offset;
-                (
-                    (center_x - half_width, center_y + half_height),   // Upper left
-                    (center_x + half_width, center_y - half_height)    // Lower right
-                )
-            },
+            // Paste layers - hidden (positioned far off-screen)
+            LayerType::TopPaste | LayerType::BottomPaste => -9999.0,
             
             // Mechanical outline centered at origin
-            LayerType::MechanicalOutline => (
-                (-half_width, half_height),                      // Upper left
-                (half_width, -half_height)                       // Lower right
-            ),
-        }
+            LayerType::MechanicalOutline => 0.0,
+        };
+        
+        let center_y = 0.0; // All layers at same Y level
+        
+        (
+            (center_x - half_width, center_y + half_height),   // Upper left
+            (center_x + half_width, center_y - half_height)    // Lower right
+        )
     }
 }
 

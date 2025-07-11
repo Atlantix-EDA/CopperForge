@@ -27,6 +27,7 @@ pub fn create_gerber_layer_entity(
             file_path,
         },
         Transform::default(),
+        ImageTransform::default(),
         Visibility {
             visible,
             opacity: 1.0,
@@ -56,6 +57,7 @@ pub fn create_layer_from_info(
             file_path: None, // TODO: Extract from layer_info if needed
         },
         Transform::default(),
+        ImageTransform::default(),
         Visibility {
             visible: layer_info.visible,
             opacity: 1.0,

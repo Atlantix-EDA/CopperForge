@@ -1,6 +1,6 @@
 [package]
 name = "kiforge"
-version = "0.1.4"
+version = "0.1.6"
 edition = "2024"
 authors = ["James Bonanno <atlantix-eda@proton.me>"]
 
@@ -14,9 +14,9 @@ egui_extras = { version = "0.31.1", features = ["image"] } # For image loading a
 image = "0.24" # For image loading
 
 # Gerber and PCB handling
-gerber_viewer = "0.1.0"
+gerber_viewer = "0.2.0"
 gerber_types = { package = "gerber-types", version = "0.4.0" }
-gerber_parser = "0.2.0"
+gerber_parser = "0.2.1"
 nalgebra = "0.33"
 
 # Egui Mobius framework

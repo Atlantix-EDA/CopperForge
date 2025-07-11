@@ -15,26 +15,24 @@ pub fn render_layers_system(
     let config = RenderConfiguration::default();
     let renderer = GerberRenderer::default();
     
-    // Query all layer entities
-    let mut layer_query = world.query::<(&GerberData, &Transform, &Visibility, &RenderProperties, &LayerInfo)>();
+    // Query all layer entities including ImageTransform
+    let mut layer_query = world.query::<(&GerberData, &Transform, &ImageTransform, &Visibility, &RenderProperties, &LayerInfo)>();
     let mut layers: Vec<_> = layer_query.iter(world).collect();
     
     // Sort layers by z-order for proper rendering depth
-    layers.sort_by_key(|(_, _, _, props, _)| props.z_order);
+    layers.sort_by_key(|(_, _, _, _, props, _)| props.z_order);
     
     // Render each visible layer
-    for (gerber_data, transform, visibility, render_props, layer_info) in layers {
+    for (gerber_data, transform, image_transform, visibility, render_props, _layer_info) in layers {
         if !visibility.visible {
             continue;
         }
         
-        // Skip layers that shouldn't be rendered in current view
-        if !layer_info.layer_type.should_render(display_manager.showing_top) {
-            continue;
-        }
+        // Note: We rely solely on visibility.visible to determine if a layer should be shown
+        // This allows manual layer control overrides regardless of top/bottom view
         
-        // Create GerberTransform from ECS Transform
-        let gerber_transform = create_gerber_transform(transform, display_manager);
+        // Create GerberTransform from ECS Transform and ImageTransform
+        let gerber_transform = create_gerber_transform_composed(transform, image_transform, display_manager);
         
         // Render the layer
         renderer.paint_layer(
@@ -66,26 +64,29 @@ pub fn render_layers_system_enhanced(
         None
     };
     
-    // Query all layer entities
-    let mut layer_query = world.query::<(&GerberData, &Transform, &Visibility, &RenderProperties, &LayerInfo)>();
+    // Query all layer entities including ImageTransform
+    let mut layer_query = world.query::<(&GerberData, &Transform, &ImageTransform, &Visibility, &RenderProperties, &LayerInfo)>();
     let mut layers: Vec<_> = layer_query.iter(world).collect();
     
     // Sort layers by z-order for proper rendering depth
-    layers.sort_by_key(|(_, _, _, props, _)| props.z_order);
+    layers.sort_by_key(|(_, _, _, _, props, _)| props.z_order);
     
     // Render each visible layer
-    for (gerber_data, transform, visibility, render_props, layer_info) in layers {
+    for (gerber_data, transform, image_transform, visibility, render_props, layer_info) in layers {
         if !visibility.visible {
             continue;
         }
         
-        // Skip layers that shouldn't be rendered in current view
-        if !layer_info.layer_type.should_render(display_manager.showing_top) {
-            continue;
-        }
+        // Note: We rely solely on visibility.visible to determine if a layer should be shown
+        // This allows manual layer control overrides regardless of top/bottom view
         
         // Skip mechanical outline in quadrant view (it will be rendered with each layer)
         if display_manager.quadrant_view_enabled && layer_info.layer_type == crate::layer_operations::LayerType::MechanicalOutline {
+            continue;
+        }
+        
+        // Skip paste layers in quadrant view (user doesn't want to see them)
+        if display_manager.quadrant_view_enabled && matches!(layer_info.layer_type, crate::layer_operations::LayerType::TopPaste | crate::layer_operations::LayerType::BottomPaste) {
             continue;
         }
         
@@ -96,8 +97,8 @@ pub fn render_layers_system_enhanced(
             crate::display::VectorOffset { x: 0.0, y: 0.0 }
         };
         
-        // Create GerberTransform with quadrant offset
-        let gerber_transform = create_gerber_transform_with_offset(transform, display_manager, quadrant_offset.clone());
+        // Create GerberTransform with quadrant offset and image transform
+        let gerber_transform = create_gerber_transform_with_offset_composed(transform, image_transform, display_manager, quadrant_offset.clone());
         
         // Render main layer
         renderer.paint_layer(
@@ -112,8 +113,10 @@ pub fn render_layers_system_enhanced(
         // Render mechanical outline in quadrant view
         if display_manager.quadrant_view_enabled {
             if let Some((mechanical_gerber, mechanical_color)) = &mechanical_outline {
-                let mechanical_transform = create_gerber_transform_with_offset(
-                    &Transform::default(),
+                // Use the same transform as the layer for proper alignment
+                let mechanical_transform = create_gerber_transform_with_offset_composed(
+                    transform,
+                    image_transform,
                     display_manager,
                     quadrant_offset,
                 );
@@ -161,6 +164,68 @@ fn create_gerber_transform_with_offset(
         offset: combined_offset.into(),
         scale: transform.scale,
     }
+}
+
+/// Helper function to create composed GerberTransform from ECS Transform and ImageTransform
+fn create_gerber_transform_composed(
+    transform: &Transform, 
+    image_transform: &ImageTransform, 
+    _display_manager: &DisplayManager
+) -> GerberTransform {
+    // According to gerber-viewer 0.2.0, we need to compose:
+    // matrix = image_transform_matrix * render_transform_matrix
+    
+    // First create the render transform matrix
+    let render_transform = GerberTransform {
+        rotation: transform.rotation,
+        mirroring: transform.mirroring.clone().into(),
+        origin: transform.origin.clone().into(),
+        offset: transform.position.clone().into(),
+        scale: transform.scale,
+    };
+    
+    // Get the matrices
+    let image_matrix = image_transform.transform.to_matrix();
+    let render_matrix = render_transform.to_matrix();
+    
+    // Compose: final_matrix = image_matrix * render_matrix
+    let composed_matrix = image_matrix * render_matrix;
+    
+    // Convert back to GerberTransform
+    GerberTransform::from_matrix(&composed_matrix)
+}
+
+/// Helper function to create composed GerberTransform with quadrant offset
+fn create_gerber_transform_with_offset_composed(
+    transform: &Transform,
+    image_transform: &ImageTransform,
+    _display_manager: &DisplayManager,
+    quadrant_offset: crate::display::VectorOffset,
+) -> GerberTransform {
+    // Combine transform position with quadrant offset
+    let combined_offset = crate::display::VectorOffset {
+        x: transform.position.x + quadrant_offset.x,
+        y: transform.position.y + quadrant_offset.y,
+    };
+    
+    // Create the render transform with combined offset
+    let render_transform = GerberTransform {
+        rotation: transform.rotation,
+        mirroring: transform.mirroring.clone().into(),
+        origin: transform.origin.clone().into(),
+        offset: combined_offset.into(),
+        scale: transform.scale,
+    };
+    
+    // Get the matrices
+    let image_matrix = image_transform.transform.to_matrix();
+    let render_matrix = render_transform.to_matrix();
+    
+    // Compose: final_matrix = image_matrix * render_matrix
+    let composed_matrix = image_matrix * render_matrix;
+    
+    // Convert back to GerberTransform
+    GerberTransform::from_matrix(&composed_matrix)
 }
 
 /// Helper function to get mechanical outline layer for quadrant rendering
@@ -287,29 +352,34 @@ pub fn z_order_system(
     }
 }
 
-/// System to update layer display based on view mode (top/bottom)
-/// This system handles layer visibility based on the current view mode
-pub fn view_mode_system(
-    mut query: Query<(&mut Visibility, &LayerInfo)>,
-    display_manager: &DisplayManager,
-) {
-    for (mut visibility, layer_info) in &mut query {
-        // Update visibility based on view mode
-        let should_render = layer_info.layer_type.should_render(display_manager.showing_top);
-        
-        // Only update if visibility would change to avoid triggering Change detection unnecessarily
-        if visibility.visible != should_render {
-            visibility.visible = should_render;
-        }
-    }
-}
+// Note: view_mode_system has been removed to allow manual layer control
+// Visibility is now controlled entirely through the layer controls UI
 
 /// Master system runner that executes all ECS systems in the correct order
 /// This function provides a single entry point for running all ECS systems
 pub fn run_ecs_systems(
     world: &mut World,
     display_manager: &DisplayManager,
+    rotation_degrees: f32,
 ) {
+    // First, get the combined bounding box to determine the PCB center for mirroring
+    let pcb_center = {
+        let mut bbox_query = world.query::<&GerberData>();
+        let mut combined_bbox: Option<gerber_viewer::BoundingBox> = None;
+        
+        for gerber_data in bbox_query.iter(world) {
+            let layer_bbox = gerber_data.0.bounding_box();
+            combined_bbox = match combined_bbox {
+                None => Some(layer_bbox.clone()),
+                Some(mut existing) => {
+                    existing.expand(layer_bbox);
+                    Some(existing)
+                }
+            };
+        }
+        
+        combined_bbox.map(|bbox| bbox.center()).unwrap_or_else(|| nalgebra::Point2::new(0.0, 0.0))
+    };
     // Update transforms based on display settings
     let mut transform_query = world.query::<(&mut Transform, &LayerInfo)>();
     for (mut transform, layer_info) in transform_query.iter_mut(world) {
@@ -327,16 +397,20 @@ pub fn run_ecs_systems(
         
         // Apply mirroring
         transform.mirroring = display_manager.mirroring.clone();
+        
+        // Apply rotation
+        transform.rotation = rotation_degrees.to_radians();
+        
+        // Set origin to PCB center for proper in-place mirroring and rotation
+        transform.origin = crate::display::VectorOffset {
+            x: pcb_center.x,
+            y: pcb_center.y,
+        };
     }
     
-    // Update visibility based on view mode
-    let mut visibility_query = world.query::<(&mut Visibility, &LayerInfo)>();
-    for (mut visibility, layer_info) in visibility_query.iter_mut(world) {
-        let should_render = layer_info.layer_type.should_render(display_manager.showing_top);
-        if visibility.visible != should_render {
-            visibility.visible = should_render;
-        }
-    }
+    // Note: Visibility is now controlled manually through layer controls
+    // We no longer automatically update visibility based on view mode
+    // This allows users to show any combination of layers they want
     
     // Update z-order for proper rendering
     let mut z_order_query = world.query::<(&mut RenderProperties, &LayerInfo)>();
@@ -352,5 +426,28 @@ pub fn run_ecs_systems(
             crate::layer_operations::LayerType::BottomPaste => 20,
             crate::layer_operations::LayerType::MechanicalOutline => 10,
         };
+    }
+    
+    // Update bounding boxes when transforms change (for quadrant view)
+    let mut bounds_query = world.query::<(&GerberData, &Transform, &mut BoundingBoxCache)>();
+    for (gerber_data, transform, mut bounds_cache) in bounds_query.iter_mut(world) {
+        // Calculate transformed bounding box based on quadrant position
+        let original_bounds = gerber_data.0.bounding_box();
+        
+        // Apply transform to the bounding box
+        let transformed_bounds = if transform.position.x != 0.0 || transform.position.y != 0.0 {
+            // Layer is positioned in a quadrant - offset the bounding box
+            let mut new_bounds = original_bounds.clone();
+            new_bounds.min.x += transform.position.x;
+            new_bounds.min.y += transform.position.y;
+            new_bounds.max.x += transform.position.x;
+            new_bounds.max.y += transform.position.y;
+            new_bounds
+        } else {
+            // Layer is at origin - use original bounds
+            original_bounds.clone()
+        };
+        
+        bounds_cache.bounds = transformed_bounds;
     }
 }

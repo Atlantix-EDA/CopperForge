@@ -91,8 +91,6 @@ pub struct DemoLensApp {
     // Origin setting mode
     pub setting_origin_mode: bool,
     
-    // ECS rendering toggle (for testing)
-    pub use_ecs_rendering: bool,
     
     // BOM panel state
     pub bom_state: Option<ui::BomPanelState>,
@@ -123,7 +121,7 @@ impl DemoLensApp {
         });
         
         // Run ECS systems to update entity states
-        ecs::run_ecs_systems(&mut self.ecs_world, &self.display_manager);
+        ecs::run_ecs_systems(&mut self.ecs_world, &self.display_manager, self.rotation_degrees);
         
         // Use the new ECS render system
         ecs::execute_render_system(
@@ -187,7 +185,6 @@ impl DemoLensApp {
             use_24_hour_clock: false, // Default to 12-hour format
             show_about_modal: false,
             setting_origin_mode: false,
-            use_ecs_rendering: false, // Default to old rendering for compatibility
             bom_state: None,
             pending_bom_components: None,
             project_manager_state: None,
@@ -233,15 +230,6 @@ impl DemoLensApp {
         let content_width = bbox.width();
         let content_height = bbox.height();
         
-        // Calculate the center offset to make gerber center = (0,0)
-        let gerber_center = bbox.center();
-        
-        // Set center offset to negate the gerber center, forcing it to (0,0)
-        self.display_manager.center_offset = display::VectorOffset {
-            x: -gerber_center.x,
-            y: -gerber_center.y,
-        };
-
         // Calculate scale to fit the content (100% zoom)
         let scale = f32::min(
             viewport.width() / (content_width as f32),
@@ -250,34 +238,64 @@ impl DemoLensApp {
         // adjust slightly to add a margin
         let scale = scale * 0.95;
 
-        // Create the transform that will be used during rendering
-        let origin: nalgebra::Vector2<f64> = self.display_manager.center_offset.clone().into();
-        let offset: nalgebra::Vector2<f64> = self.display_manager.design_offset.clone().into();
-        let transform = GerberTransform {
-            rotation: self.rotation_degrees.to_radians(),
-            mirroring: self.display_manager.mirroring.clone().into(),
-            origin: origin - offset,
-            offset,
-            scale: 1.0,
-        };
+        // Handle custom origin case differently
+        if self.display_manager.design_offset.x != 0.0 || self.display_manager.design_offset.y != 0.0 {
+            // When we have a custom origin, position (0,0) at the lower-left area of the viewport
+            // This ensures the PCB is always visible
+            
+            // Position (0,0) at 20% from left and 20% from bottom of viewport
+            let origin_screen_x = viewport.left() + viewport.width() * 0.2;
+            let origin_screen_y = viewport.bottom() - viewport.height() * 0.2; // Remember Y is flipped
+            
+            // The origin in gerber coordinates is at design_offset
+            // We need to translate the view so that this point appears at our desired screen position
+            let origin_gerber_x = self.display_manager.design_offset.x;
+            let origin_gerber_y = self.display_manager.design_offset.y;
+            
+            // Calculate the translation needed
+            // Screen position = translation + (gerber_position * scale)
+            // Therefore: translation = screen_position - (gerber_position * scale)
+            self.view_state.translation = Vec2::new(
+                origin_screen_x - (origin_gerber_x as f32 * scale),
+                origin_screen_y + (origin_gerber_y as f32 * scale), // + because Y is flipped in screen coords
+            );
+        } else {
+            // Standard case: no custom origin
+            let gerber_center = bbox.center();
+            
+            // Set center offset to negate the gerber center, forcing it to (0,0)
+            self.display_manager.center_offset = display::VectorOffset {
+                x: -gerber_center.x,
+                y: -gerber_center.y,
+            };
 
-        // Compute transformed bounding box
-        let outline_vertices: Vec<_> = bbox
-            .vertices()
-            .into_iter()
-            .map(|v| transform.apply_to_position(v))
-            .collect();
+            // Create the transform that will be used during rendering
+            let origin: nalgebra::Vector2<f64> = self.display_manager.center_offset.clone().into();
+            let offset: nalgebra::Vector2<f64> = self.display_manager.design_offset.clone().into();
+            let transform = GerberTransform {
+                rotation: self.rotation_degrees.to_radians(),
+                mirroring: self.display_manager.mirroring.clone().into(),
+                origin: origin - offset,
+                offset,
+                scale: 1.0,
+            };
 
-        let transformed_bbox = BoundingBox::from_points(&outline_vertices);
+            // Compute transformed bounding box
+            let outline_vertices: Vec<_> = bbox
+                .vertices()
+                .into_iter()
+                .map(|v| transform.apply_to_position(v))
+                .collect();
 
-        // Use the center of the transformed bounding box
-        let transformed_center = transformed_bbox.center();
+            let transformed_bbox = BoundingBox::from_points(&outline_vertices);
+            let transformed_center = transformed_bbox.center();
 
-        // Offset from viewport center to place content in the center
-        self.view_state.translation = Vec2::new(
-            viewport.center().x - (transformed_center.x as f32 * scale),
-            viewport.center().y + (transformed_center.y as f32 * scale), // Note the + here since we flip Y
-        );
+            // Center the view
+            self.view_state.translation = Vec2::new(
+                viewport.center().x - (transformed_center.x as f32 * scale),
+                viewport.center().y + (transformed_center.y as f32 * scale),
+            );
+        }
 
         self.view_state.scale = scale;
         self.needs_initial_view = false;
@@ -510,10 +528,8 @@ impl eframe::App for DemoLensApp {
                 // Update rotation
                 self.rotation_degrees = (self.rotation_degrees + 90.0) % 360.0;
                 
-                // Trigger view update to recalculate centering with new rotation
-                self.needs_initial_view = true;
-                
-                // Mark coordinates as dirty since rotation changed
+                // Don't reset view - just mark coordinates as dirty to update rotation
+                // This keeps the view centered on the current origin
                 self.layer_manager.mark_coordinates_dirty();
                 
                 let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
@@ -615,7 +631,7 @@ impl eframe::App for DemoLensApp {
                     });
                     
                     ui.horizontal(|ui| {
-                        ui.label("Drag");
+                        ui.label("Left-click + drag");
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label("Pan view");
                         });

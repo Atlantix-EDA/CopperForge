@@ -9,8 +9,8 @@ use serde::{Serialize, Deserialize};
 
 use egui_lens::ReactiveEventLogger;
 use gerber_viewer::{
-    draw_arrow, draw_crosshair, GerberRenderer, 
-    draw_marker, ViewState, RenderConfiguration, GerberTransform
+    draw_crosshair,
+    draw_marker, ViewState
 };
 use crate::drc_operations::types::Position;
 use crate::display::manager::ToPosition;
@@ -144,9 +144,9 @@ fn render_quadrant_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
     
     if app.display_manager.quadrant_view_enabled {
         ui.separator();
-        ui.label("Offset:");
+        ui.label("Spacing:");
         
-        let (mut offset_value, units_suffix, conversion_factor) = if app.global_units_mils {
+        let (mut spacing_value, units_suffix, conversion_factor) = if app.global_units_mils {
             (app.display_manager.quadrant_offset_magnitude / 0.0254, "mils", 0.0254)
         } else {
             (app.display_manager.quadrant_offset_magnitude, "mm", 1.0)
@@ -155,14 +155,14 @@ fn render_quadrant_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
         let speed = if app.global_units_mils { 10.0 } else { 1.0 };
         let max_range = if app.global_units_mils { 20000.0 } else { 500.0 };
         
-        if ui.add(egui::DragValue::new(&mut offset_value)
+        if ui.add(egui::DragValue::new(&mut spacing_value)
             .suffix(units_suffix)
             .speed(speed)
             .range(0.0..=max_range))
             .changed() 
         {
-            let offset_mm = offset_value * conversion_factor;
-            app.display_manager.set_quadrant_offset_magnitude(offset_mm);
+            let spacing_mm = spacing_value * conversion_factor;
+            app.display_manager.set_quadrant_offset_magnitude(spacing_mm);
             app.display_manager.update_layer_positions(&mut app.layer_manager);
         }
         
@@ -213,7 +213,10 @@ fn render_transform_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
     // Rotate button
     if ui.button("🔄 Rotate (R)").clicked() {
         app.rotation_degrees = (app.rotation_degrees + 90.0) % 360.0;
-        app.needs_initial_view = true;
+        
+        // Don't reset view - just mark coordinates as dirty to update rotation
+        // This keeps the view centered on the current origin
+        app.layer_manager.mark_coordinates_dirty();
         
         let logger_state = app.logger_state.clone();
         let log_colors = app.log_colors.clone();
@@ -224,26 +227,15 @@ fn render_transform_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
         );
     }
     
-    // ECS Rendering toggle button
-    if ui.button(if app.use_ecs_rendering { "🔥 ECS Mode" } else { "🔧 Legacy Mode" }).clicked() {
-        app.use_ecs_rendering = !app.use_ecs_rendering;
-        
-        let logger_state = app.logger_state.clone();
-        let log_colors = app.log_colors.clone();
-        let logger = ReactiveEventLogger::with_colors(&logger_state, &log_colors);
-        logger.log_custom(
-            crate::project::constants::LOG_TYPE_ROTATION, 
-            &format!("Switched to {} rendering", if app.use_ecs_rendering { "ECS" } else { "Legacy" })
-        );
-    }
+    // ECS Rendering is now the default and only mode (gerber-viewer 0.2.0 compatible)
+    ui.label("🔥 ECS Rendering (v0.2.0)");
     
     // Mirror buttons
     let x_mirror_text = if app.display_manager.mirroring.x { "↔️ X Mirror ✓" } else { "↔️ X Mirror" };
     if ui.button(x_mirror_text).clicked() {
         app.display_manager.mirroring.x = !app.display_manager.mirroring.x;
-        app.display_manager.center_offset = crate::display::VectorOffset { x: 0.0, y: 0.0 };
-        app.display_manager.design_offset = crate::display::VectorOffset { x: 0.0, y: 0.0 };
-        app.needs_initial_view = true;
+        // Don't reset custom origin, just mark coordinates as dirty
+        app.layer_manager.mark_coordinates_dirty();
         
         let logger_state = app.logger_state.clone();
         let log_colors = app.log_colors.clone();
@@ -257,9 +249,8 @@ fn render_transform_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
     let y_mirror_text = if app.display_manager.mirroring.y { "↕️ Y Mirror ✓" } else { "↕️ Y Mirror" };
     if ui.button(y_mirror_text).clicked() {
         app.display_manager.mirroring.y = !app.display_manager.mirroring.y;
-        app.display_manager.center_offset = crate::display::VectorOffset { x: 0.0, y: 0.0 };
-        app.display_manager.design_offset = crate::display::VectorOffset { x: 0.0, y: 0.0 };
-        app.needs_initial_view = true;
+        // Don't reset custom origin, just mark coordinates as dirty
+        app.layer_manager.mark_coordinates_dirty();
         
         let logger_state = app.logger_state.clone();
         let log_colors = app.log_colors.clone();
@@ -278,10 +269,16 @@ fn render_transform_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
         if ui.button("🎯 Reset Origin").clicked() {
             app.display_manager.design_offset = crate::display::VectorOffset { x: 0.0, y: 0.0 };
             
+            // Force view refresh to properly center coordinates at the new origin
+            app.needs_initial_view = true;
+            
+            // Mark coordinates as dirty to force refresh
+            app.layer_manager.mark_coordinates_dirty();
+            
             let logger_state = app.logger_state.clone();
             let log_colors = app.log_colors.clone();
             let logger = ReactiveEventLogger::with_colors(&logger_state, &log_colors);
-            logger.log_info("Reset origin to (0, 0)");
+            logger.log_info("Reset origin to (0, 0) - view recentered");
         }
     } else {
         if ui.button("🎯 Set Origin").clicked() {
@@ -355,11 +352,15 @@ fn setup_viewport(ui: &mut egui::Ui, app: &mut DemoLensApp) -> (Rect, egui::Resp
     let response = ui.allocate_response(size, egui::Sense::click_and_drag());
     let viewport = response.rect;
     
-    // Handle double-click to center
+    // Handle double-click to center view (but maintain custom origin)
     if response.double_clicked() {
-        app.display_manager.center_offset = crate::display::VectorOffset { x: 0.0, y: 0.0 };
-        app.display_manager.design_offset = crate::display::VectorOffset { x: 0.0, y: 0.0 };
+        // Only reset the view, don't change the custom origin (design_offset)
         app.needs_initial_view = true;
+        
+        let logger_state = app.logger_state.clone();
+        let log_colors = app.log_colors.clone();
+        let logger = ReactiveEventLogger::with_colors(&logger_state, &log_colors);
+        logger.log_info("Centered view (double-click)");
     }
     
     (viewport, response)
@@ -376,7 +377,19 @@ fn handle_viewport_interactions(ui: &mut egui::Ui, app: &mut DemoLensApp, viewpo
         app.ui_state.update(ui, viewport, response, &mut app.view_state);
         
         let viewport_center = viewport.center();
-        app.ui_state.origin_screen_pos = viewport_center;
+        
+        // Calculate actual origin position based on custom origin if set
+        let design_offset = &app.display_manager.design_offset;
+        if design_offset.x != 0.0 || design_offset.y != 0.0 {
+            // Custom origin is set - convert to screen position
+            app.ui_state.origin_screen_pos = app.view_state.gerber_to_screen_coords(
+                Vector2::from(design_offset.clone()).to_position().to_point2()
+            );
+        } else {
+            // No custom origin - use viewport center
+            app.ui_state.origin_screen_pos = viewport_center;
+        }
+        
         app.ui_state.center_screen_pos = viewport_center;
         
         // Update cursor coordinates using raw transform (not affected by design_offset)
@@ -412,10 +425,16 @@ fn handle_viewport_interactions(ui: &mut egui::Ui, app: &mut DemoLensApp, viewpo
                 };
                 app.setting_origin_mode = false;
                 
+                // Force view refresh to properly center coordinates at the new origin
+                app.needs_initial_view = true;
+                
+                // Mark coordinates as dirty to force refresh
+                app.layer_manager.mark_coordinates_dirty();
+                
                 let logger_state = app.logger_state.clone();
                 let log_colors = app.log_colors.clone();
                 let logger = ReactiveEventLogger::with_colors(&logger_state, &log_colors);
-                logger.log_info(&format!("Set origin to ({:.2}, {:.2}) mm", gerber_coords.x, gerber_coords.y));
+                logger.log_info(&format!("Set origin to ({:.2}, {:.2}) mm - view recentered", gerber_coords.x, gerber_coords.y));
             }
         }
     }
@@ -489,25 +508,14 @@ fn render_gerber_content(ui: &mut egui::Ui, app: &mut DemoLensApp, viewport: &Re
     
     // Draw quadrant axes
     if app.display_manager.quadrant_view_enabled {
-        draw_quadrant_axes(&painter, viewport, &app.view_state, app.ui_state.center_screen_pos);
+        draw_quadrant_axes(&painter, viewport, &app.view_state, app.ui_state.origin_screen_pos);
     }
     
-    // Draw crosshairs
-    if app.display_manager.quadrant_view_enabled {
-        draw_crosshair(&painter, app.ui_state.center_screen_pos, Color32::BLUE);
-    } else {
-        draw_crosshair(&painter, app.ui_state.origin_screen_pos, Color32::BLUE);
-        draw_crosshair(&painter, app.ui_state.center_screen_pos, Color32::LIGHT_GRAY);
-    }
+    // Draw crosshairs - always at the active origin
+    draw_crosshair(&painter, app.ui_state.origin_screen_pos, Color32::BLUE);
     
-    // Render layers
-    if app.use_ecs_rendering {
-        // ECS rendering path
-        app.render_layers_ecs(&painter);
-    } else {
-        // Legacy rendering path
-        render_layers_legacy(app, &painter);
-    }
+    // Render layers using ECS system (gerber-viewer 0.2.0 compatible)
+    app.render_layers_ecs(&painter);
     
     // Render overlays
     render_overlays(app, &painter, viewport);
@@ -516,107 +524,27 @@ fn render_gerber_content(ui: &mut egui::Ui, app: &mut DemoLensApp, viewport: &Re
     render_cursor_info(ui, app, &painter, viewport);
 }
 
-fn render_layers_legacy(app: &mut DemoLensApp, painter: &Painter) {
-    // Get mechanical outline layer for quadrant view (using ECS)
-    let mechanical_outline_layer = if app.display_manager.quadrant_view_enabled {
-        app.layer_manager.get_layer_ecs(&app.ecs_world, &crate::layer_operations::LayerType::MechanicalOutline)
-            .and_then(|(_entity, _layer_info, gerber_data, visibility)| {
-                if visibility.visible { Some(&gerber_data.0) } else { None }
-            })
-    } else {
-        None
-    };
-    
-    // Render all visible layers (using ECS)
-    for layer_type in crate::layer_operations::LayerType::all() {
-        if let Some((_entity, _layer_info, gerber_data, visibility)) = app.layer_manager.get_layer_ecs(&app.ecs_world, &layer_type) {
-            if visibility.visible {
-                // Skip mechanical outline in quadrant view (it will be rendered with each layer)
-                if app.display_manager.quadrant_view_enabled && layer_type == crate::layer_operations::LayerType::MechanicalOutline {
-                    continue;
-                }
-                
-                let gerber_to_render = &gerber_data.0;
-                
-                let quadrant_offset = app.display_manager.get_quadrant_offset(&layer_type);
-                
-                let combined_offset = if app.display_manager.quadrant_view_enabled {
-                    crate::display::VectorOffset {
-                        x: app.display_manager.center_offset.x + quadrant_offset.x,
-                        y: app.display_manager.center_offset.y + quadrant_offset.y,
-                    }
-                } else {
-                    app.display_manager.design_offset.clone()
-                };
-                
-                let config = RenderConfiguration::default();
-                let transform = GerberTransform {
-                    rotation: app.rotation_degrees.to_radians(),
-                    mirroring: app.display_manager.mirroring.clone().into(),
-                    origin: app.display_manager.center_offset.clone().into(),
-                    offset: combined_offset.clone().into(),
-                    scale: 1.0,
-                };
-                
-                // Get layer color from ECS render properties
-                let layer_color = app.layer_manager.get_layer_render_properties_ecs(&app.ecs_world, &layer_type)
-                    .map(|props| props.color)
-                    .unwrap_or(layer_type.color());
-                
-                // Render main layer
-                GerberRenderer::default().paint_layer(
-                    painter,
-                    app.view_state,
-                    gerber_to_render,
-                    layer_color,
-                    &config,
-                    &transform,
-                );
-                
-                // Render mechanical outline in quadrant view
-                if app.display_manager.quadrant_view_enabled {
-                    if let Some(mechanical_layer) = mechanical_outline_layer {
-                        let mechanical_transform = GerberTransform {
-                            rotation: app.rotation_degrees.to_radians(),
-                            mirroring: app.display_manager.mirroring.clone().into(),
-                            origin: app.display_manager.center_offset.clone().into(),
-                            offset: combined_offset.into(),
-                            scale: 1.0,
-                        };
-                        
-                        GerberRenderer::default().paint_layer(
-                            painter,
-                            app.view_state,
-                            mechanical_layer,
-                            crate::layer_operations::LayerType::MechanicalOutline.color(),
-                            &config,
-                            &mechanical_transform,
-                        );
-                    }
-                }
-            }
-        }
-    }
-}
 
 fn render_overlays(app: &mut DemoLensApp, painter: &Painter, viewport: &Rect) {
     let screen_radius = MARKER_RADIUS * app.view_state.scale;
     
-    // Design offset marker
+    // Origin marker - show only the active origin point
     let design_offset = &app.display_manager.design_offset;
-    if design_offset.x != 0.0 || design_offset.y != 0.0 {
-        let design_offset_screen_position = app.view_state.gerber_to_screen_coords(Vector2::from(design_offset.clone()).to_position().to_point2());
-        draw_arrow(painter, design_offset_screen_position, app.ui_state.origin_screen_pos, Color32::ORANGE);
-        draw_marker(painter, design_offset_screen_position, Color32::ORANGE, Color32::YELLOW, screen_radius);
-    }
+    let has_custom_origin = design_offset.x != 0.0 || design_offset.y != 0.0;
     
-    // Purple dot
-    let purple_dot_pos = if app.display_manager.quadrant_view_enabled {
-        app.ui_state.center_screen_pos
+    if has_custom_origin {
+        // Show custom origin (yellow marker) - this is the only visible origin
+        let design_offset_screen_position = app.view_state.gerber_to_screen_coords(Vector2::from(design_offset.clone()).to_position().to_point2());
+        draw_marker(painter, design_offset_screen_position, Color32::ORANGE, Color32::YELLOW, screen_radius);
     } else {
-        app.ui_state.origin_screen_pos
-    };
-    draw_marker(painter, purple_dot_pos, Color32::PURPLE, Color32::MAGENTA, screen_radius);
+        // Show center origin (purple marker) when no custom origin is set
+        let purple_dot_pos = if app.display_manager.quadrant_view_enabled {
+            app.ui_state.center_screen_pos
+        } else {
+            app.ui_state.origin_screen_pos
+        };
+        draw_marker(painter, purple_dot_pos, Color32::PURPLE, Color32::MAGENTA, screen_radius);
+    }
     
     // Corner overlay shapes
     render_corner_overlays(app, painter);
@@ -920,46 +848,5 @@ fn draw_quadrant_axes(painter: &Painter, viewport: &Rect, _view_state: &ViewStat
         );
     }
     
-    // Add quadrant labels
-    let label_offset = 20.0;
-    let font_id = egui::FontId::default();
-    let label_color = Color32::from_rgba_unmultiplied(150, 150, 150, 200);
-    
-    if center_screen_pos.x > viewport.min.x + label_offset * 2.0 && 
-       center_screen_pos.x < viewport.max.x - label_offset * 2.0 &&
-       center_screen_pos.y > viewport.min.y + label_offset * 2.0 &&
-       center_screen_pos.y < viewport.max.y - label_offset * 2.0 {
-        
-        painter.text(
-            center_screen_pos + Vec2::new(label_offset, -label_offset),
-            egui::Align2::LEFT_BOTTOM,
-            "Copper",
-            font_id.clone(),
-            label_color,
-        );
-        
-        painter.text(
-            center_screen_pos + Vec2::new(-label_offset, -label_offset),
-            egui::Align2::RIGHT_BOTTOM,
-            "Silkscreen",
-            font_id.clone(),
-            label_color,
-        );
-        
-        painter.text(
-            center_screen_pos + Vec2::new(-label_offset, label_offset),
-            egui::Align2::RIGHT_TOP,
-            "Soldermask",
-            font_id.clone(),
-            label_color,
-        );
-        
-        painter.text(
-            center_screen_pos + Vec2::new(label_offset, label_offset),
-            egui::Align2::LEFT_TOP,
-            "Paste",
-            font_id,
-            label_color,
-        );
-    }
+    // Quadrant labels removed as requested by user
 }
