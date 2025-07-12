@@ -1,7 +1,8 @@
 pub mod database;
+pub mod bom;
 
 use database::{ProjectDatabase, ProjectData, ProjectMetadata, generate_project_id, ProjectDatabaseError};
-use crate::ui::bom_panel_v2::BomComponent;
+use bom::BomComponent;
 use std::path::{Path, PathBuf};
 use chrono::Utc;
 

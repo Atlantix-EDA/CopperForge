@@ -131,6 +131,8 @@ fn render_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
         ui.separator();
         render_transform_controls(ui, app);
         ui.separator();
+        render_ruler_controls(ui, app);
+        ui.separator();
         render_grid_controls(ui, app);
     });
 }
@@ -338,6 +340,45 @@ fn render_grid_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
     // Grid dot size slider
     ui.label("Dot Size:");
     ui.add(egui::Slider::new(&mut app.grid_settings.dot_size, 0.5..=5.0).suffix("px"));
+    
+    ui.separator();
+    
+    // Enterprise feature: Snap to Grid
+    ui.checkbox(&mut app.grid_settings.snap_enabled, "🧲 Snap to Grid");
+}
+
+fn render_ruler_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
+    ui.label("📏 Ruler Tool:");
+    
+    let ruler_button_text = if app.ruler_active { "📏 Ruler ✓" } else { "📏 Ruler" };
+    if ui.button(ruler_button_text).clicked() {
+        app.ruler_active = !app.ruler_active;
+        if !app.ruler_active {
+            // Clear ruler when deactivated
+            app.ruler_start = None;
+            app.ruler_end = None;
+        }
+    }
+    
+    // Show ruler measurement if active and both points set
+    if app.ruler_active {
+        if let (Some(start), Some(end)) = (app.ruler_start, app.ruler_end) {
+            let dx = end.x - start.x;
+            let dy = end.y - start.y;
+            let distance = (dx * dx + dy * dy).sqrt();
+            
+            if app.global_units_mils {
+                let distance_mils = distance / 0.0254;
+                ui.label(format!("Distance: {:.2} mils", distance_mils));
+                ui.label(format!("ΔX: {:.2} mils, ΔY: {:.2} mils", dx / 0.0254, dy / 0.0254));
+            } else {
+                ui.label(format!("Distance: {:.3} mm", distance));
+                ui.label(format!("ΔX: {:.3} mm, ΔY: {:.3} mm", dx, dy));
+            }
+        } else {
+            ui.label("Click two points to measure");
+        }
+    }
 }
 
 fn setup_viewport(ui: &mut egui::Ui, app: &mut DemoLensApp) -> (Rect, egui::Response) {
@@ -416,12 +457,45 @@ fn handle_viewport_interactions(ui: &mut egui::Ui, app: &mut DemoLensApp, viewpo
             }
         }
         
+        // Handle ruler tool clicks
+        if app.ruler_active && response.clicked() && !app.setting_origin_mode {
+            if let Some(gerber_coords) = app.ui_state.cursor_gerber_coords {
+                // Enterprise feature: Apply snap to grid if enabled
+                let final_coords = if app.grid_settings.snap_enabled {
+                    let point = nalgebra::Point2::new(gerber_coords.x, gerber_coords.y);
+                    crate::display::snap_to_grid(point, &app.grid_settings)
+                } else {
+                    nalgebra::Point2::new(gerber_coords.x, gerber_coords.y)
+                };
+                
+                if app.ruler_start.is_none() {
+                    // Set first point
+                    app.ruler_start = Some(final_coords);
+                } else if app.ruler_end.is_none() {
+                    // Set second point
+                    app.ruler_end = Some(final_coords);
+                } else {
+                    // Reset to new measurement
+                    app.ruler_start = Some(final_coords);
+                    app.ruler_end = None;
+                }
+            }
+        }
+        
         // Handle origin setting
         if app.setting_origin_mode && response.clicked() {
             if let Some(gerber_coords) = app.ui_state.cursor_gerber_coords {
+                // Enterprise feature: Apply snap to grid if enabled
+                let final_coords = if app.grid_settings.snap_enabled {
+                    let point = nalgebra::Point2::new(gerber_coords.x, gerber_coords.y);
+                    crate::display::snap_to_grid(point, &app.grid_settings)
+                } else {
+                    nalgebra::Point2::new(gerber_coords.x, gerber_coords.y)
+                };
+                
                 app.display_manager.design_offset = crate::display::VectorOffset {
-                    x: gerber_coords.x,
-                    y: gerber_coords.y,
+                    x: final_coords.x,
+                    y: final_coords.y,
                 };
                 app.setting_origin_mode = false;
                 
@@ -434,7 +508,8 @@ fn handle_viewport_interactions(ui: &mut egui::Ui, app: &mut DemoLensApp, viewpo
                 let logger_state = app.logger_state.clone();
                 let log_colors = app.log_colors.clone();
                 let logger = ReactiveEventLogger::with_colors(&logger_state, &log_colors);
-                logger.log_info(&format!("Set origin to ({:.2}, {:.2}) mm - view recentered", gerber_coords.x, gerber_coords.y));
+                let snap_msg = if app.grid_settings.snap_enabled { " (snapped to grid)" } else { "" };
+                logger.log_info(&format!("Set origin to ({:.2}, {:.2}) mm{} - view recentered", final_coords.x, final_coords.y, snap_msg));
             }
         }
     }
@@ -554,6 +629,9 @@ fn render_overlays(app: &mut DemoLensApp, painter: &Painter, viewport: &Rect) {
     
     // Board dimensions
     render_board_dimensions(app, painter, viewport);
+    
+    // Enterprise feature: Ruler visualization
+    render_ruler(app, painter);
     
     // Zoom window
     render_zoom_window(app, painter);
@@ -696,6 +774,72 @@ fn render_zoom_window(app: &mut DemoLensApp, painter: &Painter) {
             for corner in &corners {
                 painter.circle_filled(*corner, corner_size, Color32::from_rgb(100, 150, 255));
             }
+        }
+    }
+}
+
+fn render_ruler(app: &mut DemoLensApp, painter: &Painter) {
+    if !app.ruler_active {
+        return;
+    }
+    
+    // Draw ruler points and line
+    if let Some(start) = app.ruler_start {
+        let start_screen = app.view_state.gerber_to_screen_coords(start);
+        
+        // Draw start point
+        painter.circle_filled(start_screen, 4.0, Color32::RED);
+        painter.circle_stroke(start_screen, 6.0, Stroke::new(2.0, Color32::WHITE));
+        
+        if let Some(end) = app.ruler_end {
+            let end_screen = app.view_state.gerber_to_screen_coords(end);
+            
+            // Draw end point
+            painter.circle_filled(end_screen, 4.0, Color32::RED);
+            painter.circle_stroke(end_screen, 6.0, Stroke::new(2.0, Color32::WHITE));
+            
+            // Draw ruler line
+            painter.line_segment(
+                [start_screen, end_screen],
+                Stroke::new(2.0, Color32::YELLOW)
+            );
+            
+            // Draw measurement text at midpoint
+            let midpoint = Pos2::new(
+                (start_screen.x + end_screen.x) / 2.0,
+                (start_screen.y + end_screen.y) / 2.0
+            );
+            
+            let dx = end.x - start.x;
+            let dy = end.y - start.y;
+            let distance = (dx * dx + dy * dy).sqrt();
+            
+            let distance_text = if app.global_units_mils {
+                format!("{:.2} mils", distance / 0.0254)
+            } else {
+                format!("{:.3} mm", distance)
+            };
+            
+            // Draw text background
+            let text_size = painter.text(
+                midpoint,
+                egui::Align2::CENTER_CENTER,
+                "",
+                egui::FontId::monospace(12.0),
+                Color32::WHITE,
+            ).size();
+            
+            let background_rect = egui::Rect::from_center_size(midpoint, text_size + Vec2::new(6.0, 4.0));
+            painter.rect_filled(background_rect, 3.0, Color32::from_rgba_unmultiplied(0, 0, 0, 180));
+            
+            // Draw measurement text
+            painter.text(
+                midpoint,
+                egui::Align2::CENTER_CENTER,
+                distance_text,
+                egui::FontId::monospace(12.0),
+                Color32::YELLOW,
+            );
         }
     }
 }

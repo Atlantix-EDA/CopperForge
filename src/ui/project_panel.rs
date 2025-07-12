@@ -491,7 +491,26 @@ fn show_project_database_section(ui: &mut egui::Ui, app: &mut DemoLensApp, logge
                     .map(|p| p.metadata.name.clone());
                 
                 if let Some(ref project_name) = current_project_name {
-                    ui.label(format!("Current: {}", project_name));
+                    ui.vertical(|ui| {
+                        ui.label(format!("Current: {}", project_name));
+                        
+                        // Enterprise feature: Show current project dates
+                        if let Some(ref current_project) = manager_state.current_project {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 8.0;
+                                
+                                let created_date = current_project.metadata.created_at.format("%Y-%m-%d %H:%M UTC").to_string();
+                                ui.label(egui::RichText::new(format!("📅 {}", created_date))
+                                    .small()
+                                    .color(egui::Color32::GRAY));
+                                
+                                let modified_date = current_project.metadata.last_modified.format("%Y-%m-%d %H:%M UTC").to_string();
+                                ui.label(egui::RichText::new(format!("🔄 {}", modified_date))
+                                    .small()
+                                    .color(egui::Color32::GRAY));
+                            });
+                        }
+                    });
                     
                     // Save BOM button
                     if ui.button("💾 Save BOM").clicked() {
@@ -547,7 +566,26 @@ fn show_project_database_section(ui: &mut egui::Ui, app: &mut DemoLensApp, logge
                             egui::RichText::new(&project.name)
                         };
                         
-                        ui.label(text);
+                        ui.vertical(|ui| {
+                            ui.label(text);
+                            
+                            // Enterprise feature: Show database dates
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 8.0;
+                                
+                                // Created date
+                                let created_date = project.created_at.format("%Y-%m-%d %H:%M UTC").to_string();
+                                ui.label(egui::RichText::new(format!("📅 Created: {}", created_date))
+                                    .small()
+                                    .color(egui::Color32::GRAY));
+                                
+                                // Last modified date
+                                let modified_date = project.last_modified.format("%Y-%m-%d %H:%M UTC").to_string();
+                                ui.label(egui::RichText::new(format!("🔄 Modified: {}", modified_date))
+                                    .small()
+                                    .color(egui::Color32::GRAY));
+                            });
+                        });
                         
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             // Delete button

@@ -1,7 +1,7 @@
 use serde::{Serialize, Deserialize};
 use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
-use crate::ui::bom_panel_v2::BomComponent;
+use crate::project_manager::bom::BomComponent;
 
 /// Database manager for project storage
 pub struct ProjectDatabase {

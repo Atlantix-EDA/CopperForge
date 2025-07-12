@@ -92,8 +92,31 @@ pub fn show_grid_panel<'a>(
         }
     });
     
+    // Enterprise features section
+    ui.separator();
+    ui.heading("Grid Features");
+    
+    // Snap to grid checkbox
+    if ui.checkbox(&mut app.grid_settings.snap_enabled, "Snap to Grid").changed() {
+        logger.log_custom(
+            LOG_TYPE_GRID,
+            &format!("Snap to grid {}", if app.grid_settings.snap_enabled { "enabled" } else { "disabled" })
+        );
+    }
+    
+    // Align to grid button
+    ui.horizontal(|ui| {
+        if ui.button("⌗ Align View to Grid (A)").clicked() {
+            crate::display::align_to_grid(&mut app.view_state, &app.grid_settings);
+            logger.log_custom(LOG_TYPE_GRID, "View aligned to grid");
+        }
+        
+        ui.label("Aligns the view so content snaps to grid intersections");
+    });
+    
     // Show grid visibility status
     if app.grid_settings.enabled {
+        ui.separator();
         let status = get_grid_status(&app.view_state, app.grid_settings.spacing_mm);
         
         match status {

@@ -224,7 +224,7 @@ pub fn show_create_project_dialog(
     ctx: &egui::Context,
     manager_state: &mut ProjectManagerState,
     project_state: &crate::project::ProjectState,
-    bom_components: Vec<crate::ui::bom_panel_v2::BomComponent>,
+    bom_components: Vec<crate::project_manager::bom::BomComponent>,
     logger: &ReactiveEventLogger,
 ) {
     egui::Window::new("Create New Project")

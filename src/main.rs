@@ -91,12 +91,17 @@ pub struct DemoLensApp {
     // Origin setting mode
     pub setting_origin_mode: bool,
     
+    // Enterprise feature: Ruler tool
+    pub ruler_active: bool,
+    pub ruler_start: Option<nalgebra::Point2<f64>>,
+    pub ruler_end: Option<nalgebra::Point2<f64>>,
+    
     
     // BOM panel state
     pub bom_state: Option<ui::BomPanelState>,
     
     // Pending BOM components (loaded from project before BOM tab is opened)
-    pub pending_bom_components: Option<Vec<ui::bom_panel_v2::BomComponent>>,
+    pub pending_bom_components: Option<Vec<project_manager::bom::BomComponent>>,
     
     // Project manager state
     pub project_manager_state: Option<project_manager::ProjectManagerState>,
@@ -185,6 +190,9 @@ impl DemoLensApp {
             use_24_hour_clock: false, // Default to 12-hour format
             show_about_modal: false,
             setting_origin_mode: false,
+            ruler_active: false,
+            ruler_start: None,
+            ruler_end: None,
             bom_state: None,
             pending_bom_components: None,
             project_manager_state: None,
@@ -538,6 +546,14 @@ impl eframe::App for DemoLensApp {
                     &format!("Rotated board to {:.0}° (R key)", self.rotation_degrees)
                 );
                 }
+            
+            // A key - align view to grid
+            if i.key_pressed(egui::Key::A) {
+                display::align_to_grid(&mut self.view_state, &self.grid_settings);
+                
+                let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
+                logger.log_info("Aligned view to grid (A key)");
+                }
             });
         }
         
@@ -603,6 +619,13 @@ impl eframe::App for DemoLensApp {
                         ui.label("U");
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label("Toggle units (mm/mils)");
+                        });
+                    });
+                    
+                    ui.horizontal(|ui| {
+                        ui.label("A");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label("Align view to grid");
                         });
                     });
                     

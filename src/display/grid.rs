@@ -1,11 +1,13 @@
 use eframe::emath::Rect;
 use eframe::epaint::Color32;
 use gerber_viewer::ViewState;
+use nalgebra::Point2;
 
 pub struct GridSettings {
     pub enabled: bool,
     pub spacing_mm: f32,  // Always store in mm internally
     pub dot_size: f32,
+    pub snap_enabled: bool,  // Enterprise feature: snap to grid
 }
 
 impl Default for GridSettings {
@@ -14,6 +16,7 @@ impl Default for GridSettings {
             enabled: true,
             spacing_mm: 2.54,  // 100 mils = 2.54 mm
             dot_size: 1.0,
+            snap_enabled: false,  // Default off for existing users
         }
     }
 }
@@ -107,3 +110,62 @@ pub enum GridStatus {
     TooCoarse,
     Visible(f64),
 }
+
+/// Enterprise feature: Snap a point to the nearest grid intersection
+/// Returns the snapped position in gerber coordinates
+pub fn snap_to_grid(point: Point2<f64>, grid_settings: &GridSettings) -> Point2<f64> {
+    if !grid_settings.snap_enabled {
+        return point;
+    }
+    
+    let grid_spacing = grid_settings.spacing_mm as f64;
+    
+    // Snap X coordinate
+    let snapped_x = (point.x / grid_spacing).round() * grid_spacing;
+    
+    // Snap Y coordinate  
+    let snapped_y = (point.y / grid_spacing).round() * grid_spacing;
+    
+    Point2::new(snapped_x, snapped_y)
+}
+
+/// Enterprise feature: Align view to grid
+/// Adjusts the view translation so the gerber content aligns with grid intersections
+pub fn align_to_grid(view_state: &mut gerber_viewer::ViewState, grid_settings: &GridSettings) {
+    if !grid_settings.enabled {
+        return;
+    }
+    
+    let grid_spacing = grid_settings.spacing_mm as f64;
+    let grid_spacing_screen = grid_spacing * view_state.scale as f64;
+    
+    // Skip if grid spacing is too small or too large to be meaningful
+    if grid_spacing_screen < 5.0 || grid_spacing_screen > 300.0 {
+        return;
+    }
+    
+    // Get current translation
+    let current_translation = view_state.translation;
+    
+    // Calculate the offset to align to the nearest grid line
+    let offset_x = current_translation.x % grid_spacing_screen as f32;
+    let offset_y = current_translation.y % grid_spacing_screen as f32;
+    
+    // Snap to the nearest grid intersection
+    let snap_x = if offset_x.abs() < grid_spacing_screen as f32 / 2.0 {
+        -offset_x
+    } else {
+        grid_spacing_screen as f32 - offset_x
+    };
+    
+    let snap_y = if offset_y.abs() < grid_spacing_screen as f32 / 2.0 {
+        -offset_y
+    } else {
+        grid_spacing_screen as f32 - offset_y
+    };
+    
+    // Apply the alignment adjustment
+    view_state.translation.x += snap_x;
+    view_state.translation.y += snap_y;
+}
+

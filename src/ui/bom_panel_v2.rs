@@ -13,45 +13,8 @@ use kicad_ecs::client::{KiCadClient, FootprintData};
 use std::time::Duration;
 use std::sync::Arc;
 
-/// Component data for the BOM table
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct BomComponent {
-    pub item_number: String,
-    pub reference: String,
-    pub description: String,
-    pub x_location: f64,
-    pub y_location: f64,
-    pub orientation: f64,
-    pub value: String,
-    pub footprint: String,
-}
-
-/// Events sent from UI to backend
-#[derive(Debug, Clone)]
-pub enum BomEvent {
-    Connect,
-    Disconnect,
-    Refresh,
-    UpdateRefreshInterval(Duration),
-    SetAutoRefresh(bool),
-}
-
-/// Events sent from backend to UI
-#[derive(Debug, Clone)]
-pub enum BomBackendEvent {
-    ConnectionStatus(ConnectionStatus),
-    ComponentsUpdated(Vec<BomComponent>),
-    Error(String),
-    Info(String),
-}
-
-#[derive(Clone, Debug)]
-pub enum ConnectionStatus {
-    Disconnected,
-    Connecting,
-    Connected,
-    Error(String),
-}
+// Re-export BOM structures from project_manager for backward compatibility
+pub use crate::project_manager::bom::{BomComponent, BomEvent, BomBackendEvent, ConnectionStatus};
 
 /// BOM panel state using egui_mobius patterns
 pub struct BomPanelState {
