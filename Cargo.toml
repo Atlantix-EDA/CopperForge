@@ -1,10 +1,17 @@
-[package]
-name = "kiforge"
+[workspace]
+resolver = "2"
+members = [
+    "crates/kicad-ecs",
+    "crates/librepcb-ecs",
+    "crates/kiforge-core",
+]
+
+[workspace.package]
 version = "0.1.6"
-edition = "2024"
+edition = "2021"
 authors = ["James Bonanno <atlantix-eda@proton.me>"]
 
-[dependencies]
+[workspace.dependencies]
 egui = "0.31.1"
 eframe = "0.31.1"
 egui-file-dialog = "0.9.0"
@@ -44,17 +51,11 @@ once_cell = "1.19"
 
 # ECS framework
 bevy_ecs = "0.14"
-# Note: kicad-ecs works at component level (R1, C2), KiForge at layer level
 
-# KiCad IPC protocol for BOM tab - Using futures executor instead of tokio
-kicad-ecs = { git = "https://github.com/Atlantix-EDA/kicad-ecs.git" }
+# Async runtime
 futures = "0.3"
 
 # Project database
 sled = "0.34"
 bincode = "1.3"
 thiserror = "1.0"
-
-
-# delete this, it's just a cargo workspace workaround
-[workspace]

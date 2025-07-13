@@ -1,4 +1,4 @@
-use crate::{DemoLensApp, project::constants::LOG_TYPE_DRC};
+use crate::{DemoLensApp, project::constants::LOG_TYPE_DRC, layer_operations::LayerType};
 use crate::drc_operations::TraceQualityType;
 use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
@@ -392,7 +392,7 @@ pub fn show_drc_panel<'a>(
                         let mut total_fixed = 0;
                         
                         // Generate overlay for top copper (using ECS)
-                        if let Some((_entity, _layer_info, gerber_data, _visibility)) = app.layer_manager.get_layer_ecs(&app.ecs_world, &crate::LayerType::TopCopper) {
+                        if let Some((_entity, _layer_info, gerber_data, _visibility)) = app.layer_manager.get_layer_ecs(&app.ecs_world, &LayerType::TopCopper) {
                             logger.log_info("Processing top copper layer for corner rounding...");
                             let (overlay_shapes, fixed_count) = drc.generate_corner_overlay_data(&gerber_data.0, scaling_factor);
                             logger.log_info(&format!("Generated overlay for {} corners on top copper", fixed_count));
@@ -405,7 +405,7 @@ pub fn show_drc_panel<'a>(
                         }
                         
                         // Generate overlay for bottom copper (using ECS)
-                        if let Some((_entity, _layer_info, gerber_data, _visibility)) = app.layer_manager.get_layer_ecs(&app.ecs_world, &crate::LayerType::BottomCopper) {
+                        if let Some((_entity, _layer_info, gerber_data, _visibility)) = app.layer_manager.get_layer_ecs(&app.ecs_world, &LayerType::BottomCopper) {
                             logger.log_info("Processing bottom copper layer for corner rounding...");
                             let (overlay_shapes, fixed_count) = drc.generate_corner_overlay_data(&gerber_data.0, scaling_factor);
                             logger.log_info(&format!("Generated overlay for {} corners on bottom copper", fixed_count));
@@ -497,7 +497,7 @@ pub fn show_drc_panel<'a>(
 
 /// Helper function to convert ECS layers to legacy format for DRC compatibility
 use std::collections::HashMap;
-use crate::layer_operations::{LayerType, LayerInfo};
+use crate::layer_operations::LayerInfo;
 use bevy_ecs::world::World;
 
 fn convert_ecs_to_legacy_layers(layer_manager: &crate::layer_operations::LayerManager, world: &World) -> HashMap<LayerType, LayerInfo> {

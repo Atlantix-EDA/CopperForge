@@ -1,4 +1,4 @@
-use crate::{DemoLensApp, LayerInfo};
+use crate::{DemoLensApp, layer_operations::LayerInfo};
 use crate::project::ProjectState;
 use crate::project_manager::ProjectManagerState;
 use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};

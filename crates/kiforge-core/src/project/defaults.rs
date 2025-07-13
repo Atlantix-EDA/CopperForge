@@ -54,20 +54,20 @@ pub fn load_default_gerbers() -> LayerManager {
 /// Get embedded gerber data by filename
 fn get_embedded_gerber_data(filename: &str) -> &'static str {
     match filename {
-        "cmod_s7-F_Cu.gbr" => include_str!("../../assets/cmod_s7-F_Cu.gbr"),
-        "cmod_s7-B_Cu.gbr" => include_str!("../../assets/cmod_s7-B_Cu.gbr"),
-        "cmod_s7-F_SilkS.gbr" => include_str!("../../assets/cmod_s7-F_SilkS.gbr"),
-        "cmod_s7-B_SilkS.gbr" => include_str!("../../assets/cmod_s7-B_SilkS.gbr"),
-        "cmod_s7-F_Mask.gbr" => include_str!("../../assets/cmod_s7-F_Mask.gbr"),
-        "cmod_s7-B_Mask.gbr" => include_str!("../../assets/cmod_s7-B_Mask.gbr"),
-        "cmod_s7-Edge_Cuts.gbr" => include_str!("../../assets/cmod_s7-Edge_Cuts.gbr"),
-        _ => include_str!("../../assets/demo.gbr"), // Fallback
+        "cmod_s7-F_Cu.gbr" => include_str!("../../../../assets/cmod_s7-F_Cu.gbr"),
+        "cmod_s7-B_Cu.gbr" => include_str!("../../../../assets/cmod_s7-B_Cu.gbr"),
+        "cmod_s7-F_SilkS.gbr" => include_str!("../../../../assets/cmod_s7-F_SilkS.gbr"),
+        "cmod_s7-B_SilkS.gbr" => include_str!("../../../../assets/cmod_s7-B_SilkS.gbr"),
+        "cmod_s7-F_Mask.gbr" => include_str!("../../../../assets/cmod_s7-F_Mask.gbr"),
+        "cmod_s7-B_Mask.gbr" => include_str!("../../../../assets/cmod_s7-B_Mask.gbr"),
+        "cmod_s7-Edge_Cuts.gbr" => include_str!("../../../../assets/cmod_s7-Edge_Cuts.gbr"),
+        _ => include_str!("../../../../assets/demo.gbr"), // Fallback
     }
 }
 
 /// Load the demo gerber for legacy compatibility
 pub fn load_demo_gerber() -> GerberLayer {
-    let demo_str = include_str!("../../assets/demo.gbr").as_bytes();
+    let demo_str = include_str!("../../../../assets/demo.gbr").as_bytes();
     let reader = BufReader::new(demo_str);
     
     let doc = parse(reader).unwrap();

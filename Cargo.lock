@@ -2664,7 +2664,6 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 [[package]]
 name = "kicad-ecs"
 version = "0.1.0"
-source = "git+https://github.com/Atlantix-EDA/kicad-ecs.git#f4c7fa300b90f2a30931ad2a242878dd4d89dc05"
 dependencies = [
  "bevy_ecs",
  "eyre",
@@ -2682,7 +2681,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "kiforge"
+name = "kiforge-core"
 version = "0.1.6"
 dependencies = [
  "bevy_ecs",
@@ -2806,6 +2805,19 @@ dependencies = [
  "bitflags 2.9.1",
  "libc",
  "redox_syscall 0.5.13",
+]
+
+[[package]]
+name = "librepcb-ecs"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "eyre",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

@@ -2,40 +2,32 @@ use std::{fs, path::PathBuf};
 
 use eframe::emath::{Rect, Vec2};
 use egui::Pos2;
-use egui::ViewportBuilder;
 use egui_dock::{DockArea, DockState, NodeIndex, Style, SurfaceIndex};
 
-mod display;
-use display::DisplayManager;
-use layer_operations::LayerManager;
-use drc_operations::DrcManager;
+use crate::display;
+use crate::display::DisplayManager;
+use crate::layer_operations::LayerManager;
+use crate::drc_operations::DrcManager;
 
 /// egui_lens imports
 use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::*; 
-use log;
 use gerber_viewer::{
    BoundingBox, GerberLayer, 
    ViewState, UiState, GerberTransform
 };
 // Import platform modules
-mod platform;
-use platform::parameters::gui::{APPLICATION_NAME, VERSION};
+use crate::platform::parameters::gui::VERSION;
 // Import new modules
-mod project;
-mod layer_operations;
-mod drc_operations;
-mod export;
-mod navigation;
-mod ui;
-mod ecs;
-mod project_manager;
+use crate::project;
+use crate::ui;
+use crate::ecs;
+use crate::project_manager;
 
-use ui::{Tab, TabKind, TabViewer, initialize_and_show_banner, show_system_info};
+use crate::ui::{Tab, TabKind, TabViewer, initialize_and_show_banner, show_system_info};
 
-use layer_operations::{LayerType, LayerInfo};
-use project::{load_default_gerbers, load_demo_gerber, ProjectManager, ProjectState, manager::ProjectConfig};
-use display::GridSettings;
+use crate::project::{load_default_gerbers, load_demo_gerber, ProjectManager, ProjectState, manager::ProjectConfig};
+use crate::display::GridSettings;
 
 /// The main application struct
 pub struct DemoLensApp {
@@ -74,7 +66,7 @@ pub struct DemoLensApp {
 
     // Dock state
     dock_state: DockState<Tab>,
-    config_path: PathBuf,
+    pub config_path: PathBuf,
     
     
     // Zoom window state
@@ -95,6 +87,8 @@ pub struct DemoLensApp {
     pub ruler_active: bool,
     pub ruler_start: Option<nalgebra::Point2<f64>>,
     pub ruler_end: Option<nalgebra::Point2<f64>>,
+    pub ruler_dragging: bool,
+    pub ruler_drag_start: Option<nalgebra::Point2<f64>>,
     
     
     // BOM panel state
@@ -193,6 +187,8 @@ impl DemoLensApp {
             ruler_active: false,
             ruler_start: None,
             ruler_end: None,
+            ruler_dragging: false,
+            ruler_drag_start: None,
             bom_state: None,
             pending_bom_components: None,
             project_manager_state: None,
@@ -229,7 +225,7 @@ impl DemoLensApp {
         }
     }
 
-    fn reset_view(&mut self, viewport: Rect) {
+    pub fn reset_view(&mut self, viewport: Rect) {
         // Find bounding box from all loaded layers using ECS
         let combined_bbox = self.layer_manager.get_combined_bounding_box_ecs(&self.ecs_world);
         
@@ -554,6 +550,21 @@ impl eframe::App for DemoLensApp {
                 let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
                 logger.log_info("Aligned view to grid (A key)");
                 }
+            
+            // M key - toggle ruler mode
+            if i.key_pressed(egui::Key::M) {
+                self.ruler_active = !self.ruler_active;
+                if !self.ruler_active {
+                    // Clear ruler when deactivated
+                    self.ruler_start = None;
+                    self.ruler_end = None;
+                    self.ruler_dragging = false;
+                }
+                
+                let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
+                let mode_text = if self.ruler_active { "activated" } else { "deactivated" };
+                logger.log_info(&format!("Ruler mode {} (M key)", mode_text));
+                }
             });
         }
         
@@ -626,6 +637,13 @@ impl eframe::App for DemoLensApp {
                         ui.label("A");
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label("Align view to grid");
+                        });
+                    });
+                    
+                    ui.horizontal(|ui| {
+                        ui.label("M");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label("Toggle ruler/measurement mode");
                         });
                     });
                     
@@ -718,20 +736,3 @@ impl eframe::App for DemoLensApp {
 }
 
 
-fn main() -> eframe::Result<()> {
-    // Configure env_logger to filter out gerber_parser warnings
-    env_logger::Builder::from_default_env()
-        .filter_module("gerber_parser::parser", log::LevelFilter::Off)
-        .init();
-    eframe::run_native(
-        APPLICATION_NAME,
-        eframe::NativeOptions {
-            viewport: ViewportBuilder::default().with_inner_size([1280.0, 768.0]),
-            ..Default::default()
-        },
-        Box::new(|cc|{
-            egui_extras::install_image_loaders(&cc.egui_ctx);
-            Ok(Box::new(DemoLensApp::new()))
-        }))
-    
-}

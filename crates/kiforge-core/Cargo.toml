@@ -1,0 +1,55 @@
+[package]
+name = "kiforge-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+egui = { workspace = true }
+eframe = { workspace = true }
+egui-file-dialog = { workspace = true }
+
+# Image and graphics handling
+egui_extras = { workspace = true }
+image = { workspace = true }
+
+# Gerber and PCB handling
+gerber_viewer = { workspace = true }
+gerber_types = { workspace = true }
+gerber_parser = { workspace = true }
+nalgebra = { workspace = true }
+
+# Egui Mobius framework
+egui_lens = { workspace = true }
+egui_mobius_reactive = { workspace = true }
+egui_mobius = { workspace = true }
+
+# Logging and configuration
+env_logger = { workspace = true }
+log = { workspace = true }
+dirs = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sysinfo = { workspace = true }
+local-ip = { workspace = true }
+chrono = { workspace = true }
+chrono-tz = { workspace = true }
+local-ip-address = { workspace = true }
+egui_dock = { workspace = true }
+rfd = { workspace = true }
+notify = { workspace = true }
+
+regex = { workspace = true }
+once_cell = { workspace = true }
+
+# ECS framework
+bevy_ecs = { workspace = true }
+
+# KiCad IPC protocol for BOM tab
+kicad-ecs = { path = "../kicad-ecs" }
+futures = { workspace = true }
+
+# Project database
+sled = { workspace = true }
+bincode = { workspace = true }
+thiserror = { workspace = true }

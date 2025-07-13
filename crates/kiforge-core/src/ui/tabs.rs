@@ -124,16 +124,24 @@ impl Tab {
 }
 
 fn render_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
-    ui.horizontal(|ui| {
-        render_quadrant_controls(ui, app);
-        ui.separator();
-        render_layer_controls(ui, app);
-        ui.separator();
-        render_transform_controls(ui, app);
-        ui.separator();
-        render_ruler_controls(ui, app);
-        ui.separator();
-        render_grid_controls(ui, app);
+    ui.vertical(|ui| {
+        // First row: Main view controls
+        ui.horizontal(|ui| {
+            render_quadrant_controls(ui, app);
+            ui.separator();
+            render_layer_controls(ui, app);
+            ui.separator();
+            render_transform_controls(ui, app);
+        });
+        
+        ui.add_space(4.0); // Small gap between rows
+        
+        // Second row: Measurement and grid tools
+        ui.horizontal(|ui| {
+            render_ruler_controls(ui, app);
+            ui.separator();
+            render_grid_controls(ui, app);
+        });
     });
 }
 
@@ -375,8 +383,10 @@ fn render_ruler_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
                 ui.label(format!("Distance: {:.3} mm", distance));
                 ui.label(format!("ΔX: {:.3} mm, ΔY: {:.3} mm", dx, dy));
             }
+        } else if app.ruler_start.is_some() {
+            ui.label("Click second point to complete measurement");
         } else {
-            ui.label("Click two points to measure");
+            ui.label("Click first point to start measurement (or press M to toggle)");
         }
     }
 }
@@ -457,29 +467,9 @@ fn handle_viewport_interactions(ui: &mut egui::Ui, app: &mut DemoLensApp, viewpo
             }
         }
         
-        // Handle ruler tool clicks
-        if app.ruler_active && response.clicked() && !app.setting_origin_mode {
-            if let Some(gerber_coords) = app.ui_state.cursor_gerber_coords {
-                // Enterprise feature: Apply snap to grid if enabled
-                let final_coords = if app.grid_settings.snap_enabled {
-                    let point = nalgebra::Point2::new(gerber_coords.x, gerber_coords.y);
-                    crate::display::snap_to_grid(point, &app.grid_settings)
-                } else {
-                    nalgebra::Point2::new(gerber_coords.x, gerber_coords.y)
-                };
-                
-                if app.ruler_start.is_none() {
-                    // Set first point
-                    app.ruler_start = Some(final_coords);
-                } else if app.ruler_end.is_none() {
-                    // Set second point
-                    app.ruler_end = Some(final_coords);
-                } else {
-                    // Reset to new measurement
-                    app.ruler_start = Some(final_coords);
-                    app.ruler_end = None;
-                }
-            }
+        // Handle professional ruler tool with right-click drag
+        if app.ruler_active && !app.setting_origin_mode {
+            handle_ruler_interaction(ui, app, response);
         }
         
         // Handle origin setting
@@ -801,50 +791,123 @@ fn render_ruler(app: &mut DemoLensApp, painter: &Painter) {
             // Draw ruler line
             painter.line_segment(
                 [start_screen, end_screen],
-                Stroke::new(2.0, Color32::YELLOW)
-            );
-            
-            // Draw measurement text at midpoint
-            let midpoint = Pos2::new(
-                (start_screen.x + end_screen.x) / 2.0,
-                (start_screen.y + end_screen.y) / 2.0
+                Stroke::new(3.0, Color32::WHITE)
             );
             
             let dx = end.x - start.x;
             let dy = end.y - start.y;
             let distance = (dx * dx + dy * dy).sqrt();
             
-            let distance_text = if app.global_units_mils {
-                format!("{:.2} mils", distance / 0.0254)
+            // Create measurement text with dx/dy display
+            let measurement_text = if app.global_units_mils {
+                format!(
+                    "{:.2} mils\nΔX: {:.2}\nΔY: {:.2}",
+                    distance / 0.0254,
+                    dx / 0.0254,
+                    dy / 0.0254
+                )
             } else {
-                format!("{:.3} mm", distance)
+                format!(
+                    "{:.3} mm\nΔX: {:.3}\nΔY: {:.3}",
+                    distance,
+                    dx,
+                    dy
+                )
             };
+            
+            // Position text near the end point (offset to avoid overlap)
+            let text_offset = Vec2::new(20.0, -45.0);
+            let text_pos = end_screen + text_offset;
             
             // Draw text background
             let text_size = painter.text(
-                midpoint,
-                egui::Align2::CENTER_CENTER,
+                text_pos,
+                egui::Align2::LEFT_TOP,
                 "",
-                egui::FontId::monospace(12.0),
+                egui::FontId::monospace(16.0),
                 Color32::WHITE,
             ).size();
             
-            let background_rect = egui::Rect::from_center_size(midpoint, text_size + Vec2::new(6.0, 4.0));
-            painter.rect_filled(background_rect, 3.0, Color32::from_rgba_unmultiplied(0, 0, 0, 180));
+            let background_rect = egui::Rect::from_min_size(
+                text_pos - Vec2::new(6.0, 6.0),
+                text_size + Vec2::new(12.0, 12.0)
+            );
+            painter.rect_filled(background_rect, 6.0, Color32::from_rgba_unmultiplied(0, 0, 0, 240));
             
-            // Draw measurement text
+            // Draw measurement text at endpoint
             painter.text(
-                midpoint,
-                egui::Align2::CENTER_CENTER,
-                distance_text,
-                egui::FontId::monospace(12.0),
-                Color32::YELLOW,
+                text_pos,
+                egui::Align2::LEFT_TOP,
+                measurement_text,
+                egui::FontId::monospace(16.0),
+                Color32::WHITE,
             );
         }
     }
 }
 
+fn handle_ruler_interaction(ui: &mut egui::Ui, app: &mut DemoLensApp, response: &egui::Response) {
+    if !app.ruler_active {
+        return;
+    }
+    
+    let mouse_pos = ui.input(|i| i.pointer.hover_pos());
+    
+    // In ruler mode, left-click to set measurement points
+    if response.clicked() {
+        if let Some(mouse_screen_pos) = mouse_pos {
+            let gerber_coords = app.view_state.screen_to_gerber_coords(mouse_screen_pos);
+            
+            // Apply snap to grid if enabled
+            let final_coords = if app.grid_settings.snap_enabled {
+                let point = nalgebra::Point2::new(gerber_coords.x, gerber_coords.y);
+                crate::display::snap_to_grid(point, &app.grid_settings)
+            } else {
+                nalgebra::Point2::new(gerber_coords.x, gerber_coords.y)
+            };
+            
+            if app.ruler_start.is_none() {
+                // First click - set start point
+                app.ruler_start = Some(final_coords);
+                app.ruler_end = None;
+                app.ruler_dragging = true; // Enable live preview
+            } else if app.ruler_end.is_none() {
+                // Second click - set end point and complete measurement
+                app.ruler_end = Some(final_coords);
+                app.ruler_dragging = false;
+            } else {
+                // Third click - start new measurement
+                app.ruler_start = Some(final_coords);
+                app.ruler_end = None;
+                app.ruler_dragging = true;
+            }
+        }
+    }
+    
+    // Show live preview when dragging (after first click, before second click)
+    if app.ruler_dragging && app.ruler_start.is_some() && mouse_pos.is_some() {
+        let mouse_screen_pos = mouse_pos.unwrap();
+        let gerber_coords = app.view_state.screen_to_gerber_coords(mouse_screen_pos);
+        
+        // Apply snap to grid if enabled
+        let final_coords = if app.grid_settings.snap_enabled {
+            let point = nalgebra::Point2::new(gerber_coords.x, gerber_coords.y);
+            crate::display::snap_to_grid(point, &app.grid_settings)
+        } else {
+            nalgebra::Point2::new(gerber_coords.x, gerber_coords.y)
+        };
+        
+        // Update live preview end point
+        app.ruler_end = Some(final_coords);
+    }
+}
+
 fn render_cursor_info(ui: &mut egui::Ui, app: &mut DemoLensApp, painter: &Painter, viewport: &Rect) {
+    // Hide cursor coordinates when ruler mode is active
+    if app.ruler_active {
+        return;
+    }
+    
     let mouse_pos_screen = ui.input(|i| i.pointer.hover_pos());
     
     if let Some(mouse_screen_pos) = mouse_pos_screen {
