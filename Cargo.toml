@@ -3,7 +3,7 @@ resolver = "2"
 members = [
     "crates/kicad-ecs",
     "crates/librepcb-ecs",
-    "crates/kiforge-core",
+    "crates/copperforge-core",
 ]
 
 [workspace.package]

@@ -1,5 +1,5 @@
 [package]
-name = "kiforge-core"
+name = "copperforge-core"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

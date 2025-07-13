@@ -22,7 +22,7 @@ impl AboutPanel {
                 .show(ui, |ui| {
                     ui.set_width(image_width);
                     ui.vertical_centered(|ui| {
-                        // Display KiForge logo
+                        // Display CopperForge logo
                         ui.add(Lazy::force(&LOGO).clone());
                         
                         ui.add_space(10.0);

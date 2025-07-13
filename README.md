@@ -10,7 +10,7 @@
 
 </div>
 
-KiForge is a modern EDA tool designed to optimize every phase of PCB development, from initial design through manufacturing. Built with Rust and egui, it delivers fast, memory-safe operations with real-time rendering performance.
+CopperForge is a modern EDA platform designed to optimize every phase of PCB development, from initial design through manufacturing. Built with Rust and egui, it delivers fast, memory-safe operations with real-time rendering performance.
 
 **Key capabilities include:**
 - PCB design rule checking and optimization
@@ -18,15 +18,15 @@ KiForge is a modern EDA tool designed to optimize every phase of PCB development
 - Component placement analysis with coordinate display
 - CAM operations for manufacturing preparation
 
-KiForge serves as a **companion tool to KiCad**, running alongside KiCad PCB to provide enhanced insights during design and streamline manufacturing preparation. 
+CopperForge serves as a **companion tool to KiCad**, running alongside KiCad PCB to provide enhanced insights during design and streamline manufacturing preparation. 
 
 The application leverages proven Rust ecosystem libraries including `gerber_types`, `gerber_parser`, and `gerber_viewer` from the `MakerPnP` project, plus the `egui_mobius` stack with `egui_lens` for reactive state management and event logging.
 
-What sets KiForge apart is its focus on algorithmic PCB manufacturing optimization within a memory-safe, multi-threaded environment. 
+What sets CopperForge apart is its focus on algorithmic PCB manufacturing optimization within a memory-safe, multi-threaded environment. 
 
 Shown below is the loading of a PCB design with over 400+ components, where the KiCad PCB design is loaded, the gerbers are generated within the tool, and the display is updated. 
 
-![KiForge Demo](./assets/media/KiForge_usage.gif)
+![CopperForge Demo](./assets/media/KiForge_usage.gif)
 
 ## Key Features
 
@@ -53,7 +53,7 @@ Shown below is the loading of a PCB design with over 400+ components, where the 
 
 ## Real-time BOM Integration
 
-KiForge features a powerful real-time Bill of Materials (BOM) system that communicates directly with a running KiCad instance through IPC (Inter-Process Communication). This provides live component data for assembly and manufacturing preparation.
+CopperForge features a powerful real-time Bill of Materials (BOM) system that communicates directly with a running KiCad instance through IPC (Inter-Process Communication). This provides live component data for assembly and manufacturing preparation.
 
 ### BOM Features:
 - **Live KiCad Integration**: Direct communication with KiCad PCB via IPC protocol
@@ -68,7 +68,7 @@ KiForge features a powerful real-time Bill of Materials (BOM) system that commun
 
 ### Usage:
 1. Open your PCB design in KiCad
-2. Launch KiForge and navigate to the BOM tab
+2. Launch CopperForge and navigate to the BOM tab
 3. Click "Connect" to establish live communication with KiCad
 4. View real-time component data with filtering and search capabilities
 5. Use coordinate data for pick-and-place machine programming
@@ -107,8 +107,8 @@ KiForge features a powerful real-time Bill of Materials (BOM) system that commun
 
 1. **Clone the repository:**
    ```bash
-   git clone https://www.github.com/saturn77/KiForge.git
-   cd KiForge
+   git clone https://github.com/Atlantix-EDA/CopperForge.git
+   cd CopperForge
    ```
 
 2. **Build and run:**

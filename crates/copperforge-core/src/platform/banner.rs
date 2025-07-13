@@ -18,7 +18,7 @@ impl Banner {
         
         // Add dependencies information
         self.message += "\n\nDEPENDENCIES";
-        self.message += &format!("\nKiForge          : {}", gui::VERSION);
+        self.message += &format!("\nCopperForge      : {}", gui::VERSION);
         self.message += &format!("\ngerber_viewer    : {}", env!("GERBER_VIEWER_VERSION"));
         self.message += &format!("\ngerber_types     : {}", env!("GERBER_TYPES_VERSION"));
         self.message += &format!("\ngerber_parser    : {}\n", env!("GERBER_PARSER_VERSION"));

@@ -1,6 +1,6 @@
 fn main() -> eframe::Result<()> {
-    use kiforge_core::DemoLensApp;
-    use kiforge_core::platform::parameters::gui::APPLICATION_NAME;
+    use copperforge_core::DemoLensApp;
+    use copperforge_core::platform::parameters::gui::APPLICATION_NAME;
     
     // Configure env_logger to filter out gerber_parser warnings
     env_logger::Builder::from_default_env()

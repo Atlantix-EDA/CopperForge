@@ -176,7 +176,7 @@ impl DemoLensApp {
             ecs_world,
             dock_state,
             config_path: dirs::config_dir()
-                .map(|d| d.join("kiforge"))
+                .map(|d| d.join("copperforge"))
                 .unwrap_or_default(),
             zoom_window_start: None,
             zoom_window_dragging: false,
@@ -312,7 +312,7 @@ impl DemoLensApp {
         use chrono_tz::Tz;
         
         // Show version as clickable button
-        if ui.button(egui::RichText::new(format!("KiForge v{}", VERSION))
+        if ui.button(egui::RichText::new(format!("CopperForge v{}", VERSION))
             .color(egui::Color32::from_rgb(180, 200, 255))).clicked() {
             self.show_about_modal = true;
         }
@@ -368,12 +368,12 @@ impl DemoLensApp {
 impl DemoLensApp {
     fn save_dock_state(&self) {
         if let Some(config_dir) = dirs::config_dir() {
-            let kiforge_dir = config_dir.join("kiforge");
-            if let Err(e) = fs::create_dir_all(&kiforge_dir) {
+            let copperforge_dir = config_dir.join("copperforge");
+            if let Err(e) = fs::create_dir_all(&copperforge_dir) {
                 eprintln!("Failed to create config directory: {}", e);
                 return;
             }
-            let config_path = kiforge_dir.join("dock_state.json");
+            let config_path = copperforge_dir.join("dock_state.json");
             match serde_json::to_string_pretty(&self.dock_state) {
                 Ok(json) => {
                     if let Err(e) = fs::write(&config_path, json) {
@@ -389,7 +389,7 @@ impl DemoLensApp {
 
     fn load_dock_state() -> Option<DockState<Tab>> {
         if let Some(config_dir) = dirs::config_dir() {
-            let config_path = config_dir.join("kiforge").join("dock_state.json");
+            let config_path = config_dir.join("copperforge").join("dock_state.json");
             if let Ok(json) = fs::read_to_string(&config_path) {
                 match serde_json::from_str::<DockState<Tab>>(&json) {
                     Ok(dock_state) => {
@@ -710,7 +710,7 @@ impl eframe::App for DemoLensApp {
         
         // Show About modal if requested
         if self.show_about_modal {
-            egui::Window::new("About KiForge")
+            egui::Window::new("About CopperForge")
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)

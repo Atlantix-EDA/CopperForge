@@ -1001,6 +1001,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "copperforge-core"
+version = "0.1.6"
+dependencies = [
+ "bevy_ecs",
+ "bincode",
+ "chrono",
+ "chrono-tz",
+ "dirs",
+ "eframe",
+ "egui",
+ "egui-file-dialog",
+ "egui_dock",
+ "egui_extras",
+ "egui_lens",
+ "egui_mobius",
+ "egui_mobius_reactive",
+ "env_logger",
+ "futures",
+ "gerber-types 0.4.0",
+ "gerber_parser",
+ "gerber_viewer",
+ "image 0.24.9",
+ "kicad-ecs",
+ "local-ip",
+ "local-ip-address",
+ "log",
+ "nalgebra",
+ "notify",
+ "once_cell",
+ "regex 1.11.1",
+ "rfd 0.15.3",
+ "serde",
+ "serde_json",
+ "sled",
+ "sysinfo 0.35.2",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2678,45 +2717,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "walkdir",
-]
-
-[[package]]
-name = "kiforge-core"
-version = "0.1.6"
-dependencies = [
- "bevy_ecs",
- "bincode",
- "chrono",
- "chrono-tz",
- "dirs",
- "eframe",
- "egui",
- "egui-file-dialog",
- "egui_dock",
- "egui_extras",
- "egui_lens",
- "egui_mobius",
- "egui_mobius_reactive",
- "env_logger",
- "futures",
- "gerber-types 0.4.0",
- "gerber_parser",
- "gerber_viewer",
- "image 0.24.9",
- "kicad-ecs",
- "local-ip",
- "local-ip-address",
- "log",
- "nalgebra",
- "notify",
- "once_cell",
- "regex 1.11.1",
- "rfd 0.15.3",
- "serde",
- "serde_json",
- "sled",
- "sysinfo 0.35.2",
- "thiserror 1.0.69",
 ]
 
 [[package]]
