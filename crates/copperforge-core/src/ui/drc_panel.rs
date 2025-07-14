@@ -392,7 +392,7 @@ pub fn show_drc_panel<'a>(
                         let mut total_fixed = 0;
                         
                         // Generate overlay for top copper (using ECS)
-                        if let Some((_entity, _layer_info, gerber_data, _visibility)) = app.layer_manager.get_layer_ecs(&app.ecs_world, &LayerType::TopCopper) {
+                        if let Some((_entity, _layer_info, gerber_data, _visibility)) = crate::ecs::get_layer_data(&mut app.ecs_world, LayerType::TopCopper) {
                             logger.log_info("Processing top copper layer for corner rounding...");
                             let (overlay_shapes, fixed_count) = drc.generate_corner_overlay_data(&gerber_data.0, scaling_factor);
                             logger.log_info(&format!("Generated overlay for {} corners on top copper", fixed_count));
@@ -405,7 +405,7 @@ pub fn show_drc_panel<'a>(
                         }
                         
                         // Generate overlay for bottom copper (using ECS)
-                        if let Some((_entity, _layer_info, gerber_data, _visibility)) = app.layer_manager.get_layer_ecs(&app.ecs_world, &LayerType::BottomCopper) {
+                        if let Some((_entity, _layer_info, gerber_data, _visibility)) = crate::ecs::get_layer_data(&mut app.ecs_world, LayerType::BottomCopper) {
                             logger.log_info("Processing bottom copper layer for corner rounding...");
                             let (overlay_shapes, fixed_count) = drc.generate_corner_overlay_data(&gerber_data.0, scaling_factor);
                             logger.log_info(&format!("Generated overlay for {} corners on bottom copper", fixed_count));

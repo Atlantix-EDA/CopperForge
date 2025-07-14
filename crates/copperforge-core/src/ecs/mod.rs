@@ -210,3 +210,69 @@ pub fn get_layer_assignments(world: &World) -> std::collections::HashMap<String,
         .map(|assignments| assignments.0.clone())
         .unwrap_or_default()
 }
+
+// Get combined bounding box from all visible layers (replaces LayerManager::get_combined_bounding_box_ecs)
+pub fn get_combined_bounding_box(world: &mut World) -> Option<gerber_viewer::BoundingBox> {
+    use gerber_viewer::BoundingBox;
+    use nalgebra::Point2;
+    
+    let mut query = world.query::<(&components::LayerInfo, &components::GerberData, &components::Visibility)>();
+    let mut combined_bbox: Option<BoundingBox> = None;
+    
+    for (_, gerber_data, visibility) in query.iter(world) {
+        if visibility.visible {
+            let layer_bbox = gerber_data.0.bounding_box();
+            combined_bbox = match combined_bbox {
+                Some(existing) => Some(BoundingBox {
+                    min: Point2::new(
+                        existing.min.x.min(layer_bbox.min.x),
+                        existing.min.y.min(layer_bbox.min.y),
+                    ),
+                    max: Point2::new(
+                        existing.max.x.max(layer_bbox.max.x),
+                        existing.max.y.max(layer_bbox.max.y),
+                    ),
+                }),
+                None => Some(layer_bbox.clone()),
+            };
+        }
+    }
+    
+    combined_bbox
+}
+
+// Check if coordinates are dirty (replaces LayerManager::coordinates_dirty)
+pub fn are_coordinates_dirty(world: &World) -> bool {
+    coordinates_need_update(world)
+}
+
+// Mark coordinates as dirty (replaces LayerManager::mark_coordinates_dirty)
+pub fn mark_coordinates_dirty_ecs(world: &mut World) {
+    mark_coordinates_dirty(world)
+}
+
+// Get layer visibility (replaces LayerManager::get_layer_visibility)
+pub fn get_layer_visibility(world: &mut World, layer_type: LayerType) -> bool {
+    if let Some(entity) = get_layer_by_type(world, layer_type) {
+        world.get::<components::Visibility>(entity)
+            .map(|vis| vis.visible)
+            .unwrap_or(false)
+    } else {
+        false
+    }
+}
+
+// Update coordinates from display manager (replaces LayerManager::update_coordinates_from_display_ecs)
+pub fn update_coordinates_from_display(world: &mut World, display_manager: &crate::display::DisplayManager) {
+    // TODO: Implement proper transform updates from display manager
+    // For now, just mark coordinates as updated to maintain the same behavior
+    
+    // Apply mirroring from display manager to layer transforms
+    let mut query = world.query::<&mut components::Transform>();
+    for mut transform in query.iter_mut(world) {
+        transform.mirroring = display_manager.mirroring.clone();
+    }
+    
+    // Mark coordinates as updated
+    mark_coordinates_updated(world);
+}

@@ -13,7 +13,7 @@ pub struct PngExporter;
 #[allow(dead_code)]
 impl PngExporter {
     /// Export each layer in quadrant view as a separate PNG file
-    pub fn export_quadrant_layers(app: &DemoLensApp, output_dir: &PathBuf, width: u32, height: u32) -> Result<Vec<PathBuf>, String> {
+    pub fn export_quadrant_layers(app: &mut DemoLensApp, output_dir: &PathBuf, width: u32, height: u32) -> Result<Vec<PathBuf>, String> {
         if !app.display_manager.quadrant_view_enabled {
             return Err("Quadrant view must be enabled for layer export".to_string());
         }
@@ -21,43 +21,46 @@ impl PngExporter {
         std::fs::create_dir_all(output_dir).map_err(|e| format!("Failed to create output directory: {}", e))?;
         
         // Get mechanical outline layer using ECS - this defines the consistent bounding box for all exports
-        let mechanical_outline_layer = app.layer_manager.get_layer_ecs(&app.ecs_world, &LayerType::MechanicalOutline)
-            .map(|(_entity, _layer_info, gerber_data, _visibility)| &gerber_data.0)
-            .ok_or("Mechanical outline layer is required for consistent PNG export boundaries")?;
-        
-        // Calculate the master bounding box from the mechanical outline
-        let master_bbox = Self::calculate_master_bounding_box(app, mechanical_outline_layer)?;
+        let (mechanical_outline_gerber, master_bbox) = {
+            let mechanical_outline_data = crate::ecs::get_layer_data(&mut app.ecs_world, LayerType::MechanicalOutline)
+                .ok_or("Mechanical outline layer is required for consistent PNG export boundaries")?;
+            let gerber_layer = mechanical_outline_data.2.0.clone();
+            let bbox = Self::calculate_master_bounding_box(app, &gerber_layer)?;
+            (gerber_layer, bbox)
+        };
         
         let mut exported_files = Vec::new();
         
-        // Render each visible layer type using the consistent master bounding box
+        // Collect visible layers data first to avoid borrowing conflicts
+        let mut layers_to_export = Vec::new();
         for layer_type in LayerType::all() {
-            if let Some((_entity, _layer_info, gerber_data, visibility)) = app.layer_manager.get_layer_ecs(&app.ecs_world, &layer_type) {
+            if let Some((_entity, _layer_info, gerber_data, visibility)) = crate::ecs::get_layer_data(&mut app.ecs_world, layer_type) {
                 if visibility.visible && layer_type != LayerType::MechanicalOutline {
                     // Skip if layer shouldn't render for current view
-                    if !layer_type.should_render(app.display_manager.showing_top) {
-                        continue;
+                    if layer_type.should_render(app.display_manager.showing_top) {
+                        layers_to_export.push((layer_type, gerber_data.0.clone()));
                     }
-                    
-                    let gerber_to_render = &gerber_data.0;
-                    
-                    let filename = format!("{}.png", layer_type.display_name().replace(" ", "_").to_lowercase());
-                    let output_path = output_dir.join(&filename);
-                    
-                    Self::export_single_layer_with_bbox(
-                        app,
-                        gerber_to_render,
-                        &layer_type,
-                        Some(mechanical_outline_layer),
-                        &master_bbox,
-                        &output_path,
-                        width,
-                        height,
-                    )?;
-                    
-                    exported_files.push(output_path);
                 }
             }
+        }
+        
+        // Now export each layer without borrowing conflicts
+        for (layer_type, gerber_layer) in layers_to_export {
+            let filename = format!("{}.png", layer_type.display_name().replace(" ", "_").to_lowercase());
+            let output_path = output_dir.join(&filename);
+            
+            Self::export_single_layer_with_bbox(
+                app,
+                &gerber_layer,
+                &layer_type,
+                Some(&mechanical_outline_gerber),
+                &master_bbox,
+                &output_path,
+                width,
+                height,
+            )?;
+            
+            exported_files.push(output_path);
         }
         
         Ok(exported_files)

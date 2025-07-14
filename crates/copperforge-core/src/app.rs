@@ -227,7 +227,7 @@ impl DemoLensApp {
 
     pub fn reset_view(&mut self, viewport: Rect) {
         // Find bounding box from all loaded layers using ECS
-        let combined_bbox = self.layer_manager.get_combined_bounding_box_ecs(&self.ecs_world);
+        let combined_bbox = crate::ecs::get_combined_bounding_box(&mut self.ecs_world);
         
         // Fall back to demo gerber if no layers loaded
         let bbox = combined_bbox.unwrap_or_else(|| self.gerber_layer.bounding_box().clone());
@@ -473,9 +473,9 @@ impl eframe::App for DemoLensApp {
         }
         
         // Only update coordinates when explicitly marked as dirty (not time-based)
-        if self.layer_manager.coordinates_dirty {
+        if crate::ecs::are_coordinates_dirty(&self.ecs_world) {
             // Use ECS-based coordinate updates for better sync
-            self.layer_manager.update_coordinates_from_display_ecs(&mut self.ecs_world, &self.display_manager);
+            crate::ecs::update_coordinates_from_display(&mut self.ecs_world, &self.display_manager);
         }
         
         // No longer need legacy sync - UI uses ECS directly
@@ -506,17 +506,17 @@ impl eframe::App for DemoLensApp {
                         },
                         crate::layer_operations::LayerType::MechanicalOutline => {
                             // Leave outline visibility unchanged, get current state from ECS
-                            self.layer_manager.get_layer_visibility(&self.ecs_world, &layer_type)
+                            crate::ecs::get_layer_visibility(&mut self.ecs_world, layer_type)
                         }
                     };
-                    self.layer_manager.set_layer_visibility_ecs(&mut self.ecs_world, &layer_type, visible);
+                    crate::ecs::set_layer_visibility(&mut self.ecs_world, layer_type, visible);
                 }
                 
                 let view_name = if self.display_manager.showing_top { "top" } else { "bottom" };
                 let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
                 logger.log_info(&format!("Flipped to {} view (F key)", view_name));
                 // Mark coordinates as dirty since view changed
-                self.layer_manager.mark_coordinates_dirty();
+                crate::ecs::mark_coordinates_dirty_ecs(&mut self.ecs_world);
             }
             
             // U key - toggle units (mm/mils)
@@ -534,7 +534,7 @@ impl eframe::App for DemoLensApp {
                 
                 // Don't reset view - just mark coordinates as dirty to update rotation
                 // This keeps the view centered on the current origin
-                self.layer_manager.mark_coordinates_dirty();
+                crate::ecs::mark_coordinates_dirty_ecs(&mut self.ecs_world);
                 
                 let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
                 logger.log_custom(

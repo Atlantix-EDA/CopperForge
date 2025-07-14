@@ -148,7 +148,7 @@ fn render_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
 fn render_quadrant_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
     if ui.checkbox(&mut app.display_manager.quadrant_view_enabled, "Quadrant View").clicked() {
         app.display_manager.update_layer_positions(&mut app.layer_manager);
-        app.layer_manager.mark_coordinates_dirty();
+        crate::ecs::mark_coordinates_dirty_ecs(&mut app.ecs_world);
         app.needs_initial_view = true;
     }
     
@@ -209,13 +209,13 @@ fn render_layer_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
                 },
                 crate::layer_operations::LayerType::MechanicalOutline => {
                     // Leave outline visibility unchanged, get current state from ECS
-                    app.layer_manager.get_layer_visibility(&app.ecs_world, &layer_type)
+                    crate::ecs::get_layer_visibility(&mut app.ecs_world, layer_type)
                 }
             };
-            app.layer_manager.set_layer_visibility_ecs(&mut app.ecs_world, &layer_type, visible);
+            crate::ecs::set_layer_visibility(&mut app.ecs_world, layer_type, visible);
         }
         
-        app.layer_manager.mark_coordinates_dirty();
+        crate::ecs::mark_coordinates_dirty_ecs(&mut app.ecs_world);
     }
 }
 
@@ -226,7 +226,7 @@ fn render_transform_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
         
         // Don't reset view - just mark coordinates as dirty to update rotation
         // This keeps the view centered on the current origin
-        app.layer_manager.mark_coordinates_dirty();
+        crate::ecs::mark_coordinates_dirty_ecs(&mut app.ecs_world);
         
         let logger_state = app.logger_state.clone();
         let log_colors = app.log_colors.clone();
@@ -245,7 +245,7 @@ fn render_transform_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
     if ui.button(x_mirror_text).clicked() {
         app.display_manager.mirroring.x = !app.display_manager.mirroring.x;
         // Don't reset custom origin, just mark coordinates as dirty
-        app.layer_manager.mark_coordinates_dirty();
+        crate::ecs::mark_coordinates_dirty_ecs(&mut app.ecs_world);
         
         let logger_state = app.logger_state.clone();
         let log_colors = app.log_colors.clone();
@@ -260,7 +260,7 @@ fn render_transform_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
     if ui.button(y_mirror_text).clicked() {
         app.display_manager.mirroring.y = !app.display_manager.mirroring.y;
         // Don't reset custom origin, just mark coordinates as dirty
-        app.layer_manager.mark_coordinates_dirty();
+        crate::ecs::mark_coordinates_dirty_ecs(&mut app.ecs_world);
         
         let logger_state = app.logger_state.clone();
         let log_colors = app.log_colors.clone();
@@ -283,7 +283,7 @@ fn render_transform_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
             app.needs_initial_view = true;
             
             // Mark coordinates as dirty to force refresh
-            app.layer_manager.mark_coordinates_dirty();
+            crate::ecs::mark_coordinates_dirty_ecs(&mut app.ecs_world);
             
             let logger_state = app.logger_state.clone();
             let log_colors = app.log_colors.clone();
@@ -493,7 +493,7 @@ fn handle_viewport_interactions(ui: &mut egui::Ui, app: &mut DemoLensApp, viewpo
                 app.needs_initial_view = true;
                 
                 // Mark coordinates as dirty to force refresh
-                app.layer_manager.mark_coordinates_dirty();
+                crate::ecs::mark_coordinates_dirty_ecs(&mut app.ecs_world);
                 
                 let logger_state = app.logger_state.clone();
                 let log_colors = app.log_colors.clone();
@@ -711,7 +711,7 @@ fn render_drc_violations(app: &mut DemoLensApp, painter: &Painter) {
 }
 
 fn render_board_dimensions(app: &mut DemoLensApp, painter: &Painter, viewport: &Rect) {
-    if let Some((_entity, _layer_info, gerber_data, _visibility)) = app.layer_manager.get_layer_ecs(&app.ecs_world, &crate::layer_operations::LayerType::MechanicalOutline) {
+    if let Some((_entity, _layer_info, gerber_data, _visibility)) = crate::ecs::get_layer_data(&mut app.ecs_world, crate::layer_operations::LayerType::MechanicalOutline) {
         let bbox = gerber_data.0.bounding_box();
         let width_mm = bbox.width();
         let height_mm = bbox.height();
