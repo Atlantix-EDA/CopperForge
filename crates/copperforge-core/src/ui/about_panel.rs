@@ -3,7 +3,7 @@ use once_cell::sync::Lazy;
 use crate::platform::parameters::gui::VERSION;
 
 static LOGO: Lazy<egui::Image<'static>> = Lazy::new(|| {
-    egui::Image::new(egui::include_image!("../../../../assets/media/KiForgeLogo.png"))
+    egui::Image::new(egui::include_image!("../../../../assets/media/ForgeCopper.png"))
         .fit_to_original_size(0.75)
         .max_size(egui::vec2(281.25, 225.0))
         .clone()

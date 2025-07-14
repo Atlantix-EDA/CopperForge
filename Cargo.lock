@@ -1001,8 +1001,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "copperforge"
+version = "0.1.7"
+dependencies = [
+ "copperforge-core",
+ "eframe",
+ "egui",
+ "egui_extras",
+ "env_logger",
+ "log",
+]
+
+[[package]]
 name = "copperforge-core"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "bevy_ecs",
  "bincode",
@@ -1019,7 +1031,7 @@ dependencies = [
  "egui_mobius_reactive",
  "env_logger",
  "futures",
- "gerber-types 0.4.0",
+ "gerber-types",
  "gerber_parser",
  "gerber_viewer",
  "image 0.24.9",
@@ -2053,23 +2065,9 @@ dependencies = [
 
 [[package]]
 name = "gerber-types"
-version = "0.4.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d74f04b97a30284131cde121b30e44c4a75b57b39911a3252595d15c7052398"
-dependencies = [
- "chrono",
- "num-rational",
- "strum 0.27.1",
- "strum_macros 0.27.1",
- "thiserror 2.0.12",
- "uuid",
-]
-
-[[package]]
-name = "gerber-types"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0329ab1b6b6070203fb939e903518ad11e80ccbb6e5f350bab3dc0c00d9c483d"
+checksum = "4e74cdcc853873ea3333d9db638f4cad7e09fe5849ff30fa7415cd40ed735e5c"
 dependencies = [
  "chrono",
  "num-rational",
@@ -2081,12 +2079,12 @@ dependencies = [
 
 [[package]]
 name = "gerber_parser"
-version = "0.2.1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b3b86f7e7e04dab7160be29afbea7a74ea4ea094d3b7be8e6d836e6f4c352b2"
+checksum = "e941c1b82aa751cb6f504546a2a01bac0ca4d78509a041814f8f5215f63c2610"
 dependencies = [
  "anyhow",
- "gerber-types 0.5.0",
+ "gerber-types",
  "lazy-regex",
  "log",
  "regex 1.11.1",
@@ -2096,12 +2094,12 @@ dependencies = [
 
 [[package]]
 name = "gerber_viewer"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a4f64254c1c811bab5f7e906705476b121d19e85fb45977c43c24ae9e525fd2"
+checksum = "dc7184c7f82b54c819f670740cbf4a23714259f6d7ec776fd43e98fb6c3ab58e"
 dependencies = [
  "egui",
- "gerber-types 0.5.0",
+ "gerber-types",
  "gerber_parser",
  "log",
  "lyon",

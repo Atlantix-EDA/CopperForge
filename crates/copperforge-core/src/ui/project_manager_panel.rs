@@ -223,7 +223,7 @@ pub fn show_project_manager_panel(
 pub fn show_create_project_dialog(
     ctx: &egui::Context,
     manager_state: &mut ProjectManagerState,
-    project_state: &crate::project::ProjectState,
+    _project_state: &crate::project::ProjectState,
     bom_components: Vec<crate::project_manager::bom::BomComponent>,
     logger: &ReactiveEventLogger,
 ) {
@@ -254,20 +254,33 @@ pub fn show_create_project_dialog(
                 // PCB file selection
                 ui.horizontal(|ui| {
                     ui.label("PCB File:");
-                    let pcb_file_text = match project_state {
-                        crate::project::ProjectState::Ready { pcb_path, .. } |
-                        crate::project::ProjectState::PcbSelected { pcb_path } |
-                        crate::project::ProjectState::GeneratingGerbers { pcb_path } |
-                        crate::project::ProjectState::GerbersGenerated { pcb_path, .. } |
-                        crate::project::ProjectState::LoadingGerbers { pcb_path, .. } => {
-                            pcb_path.file_name()
-                                .map(|n| n.to_string_lossy().to_string())
-                                .unwrap_or_else(|| "Unknown file".to_string())
-                        },
-                        _ => "No PCB file selected".to_string(),
+                    
+                    let pcb_file_text = if let Some(ref path) = manager_state.new_project_pcb_path {
+                        path.file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| "Unknown file".to_string())
+                    } else {
+                        "No PCB file selected".to_string()
                     };
-                    ui.label(pcb_file_text);
+                    
+                    ui.label(&pcb_file_text);
+                    
+                    if ui.button("Browse...").clicked() {
+                        manager_state.show_pcb_file_dialog = true;
+                    }
                 });
+                
+                // Handle PCB file dialog
+                if manager_state.show_pcb_file_dialog {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("KiCad PCB", &["kicad_pcb"])
+                        .set_title("Select PCB File")
+                        .pick_file() 
+                    {
+                        manager_state.new_project_pcb_path = Some(path);
+                    }
+                    manager_state.show_pcb_file_dialog = false;
+                }
                 
                 ui.add_space(15.0);
                 
@@ -280,19 +293,12 @@ pub fn show_create_project_dialog(
                             return;
                         }
                         
-                        // Get PCB file path
-                        let pcb_path = match project_state {
-                            crate::project::ProjectState::Ready { pcb_path, .. } |
-                            crate::project::ProjectState::PcbSelected { pcb_path } |
-                            crate::project::ProjectState::GeneratingGerbers { pcb_path } |
-                            crate::project::ProjectState::GerbersGenerated { pcb_path, .. } |
-                            crate::project::ProjectState::LoadingGerbers { pcb_path, .. } => {
-                                pcb_path.clone()
-                            },
-                            _ => {
-                                manager_state.last_error = Some("Please select a PCB file first".to_string());
-                                return;
-                            }
+                        // Get PCB file path from dialog selection
+                        let pcb_path = if let Some(ref path) = manager_state.new_project_pcb_path {
+                            path.clone()
+                        } else {
+                            manager_state.last_error = Some("Please select a PCB file first".to_string());
+                            return;
                         };
                         
                         // Parse tags

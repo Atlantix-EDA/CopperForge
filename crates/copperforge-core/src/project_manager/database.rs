@@ -123,6 +123,21 @@ impl ProjectDatabase {
         Ok(filtered)
     }
 
+    /// Find project by PCB file path
+    pub fn find_project_by_pcb_path(&self, pcb_path: &std::path::Path) -> Result<Option<ProjectData>, ProjectDatabaseError> {
+        let all_projects = self.list_projects()?;
+        
+        for project_metadata in all_projects {
+            if project_metadata.pcb_file_path == pcb_path {
+                if let Some(project_data) = self.load_project(&project_metadata.id)? {
+                    return Ok(Some(project_data));
+                }
+            }
+        }
+        
+        Ok(None)
+    }
+
     /// Update project index for quick listings
     fn update_project_index(&self, metadata: &ProjectMetadata) -> Result<(), ProjectDatabaseError> {
         let mut project_ids: Vec<String> = if let Some(index_data) = self.db.get(b"index:projects")

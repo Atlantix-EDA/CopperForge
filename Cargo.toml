@@ -6,8 +6,26 @@ members = [
     "crates/copperforge-core",
 ]
 
+[package]
+name = "copperforge"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "copperforge"
+path = "src/main.rs"
+
+[dependencies]
+copperforge-core = { path = "crates/copperforge-core" }
+eframe.workspace = true
+egui.workspace = true
+egui_extras.workspace = true
+env_logger.workspace = true
+log.workspace = true
+
 [workspace.package]
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 authors = ["James Bonanno <atlantix-eda@proton.me>"]
 
@@ -21,9 +39,9 @@ egui_extras = { version = "0.31.1", features = ["image"] } # For image loading a
 image = "0.24" # For image loading
 
 # Gerber and PCB handling
-gerber_viewer = "0.2.0"
-gerber_types = { package = "gerber-types", version = "0.4.0" }
-gerber_parser = "0.2.1"
+gerber_viewer = "0.3.0"
+gerber_types = { package = "gerber-types", version = "0.6.0" }
+gerber_parser = "0.3.0"
 nalgebra = "0.33"
 
 # Egui Mobius framework

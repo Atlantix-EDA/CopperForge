@@ -18,6 +18,8 @@ pub struct ProjectManagerState {
     pub new_project_name: String,
     pub new_project_description: String,
     pub new_project_tags: String,
+    pub new_project_pcb_path: Option<PathBuf>,
+    pub show_pcb_file_dialog: bool,
     pub last_error: Option<String>,
 }
 
@@ -34,6 +36,8 @@ impl Default for ProjectManagerState {
             new_project_name: String::new(),
             new_project_description: String::new(),
             new_project_tags: String::new(),
+            new_project_pcb_path: None,
+            show_pcb_file_dialog: false,
             last_error: None,
         }
     }
@@ -190,5 +194,7 @@ impl ProjectManagerState {
         self.new_project_name.clear();
         self.new_project_description.clear();
         self.new_project_tags.clear();
+        self.new_project_pcb_path = None;
+        self.show_pcb_file_dialog = false;
     }
 }
