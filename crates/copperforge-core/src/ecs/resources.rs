@@ -1,6 +1,7 @@
 use bevy_ecs::prelude::*;
 use gerber_viewer::ViewState;
-use crate::layer_operations::LayerType;
+use crate::layer_operations::{LayerType, detection::{LayerDetector, UnassignedGerber}};
+use std::collections::HashMap;
 
 // Simple view mode enum
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -46,3 +47,37 @@ impl Default for RenderConfig {
 // Active layer resource (replaces LayerManager.active_layer)
 #[derive(Resource)]
 pub struct ActiveLayer(pub LayerType);
+
+// Layer assignment tracking (replaces LayerManager.layer_assignments)
+#[derive(Resource, Default)]
+pub struct LayerAssignments(pub HashMap<String, LayerType>);
+
+// Unassigned gerber files (replaces LayerManager.unassigned_gerbers)
+#[derive(Resource, Default)]
+pub struct UnassignedGerbers(pub Vec<UnassignedGerber>);
+
+// Layer detection system (replaces LayerManager.layer_detector)
+#[derive(Resource)]
+pub struct LayerDetectorResource(pub LayerDetector);
+
+impl Default for LayerDetectorResource {
+    fn default() -> Self {
+        Self(LayerDetector::new())
+    }
+}
+
+// Coordinate update tracking (replaces LayerManager.coordinates_*)
+#[derive(Resource)]
+pub struct CoordinateUpdateTracker {
+    pub dirty: bool,
+    pub last_updated: std::time::Instant,
+}
+
+impl Default for CoordinateUpdateTracker {
+    fn default() -> Self {
+        Self {
+            dirty: false,
+            last_updated: std::time::Instant::now(),
+        }
+    }
+}

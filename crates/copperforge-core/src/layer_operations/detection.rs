@@ -142,7 +142,7 @@ impl LayerDetector {
 }
 
 /// Represents unassigned gerber files that couldn't be automatically detected
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UnassignedGerber {
     pub filename: String,
     pub content: String,
