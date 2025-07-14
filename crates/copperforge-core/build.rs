@@ -16,6 +16,8 @@ fn main() {
     let mut gerber_viewer_version = "unknown";
     let mut gerber_types_version = "unknown";
     let mut gerber_parser_version = "unknown";
+    let mut egui_file_dialog_version = "unknown";
+    let mut egui_dock_version = "unknown";
     
     // Check local Cargo.toml first
     for line in cargo_toml.lines() {
@@ -27,6 +29,12 @@ fn main() {
             }
         } else if line.starts_with("gerber_parser = ") {
             gerber_parser_version = line.split('"').nth(1).unwrap_or("unknown");
+        } else if line.starts_with("egui-file-dialog = ") {
+            egui_file_dialog_version = line.split('"').nth(1).unwrap_or("unknown");
+        } else if line.contains("egui_dock = ") && line.contains("version = ") {
+            if let Some(version_part) = line.split("version = ").nth(1) {
+                egui_dock_version = version_part.split('"').nth(1).unwrap_or("unknown");
+            }
         }
     }
     
@@ -40,6 +48,12 @@ fn main() {
             }
         } else if gerber_parser_version == "unknown" && line.starts_with("gerber_parser = ") {
             gerber_parser_version = line.split('"').nth(1).unwrap_or("unknown");
+        } else if egui_file_dialog_version == "unknown" && line.starts_with("egui-file-dialog = ") {
+            egui_file_dialog_version = line.split('"').nth(1).unwrap_or("unknown");
+        } else if egui_dock_version == "unknown" && line.contains("egui_dock = ") && line.contains("version = ") {
+            if let Some(version_part) = line.split("version = ").nth(1) {
+                egui_dock_version = version_part.split('"').nth(1).unwrap_or("unknown");
+            }
         }
     }
     
@@ -47,4 +61,6 @@ fn main() {
     println!("cargo:rustc-env=GERBER_VIEWER_VERSION={}", gerber_viewer_version);
     println!("cargo:rustc-env=GERBER_TYPES_VERSION={}", gerber_types_version);
     println!("cargo:rustc-env=GERBER_PARSER_VERSION={}", gerber_parser_version);
+    println!("cargo:rustc-env=EGUI_FILE_DIALOG_VERSION={}", egui_file_dialog_version);
+    println!("cargo:rustc-env=EGUI_DOCK_VERSION={}", egui_dock_version);
 }

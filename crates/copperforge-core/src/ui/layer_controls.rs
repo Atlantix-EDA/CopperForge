@@ -226,10 +226,7 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
                             let already_assigned = app.layer_manager.get_layer_entity(&layer_type).is_some();
                             
                             if already_assigned {
-                                ui.add_enabled(false, egui::SelectableLabel::new(
-                                    false,
-                                    format!("✓ {} (assigned)", layer_type.display_name())
-                                ));
+                                ui.add_enabled(false, egui::Button::new(format!("✓ {} (assigned)", layer_type.display_name())));
                             } else if ui.selectable_value(&mut assignments_to_make, vec![(unassigned.filename.clone(), layer_type)], layer_type.display_name()).clicked() {
                                 assignments_to_make.push((unassigned.filename.clone(), layer_type));
                             }

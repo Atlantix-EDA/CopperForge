@@ -123,10 +123,10 @@ pub fn show_settings_panel<'a>(
                 .selected_text("English")
                 .show_ui(ui, |ui| {
                     let _ = ui.selectable_label(true, "English");
-                    ui.add_enabled(false, egui::SelectableLabel::new(false, "Français (coming soon)"));
-                    ui.add_enabled(false, egui::SelectableLabel::new(false, "Deutsch (coming soon)"));
-                    ui.add_enabled(false, egui::SelectableLabel::new(false, "中文 (coming soon)"));
-                    ui.add_enabled(false, egui::SelectableLabel::new(false, "日本語 (coming soon)"));
+                    ui.add_enabled(false, egui::Button::new("Français (coming soon)"));
+                    ui.add_enabled(false, egui::Button::new("Deutsch (coming soon)"));
+                    ui.add_enabled(false, egui::Button::new("中文 (coming soon)"));
+                    ui.add_enabled(false, egui::Button::new("日本語 (coming soon)"));
                 });
         });
     });
