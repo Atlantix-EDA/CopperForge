@@ -90,107 +90,47 @@ pub fn create_mechanical_outline_entity(
     )
 }
 
-/// Factory for creating a copper layer entity
-pub fn create_copper_layer_entity(
+/// Factory for creating any layer entity (unified)
+pub fn create_layer_entity(
     world: &mut World,
     layer_type: LayerType,
     gerber_layer: GerberLayer,
-    _raw_gerber_data: Option<String>,
+    raw_gerber_data: Option<String>,
     file_path: Option<PathBuf>,
     visible: bool,
 ) -> Entity {
-    // Ensure we're creating a copper layer
+    let entity_id = create_gerber_layer_entity(
+        world,
+        layer_type,
+        gerber_layer,
+        raw_gerber_data,
+        file_path,
+        visible,
+    );
+    
+    // Add layer-specific components based on type
     match layer_type {
         LayerType::Copper(_) => {
-            let entity_id = create_gerber_layer_entity(
-                world,
-                layer_type,
-                gerber_layer,
-                _raw_gerber_data,
-                file_path,
-                visible,
-            );
-            
             // Add DRC requirement for copper layers
             world.entity_mut(entity_id).insert(RequiresDrc);
-            
-            entity_id
         }
-        _ => panic!("create_copper_layer_entity called with non-copper layer type: {:?}", layer_type),
+        LayerType::Silkscreen(_) |
+        LayerType::Soldermask(_) |
+        LayerType::Paste(_) |
+        LayerType::MechanicalOutline => {
+            // No additional components needed for these layer types
+        }
     }
+    
+    entity_id
 }
 
-/// Factory for creating a silk layer entity
-pub fn create_silk_layer_entity(
-    world: &mut World,
-    layer_type: LayerType,
-    gerber_layer: GerberLayer,
-    file_path: Option<PathBuf>,
-    visible: bool,
-) -> Entity {
-    // Ensure we're creating a silk layer
-    match layer_type {
-        LayerType::Silkscreen(_) => {
-            create_gerber_layer_entity(
-                world,
-                layer_type,
-                gerber_layer,
-                None,
-                file_path,
-                visible,
-            )
-        }
-        _ => panic!("create_silk_layer_entity called with non-silk layer type: {:?}", layer_type),
-    }
-}
 
-/// Factory for creating a soldermask layer entity
-pub fn create_soldermask_layer_entity(
-    world: &mut World,
-    layer_type: LayerType,
-    gerber_layer: GerberLayer,
-    file_path: Option<PathBuf>,
-    visible: bool,
-) -> Entity {
-    // Ensure we're creating a soldermask layer
-    match layer_type {
-        LayerType::Soldermask(_) => {
-            create_gerber_layer_entity(
-                world,
-                layer_type,
-                gerber_layer,
-                None,
-                file_path,
-                visible,
-            )
-        }
-        _ => panic!("create_soldermask_layer_entity called with non-soldermask layer type: {:?}", layer_type),
-    }
-}
 
-/// Factory for creating a paste layer entity
-pub fn create_paste_layer_entity(
-    world: &mut World,
-    layer_type: LayerType,
-    gerber_layer: GerberLayer,
-    file_path: Option<PathBuf>,
-    visible: bool,
-) -> Entity {
-    // Ensure we're creating a paste layer
-    match layer_type {
-        LayerType::Paste(_) => {
-            create_gerber_layer_entity(
-                world,
-                layer_type,
-                gerber_layer,
-                None,
-                file_path,
-                visible,
-            )
-        }
-        _ => panic!("create_paste_layer_entity called with non-paste layer type: {:?}", layer_type),
-    }
-}
+
+
+
+
 
 /// Utility function to determine z-order for layer rendering
 fn layer_type_to_z_order(layer_type: &LayerType) -> i32 {
