@@ -1,13 +1,10 @@
-use crate::{DemoLensApp, layer_operations::LayerInfo};
+use crate::DemoLensApp;
 use crate::project::ProjectState;
 use crate::project_manager::ProjectManagerState;
 use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::io::BufReader;
-use gerber_viewer::gerber_parser::parse;
-use gerber_viewer::GerberLayer;
 
 pub fn show_project_panel<'a>(
     ui: &mut egui::Ui,
@@ -347,115 +344,33 @@ fn generate_gerbers_from_pcb(pcb_path: &Path, logger: &ReactiveEventLogger) -> O
 }
 
 fn load_gerbers_into_viewer(app: &mut DemoLensApp, gerber_dir: &Path, logger: &ReactiveEventLogger) {
-    use crate::layer_operations::UnassignedGerber;
-    
     // Clear all existing layers and unassigned gerbers first
     logger.log_info("Clearing existing gerber layers...");
-    app.layer_manager.clear_all_ecs(&mut app.ecs_world);
-    app.layer_manager.unassigned_gerbers.clear();
-    app.layer_manager.layer_assignments.clear();
+    crate::ecs::clear_all_layers_system(&mut app.ecs_world);
     
-    let mut loaded_count = 0;
-    let mut unassigned_count = 0;
-    
-    // Read directory and load all gerber files
-    if let Ok(entries) = std::fs::read_dir(gerber_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("gbr") {
-                let filename = path.file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("")
-                    .to_string();
-                
-                // Try to load and parse the gerber file
-                match std::fs::read_to_string(&path) {
-                    Ok(gerber_content) => {
-                        let reader = BufReader::new(gerber_content.as_bytes());
-                        match parse(reader) {
-                            Ok(doc) => {
-                                let commands = doc.into_commands();
-                                let gerber_layer = GerberLayer::new(commands);
-                                
-                                // Try to detect layer type using regex patterns
-                                if let Some(detected_type) = app.layer_manager.layer_detector.detect_layer_type(&filename) {
-                                    // Check if we already have this layer type assigned
-                                    if let Some(existing_assignment) = app.layer_manager.layer_assignments.iter()
-                                        .find(|(_, layer_type)| **layer_type == detected_type)
-                                        .map(|(fname, _)| fname.clone()) {
-                                        // This layer type is already assigned to another file
-                                        logger.log_warning(&format!(
-                                            "Layer type {:?} already assigned to {}. Adding {} to unassigned list.",
-                                            detected_type, existing_assignment, filename
-                                        ));
-                                        app.layer_manager.unassigned_gerbers.push(UnassignedGerber {
-                                            filename: filename.clone(),
-                                            content: gerber_content.clone(),
-                                            parsed_layer: gerber_layer,
-                                        });
-                                        unassigned_count += 1;
-                                    } else {
-                                        // Create layer entity using ECS factory
-                                        let entity = crate::ecs::create_gerber_layer_entity(
-                                            &mut app.ecs_world,
-                                            detected_type,
-                                            gerber_layer.clone(),
-                                            Some(gerber_content.clone()),
-                                            Some(filename.clone().into()),
-                                            true, // All layers have their checkbox checked by default
-                                        );
-                                        
-                                        // Update layer manager tracking
-                                        app.layer_manager.layer_entities.insert(detected_type, entity);
-                                        app.layer_manager.layer_assignments.insert(filename.clone(), detected_type);
-                                        
-                                        // Also update legacy cache for backward compatibility
-                                        let mut layer_info = LayerInfo::new(
-                                            detected_type,
-                                            Some(gerber_layer),
-                                            Some(gerber_content.clone()),
-                                            true,
-                                        );
-                                        layer_info.initialize_coordinates_from_gerber();
-                                        app.layer_manager.layers.insert(detected_type, layer_info);
-                                        
-                                        loaded_count += 1;
-                                        logger.log_info(&format!("Loaded {} as {:?}", filename, detected_type));
-                                    }
-                                } else {
-                                    // Could not detect layer type, add to unassigned list
-                                    logger.log_warning(&format!("Could not detect layer type for: {}", filename));
-                                    app.layer_manager.unassigned_gerbers.push(UnassignedGerber {
-                                        filename: filename.clone(),
-                                        content: gerber_content,
-                                        parsed_layer: gerber_layer,
-                                    });
-                                    unassigned_count += 1;
-                                }
-                            }
-                            Err(e) => {
-                                logger.log_error(&format!("Failed to parse {}: {:?}", filename, e));
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        logger.log_error(&format!("Failed to read {}: {}", filename, e));
-                    }
-                }
+    // Use ECS system for bulk gerber loading
+    match crate::ecs::load_gerbers_from_directory_system(&mut app.ecs_world, gerber_dir) {
+        Ok((loaded_count, unassigned_count)) => {
+            // Log results from ECS system
+            if loaded_count > 0 {
+                logger.log_info(&format!("Successfully loaded {} gerber layers", loaded_count));
+            }
+            if unassigned_count > 0 {
+                logger.log_warning(&format!("{} gerber files could not be automatically assigned", unassigned_count));
+            }
+            
+            // Set loading status for UI
+            if loaded_count > 0 {
+                app.needs_initial_view = true; // Trigger view reset
+            } else if unassigned_count > 0 {
+                logger.log_warning(&format!("No layers were automatically detected. {} gerber files need manual assignment.", unassigned_count));
+            } else {
+                logger.log_error("No gerber files were found");
             }
         }
-    }
-    
-    if loaded_count > 0 {
-        logger.log_info(&format!("Successfully loaded {} gerber layers", loaded_count));
-        if unassigned_count > 0 {
-            logger.log_warning(&format!("{} gerber files could not be automatically assigned", unassigned_count));
+        Err(e) => {
+            logger.log_error(&format!("Failed to load gerbers: {}", e));
         }
-        app.needs_initial_view = true; // Trigger view reset
-    } else if unassigned_count > 0 {
-        logger.log_warning(&format!("No layers were automatically detected. {} gerber files need manual assignment.", unassigned_count));
-    } else {
-        logger.log_error("No gerber files were found");
     }
 }
 

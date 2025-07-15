@@ -1,6 +1,6 @@
 use regex::Regex;
 use std::collections::HashMap;
-use crate::layer_operations::LayerType;
+use super::{LayerType, Side}; // Use LayerType and Side from ECS types module
 
 /// Common layer name patterns found across different PCB design tools
 #[derive(Debug)]
@@ -18,8 +18,8 @@ impl LayerDetector {
     pub fn new() -> Self {
         let mut patterns = HashMap::new();
         
-        // Top Copper patterns
-        patterns.insert(LayerType::TopCopper, vec![
+        // Top Copper patterns (Layer 1)
+        patterns.insert(LayerType::Copper(1), vec![
             Regex::new(r"(?i)[-_\.]F[-_\.]?Cu\.gbr$").unwrap(),
             Regex::new(r"(?i)[-_\.]top[-_\.]?copper\.gbr$").unwrap(),
             Regex::new(r"(?i)[-_\.]top\.gbr$").unwrap(),
@@ -30,8 +30,8 @@ impl LayerDetector {
             Regex::new(r"(?i)[-_\.]l1\.gbr$").unwrap(),
         ]);
         
-        // Bottom Copper patterns
-        patterns.insert(LayerType::BottomCopper, vec![
+        // Bottom Copper patterns (Layer 2 for 2-layer boards)
+        patterns.insert(LayerType::Copper(2), vec![
             Regex::new(r"(?i)[-_\.]B[-_\.]?Cu\.gbr$").unwrap(),
             Regex::new(r"(?i)[-_\.]bottom[-_\.]?copper\.gbr$").unwrap(),
             Regex::new(r"(?i)[-_\.]bottom\.gbr$").unwrap(),
@@ -42,8 +42,29 @@ impl LayerDetector {
             Regex::new(r"(?i)[-_\.]l2\.gbr$").unwrap(),
         ]);
         
+        // Inner layer patterns (for multi-layer boards)
+        // Layer 3
+        patterns.insert(LayerType::Copper(3), vec![
+            Regex::new(r"(?i)[-_\.]In1[-_\.]?Cu\.gbr$").unwrap(),
+            Regex::new(r"(?i)[-_\.]inner1\.gbr$").unwrap(),
+            Regex::new(r"(?i)[-_\.]layer3\.gbr$").unwrap(),
+            Regex::new(r"(?i)[-_\.]l3\.gbr$").unwrap(),
+            Regex::new(r"(?i)\.g1$").unwrap(), // Gerber inner 1
+        ]);
+        
+        // Layer 4
+        patterns.insert(LayerType::Copper(4), vec![
+            Regex::new(r"(?i)[-_\.]In2[-_\.]?Cu\.gbr$").unwrap(),
+            Regex::new(r"(?i)[-_\.]inner2\.gbr$").unwrap(),
+            Regex::new(r"(?i)[-_\.]layer4\.gbr$").unwrap(),
+            Regex::new(r"(?i)[-_\.]l4\.gbr$").unwrap(),
+            Regex::new(r"(?i)\.g2$").unwrap(), // Gerber inner 2
+        ]);
+        
+        // Can add more inner layers as needed...
+        
         // Top Silkscreen patterns
-        patterns.insert(LayerType::TopSilk, vec![
+        patterns.insert(LayerType::Silkscreen(Side::Top), vec![
             Regex::new(r"(?i)[-_\.]F[-_\.]?Silk[sS]?\.gbr$").unwrap(),
             Regex::new(r"(?i)[-_\.]F[-_\.]?Silkscreen\.gbr$").unwrap(),
             Regex::new(r"(?i)[-_\.]top[-_\.]?silk(?:screen)?\.gbr$").unwrap(),
@@ -54,7 +75,7 @@ impl LayerDetector {
         ]);
         
         // Bottom Silkscreen patterns
-        patterns.insert(LayerType::BottomSilk, vec![
+        patterns.insert(LayerType::Silkscreen(Side::Bottom), vec![
             Regex::new(r"(?i)[-_\.]B[-_\.]?Silk[sS]?\.gbr$").unwrap(),
             Regex::new(r"(?i)[-_\.]B[-_\.]?Silkscreen\.gbr$").unwrap(),
             Regex::new(r"(?i)[-_\.]bottom[-_\.]?silk(?:screen)?\.gbr$").unwrap(),
@@ -65,7 +86,7 @@ impl LayerDetector {
         ]);
         
         // Top Soldermask patterns
-        patterns.insert(LayerType::TopSoldermask, vec![
+        patterns.insert(LayerType::Soldermask(Side::Top), vec![
             Regex::new(r"(?i)[-_\.]F[-_\.]?Mask\.gbr$").unwrap(),
             Regex::new(r"(?i)[-_\.]top[-_\.]?(?:solder)?mask\.gbr$").unwrap(),
             Regex::new(r"(?i)[-_\.]front[-_\.]?(?:solder)?mask\.gbr$").unwrap(),
@@ -75,7 +96,7 @@ impl LayerDetector {
         ]);
         
         // Bottom Soldermask patterns
-        patterns.insert(LayerType::BottomSoldermask, vec![
+        patterns.insert(LayerType::Soldermask(Side::Bottom), vec![
             Regex::new(r"(?i)[-_\.]B[-_\.]?Mask\.gbr$").unwrap(),
             Regex::new(r"(?i)[-_\.]bottom[-_\.]?(?:solder)?mask\.gbr$").unwrap(),
             Regex::new(r"(?i)[-_\.]back[-_\.]?(?:solder)?mask\.gbr$").unwrap(),
@@ -85,7 +106,7 @@ impl LayerDetector {
         ]);
         
         // Top Paste patterns
-        patterns.insert(LayerType::TopPaste, vec![
+        patterns.insert(LayerType::Paste(Side::Top), vec![
             Regex::new(r"(?i)[-_\.]F[-_\.]?Paste\.gbr$").unwrap(),
             Regex::new(r"(?i)[-_\.]top[-_\.]?paste\.gbr$").unwrap(),
             Regex::new(r"(?i)[-_\.]front[-_\.]?paste\.gbr$").unwrap(),
@@ -95,7 +116,7 @@ impl LayerDetector {
         ]);
         
         // Bottom Paste patterns
-        patterns.insert(LayerType::BottomPaste, vec![
+        patterns.insert(LayerType::Paste(Side::Bottom), vec![
             Regex::new(r"(?i)[-_\.]B[-_\.]?Paste\.gbr$").unwrap(),
             Regex::new(r"(?i)[-_\.]bottom[-_\.]?paste\.gbr$").unwrap(),
             Regex::new(r"(?i)[-_\.]back[-_\.]?paste\.gbr$").unwrap(),

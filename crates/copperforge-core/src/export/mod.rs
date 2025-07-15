@@ -3,7 +3,7 @@ use image::{ImageBuffer, Rgba, RgbaImage};
 use eframe::emath::{Rect, Vec2};
 use egui::Pos2;
 use gerber_viewer::{ViewState, BoundingBox, GerberTransform};
-use crate::{DemoLensApp, layer_operations::LayerType};
+use crate::{DemoLensApp, ecs::LayerType};
 use crate::display::VectorOffset;
 use nalgebra::{Vector2, Point2};
 
@@ -238,18 +238,18 @@ impl PngExporter {
         
         // Draw based on layer type
         match layer_type {
-            LayerType::TopCopper | LayerType::BottomCopper => {
+            LayerType::Copper(_) => {
                 Self::fill_rectangle(img, x1, y1, x2, y2, color);
             },
-            LayerType::TopSilk | LayerType::BottomSilk => {
+            LayerType::Silkscreen(_) => {
                 // Draw silkscreen as text-like patterns
                 Self::draw_silkscreen_pattern(img, (x1, y1), (x2, y2), color);
             },
-            LayerType::TopSoldermask | LayerType::BottomSoldermask => {
+            LayerType::Soldermask(_) => {
                 // Draw soldermask as mostly filled with some openings
                 Self::fill_rectangle_with_openings(img, x1, y1, x2, y2, color);
             },
-            LayerType::TopPaste | LayerType::BottomPaste => {
+            LayerType::Paste(_) => {
                 // Draw paste as small squares/dots
                 Self::draw_paste_pattern(img, (x1, y1), (x2, y2), color);
             },

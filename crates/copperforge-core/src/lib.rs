@@ -5,7 +5,7 @@ pub mod display;
 pub mod drc_operations;
 pub mod ecs;
 pub mod export;
-pub mod layer_operations;
+// layer_operations module removed - all functionality moved to ECS
 pub mod navigation;
 pub mod platform;
 pub mod project;

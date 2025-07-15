@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::layer_operations::{LayerType, LayerManager};
+// LayerType import removed with LayerManager functions
 
 /// Serializable mirroring settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,24 +107,6 @@ impl DisplayManager {
         self.user_delta_offset = VectorOffset { x: 0.0, y: 0.0 };
     }
     
-    /// Update design offset based on mechanical outline centroid + user delta
-    pub fn update_design_offset(&mut self, layer_manager: &crate::layer_operations::LayerManager) {
-        if let Some((centroid_x, centroid_y)) = layer_manager.get_mechanical_outline_centroid() {
-            self.design_offset = VectorOffset {
-                x: centroid_x + self.user_delta_offset.x,
-                y: centroid_y + self.user_delta_offset.y,
-            };
-            println!("🔧 Updated design offset: mechanical_centroid({:.2}, {:.2}) + user_delta({:.2}, {:.2}) = ({:.2}, {:.2})", 
-                     centroid_x, centroid_y, 
-                     self.user_delta_offset.x, self.user_delta_offset.y,
-                     self.design_offset.x, self.design_offset.y);
-        } else {
-            // Fallback: use only user delta if no mechanical outline
-            self.design_offset = self.user_delta_offset.clone();
-            println!("⚠️ No mechanical outline found, using user delta as design offset: ({:.2}, {:.2})", 
-                     self.design_offset.x, self.design_offset.y);
-        }
-    }
     
     /// Toggle X-axis mirroring
     pub fn toggle_x_mirror(&mut self) {
@@ -168,7 +150,7 @@ impl DisplayManager {
     /// Get the quadrant offset for a specific layer type
     /// Returns (x_offset, y_offset) in mm
     /// Now implements linear horizontal layout instead of quadrant view
-    pub fn get_quadrant_offset(&self, layer_type: &crate::layer_operations::LayerType) -> VectorOffset {
+    pub fn get_quadrant_offset(&self, layer_type: &crate::ecs::LayerType) -> VectorOffset {
         // Use the quadrant_offset_magnitude directly as the spacing value
         let spacing = self.quadrant_offset_magnitude.max(1.0); // Minimum 1mm spacing
         self.get_quadrant_offset_with_spacing(layer_type, spacing)
@@ -177,7 +159,7 @@ impl DisplayManager {
     /// Get the quadrant offset with explicit spacing
     /// Returns (x_offset, y_offset) in mm
     /// Now implements linear horizontal layout instead of quadrant view
-    pub fn get_quadrant_offset_with_spacing(&self, layer_type: &crate::layer_operations::LayerType, spacing: f64) -> VectorOffset {
+    pub fn get_quadrant_offset_with_spacing(&self, layer_type: &crate::ecs::LayerType, spacing: f64) -> VectorOffset {
         if !self.quadrant_view_enabled {
             return VectorOffset { x: 0.0, y: 0.0 };
         }
@@ -188,20 +170,20 @@ impl DisplayManager {
         // - Soldermask at spacing * 2
         // - Paste layers hidden (not shown)
         
-        use crate::layer_operations::LayerType;
+        use crate::ecs::LayerType;
         
         let x_offset = match layer_type {
             // Copper layers - Stay at origin (0,0)
-            LayerType::TopCopper | LayerType::BottomCopper => 0.0,
+            LayerType::Copper(_) => 0.0,
             
             // Silkscreen layers - at spacing
-            LayerType::TopSilk | LayerType::BottomSilk => spacing,
+            LayerType::Silkscreen(_) => spacing,
             
             // Soldermask layers - at spacing * 2
-            LayerType::TopSoldermask | LayerType::BottomSoldermask => spacing * 2.0,
+            LayerType::Soldermask(_) => spacing * 2.0,
             
             // Paste layers - hidden (positioned far off-screen)
-            LayerType::TopPaste | LayerType::BottomPaste => -9999.0,
+            LayerType::Paste(_) => -9999.0,
             
             // Mechanical outline should not be displayed in quadrant view
             // (it will be rendered separately with each layer)
@@ -230,6 +212,7 @@ impl DisplayManager {
         }
     }
     
+    /* REMOVED: LayerManager-dependent functions
     /// Update all layer positions based on quadrant view settings
     /// This properly positions layers in traditional geometry space
     pub fn update_layer_positions(&self, layer_manager: &mut LayerManager) {
@@ -311,6 +294,7 @@ impl DisplayManager {
             (center_x + half_width, center_y - half_height)    // Lower right
         )
     }
+    */
 }
 
 impl Default for DisplayManager {

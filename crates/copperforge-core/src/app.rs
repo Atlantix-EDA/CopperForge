@@ -6,7 +6,6 @@ use egui_dock::{DockArea, DockState, NodeIndex, Style, SurfaceIndex};
 
 use crate::display;
 use crate::display::DisplayManager;
-use crate::layer_operations::LayerManager;
 use crate::drc_operations::DrcManager;
 
 /// egui_lens imports
@@ -26,14 +25,11 @@ use crate::project_manager;
 
 use crate::ui::{Tab, TabKind, TabViewer, initialize_and_show_banner, show_system_info};
 
-use crate::project::{load_default_gerbers, load_demo_gerber, ProjectManager, ProjectState, manager::ProjectConfig};
+use crate::project::{load_demo_gerber, ProjectManager, ProjectState, manager::ProjectConfig};
 use crate::display::GridSettings;
 
 /// The main application struct
 pub struct DemoLensApp {
-    // Layer management
-    pub layer_manager: LayerManager,
-    
     // Legacy single layer support (for compatibility)
     pub gerber_layer: GerberLayer,
     pub view_state: ViewState,
@@ -135,11 +131,7 @@ impl DemoLensApp {
     pub fn new() -> Self {
 
         let gerber_layer = load_demo_gerber();
-        let mut layer_manager = load_default_gerbers();
         let display_manager = DisplayManager::new();
-        
-        // Initialize layer positions
-        display_manager.update_layer_positions(&mut layer_manager);
         
         // Force initial view setup to center gerber at origin
         let dummy_viewport = Rect::from_min_size(Pos2::ZERO, Vec2::new(1280.0, 768.0));
@@ -151,16 +143,10 @@ impl DemoLensApp {
         let log_colors = Dynamic::new(LogColors::default());
         let dock_state = Self::create_default_dock_state();
         
-        // Setup ECS world and migrate layer data
-        let mut ecs_world = ecs::setup_ecs_world();
-        ecs::migrate_layers_to_ecs(&mut ecs_world, &layer_manager);
-        
-        // Sync LayerManager with ECS entities
-        let mut layer_manager = layer_manager;
-        layer_manager.sync_with_ecs(&mut ecs_world);
+        // Setup ECS world without default gerbers (pure ECS now)
+        let ecs_world = ecs::setup_ecs_world();
         
         let mut app = Self {
-            layer_manager,
             gerber_layer,
             view_state: ViewState::default(),
             ui_state: UiState::default(),
@@ -490,21 +476,23 @@ impl eframe::App for DemoLensApp {
                 self.display_manager.showing_top = !self.display_manager.showing_top;
                 
                 // Auto-toggle layer visibility based on flip state using ECS
-                for layer_type in crate::layer_operations::LayerType::all() {
+                for layer_type in crate::ecs::LayerType::all() {
                     let visible = match layer_type {
-                        crate::layer_operations::LayerType::TopCopper |
-                        crate::layer_operations::LayerType::TopSilk |
-                        crate::layer_operations::LayerType::TopSoldermask |
-                        crate::layer_operations::LayerType::TopPaste => {
+                        crate::ecs::LayerType::Copper(1) |
+                        crate::ecs::LayerType::Silkscreen(crate::ecs::Side::Top) |
+                        crate::ecs::LayerType::Soldermask(crate::ecs::Side::Top) |
+                        crate::ecs::LayerType::Paste(crate::ecs::Side::Top) => {
                             self.display_manager.showing_top
                         },
-                        crate::layer_operations::LayerType::BottomCopper |
-                        crate::layer_operations::LayerType::BottomSilk |
-                        crate::layer_operations::LayerType::BottomSoldermask |
-                        crate::layer_operations::LayerType::BottomPaste => {
+                        crate::ecs::LayerType::Copper(_) => {
                             !self.display_manager.showing_top
                         },
-                        crate::layer_operations::LayerType::MechanicalOutline => {
+                        crate::ecs::LayerType::Silkscreen(crate::ecs::Side::Bottom) |
+                        crate::ecs::LayerType::Soldermask(crate::ecs::Side::Bottom) |
+                        crate::ecs::LayerType::Paste(crate::ecs::Side::Bottom) => {
+                            !self.display_manager.showing_top
+                        },
+                        crate::ecs::LayerType::MechanicalOutline => {
                             // Leave outline visibility unchanged, get current state from ECS
                             crate::ecs::get_layer_visibility(&mut self.ecs_world, layer_type)
                         }

@@ -1,10 +1,10 @@
 use bevy_ecs::prelude::*;
 use gerber_viewer::{GerberLayer, BoundingBox, GerberImageTransform};
-use crate::layer_operations::LayerType;
 use crate::display::manager::MirroringSettings;
 use crate::display::VectorOffset;
 use egui::Color32;
 use std::path::PathBuf;
+use super::LayerType; // Import LayerType from types module
 
 // Note: kicad-ecs components are for individual PCB components (R1, C2, etc.)
 // while KiForge works with entire layers. We might use kicad-ecs later for

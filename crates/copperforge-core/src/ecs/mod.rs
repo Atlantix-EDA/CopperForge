@@ -1,17 +1,21 @@
 #![allow(dead_code)]
+pub mod types;
 pub mod components;
 pub mod resources;
 pub mod systems;
 pub mod factories;
+pub mod detection;
 
+pub use types::*;
 pub use components::*;
 pub use resources::*;
 pub use systems::*;
 pub use factories::*;
+pub use detection::*;
 
 use bevy_ecs::prelude::*;
-use crate::layer_operations::{LayerType, LayerInfo as LayerInfoOrig, LayerManager, detection::UnassignedGerber};
-use gerber_viewer::GerberLayer;
+// All types now local to ECS module - no more layer_operations dependency
+// No more external dependencies needed - pure ECS
 
 pub fn setup_ecs_world() -> World {
     let mut world = World::new();
@@ -19,7 +23,7 @@ pub fn setup_ecs_world() -> World {
     // Initialize resources
     world.insert_resource(ViewStateResource::default());
     world.insert_resource(RenderConfig::default());
-    world.insert_resource(ActiveLayer(LayerType::TopCopper));
+    world.insert_resource(ActiveLayer(LayerType::Copper(1)));
     world.insert_resource(LayerAssignments::default());
     world.insert_resource(UnassignedGerbers::default());
     world.insert_resource(LayerDetectorResource::default());
@@ -28,6 +32,7 @@ pub fn setup_ecs_world() -> World {
     world
 }
 
+/* DEPRECATED: LayerManager compatibility functions
 // Deprecated: Use factories::create_layer_from_info instead
 pub fn spawn_layer(
     world: &mut World,
@@ -36,15 +41,18 @@ pub fn spawn_layer(
 ) -> Entity {
     create_layer_from_info(world, layer_info, gerber_layer)
 }
+*/
 
-// Migration function to populate ECS world from LayerManager data
-pub fn migrate_layers_to_ecs(world: &mut World, layer_manager: &LayerManager) {
+/* DEPRECATED: LayerManager migration (no longer needed)
+// Migration function to populate ECS world from LayerManager data (deprecated)
+pub fn migrate_layers_to_ecs(world: &mut World, layer_manager: &crate::layer_operations::LayerManager) {
     // Use the bulk factory to create all layer entities
     create_layers_from_manager(world, layer_manager);
     
     // Set active layer
     world.insert_resource(ActiveLayer(layer_manager.active_layer));
 }
+*/
 
 // Query functions for LayerManager facade
 pub fn get_layer_entities(world: &mut World) -> Vec<Entity> {
@@ -191,7 +199,7 @@ pub fn update_layer_render_properties(world: &mut World, layer_type: LayerType, 
 }
 
 // Get unassigned gerbers (replaces LayerManager::unassigned_gerbers access)
-pub fn get_unassigned_gerbers(world: &World) -> Vec<crate::layer_operations::detection::UnassignedGerber> {
+pub fn get_unassigned_gerbers(world: &World) -> Vec<UnassignedGerber> {
     world.get_resource::<UnassignedGerbers>()
         .map(|unassigned| unassigned.0.clone())
         .unwrap_or_default()
@@ -250,6 +258,15 @@ pub fn are_coordinates_dirty(world: &World) -> bool {
 pub fn mark_coordinates_dirty_ecs(world: &mut World) {
     mark_coordinates_dirty(world)
 }
+
+// Re-export gerber assignment systems for easy access
+pub use systems::{
+    assign_gerber_to_layer_system,
+    auto_assign_gerbers_system,
+    clear_all_layers_system,
+    add_unassigned_gerbers_system,
+    load_gerbers_from_directory_system,
+};
 
 // Get layer visibility (replaces LayerManager::get_layer_visibility)
 pub fn get_layer_visibility(world: &mut World, layer_type: LayerType) -> bool {

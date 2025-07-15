@@ -1,10 +1,12 @@
 use std::io::BufReader;
 use gerber_viewer::gerber_parser::parse;
 use gerber_viewer::GerberLayer;
-use crate::layer_operations::{LayerType, LayerInfo};
-use crate::layer_operations::LayerManager;
+// LayerType and LayerInfo imports removed with LayerManager
+// Removed: LayerManager dependency
+// use crate::layer_operations::LayerManager;
 
-/// Load default gerber layers from embedded assets
+/// Load default gerber layers from embedded assets (DISABLED - LayerManager removed)
+/*
 pub fn load_default_gerbers() -> LayerManager {
     let mut layer_manager = LayerManager::new();
     
@@ -50,8 +52,10 @@ pub fn load_default_gerbers() -> LayerManager {
     
     layer_manager
 }
+*/
 
 /// Get embedded gerber data by filename
+#[allow(dead_code)]
 fn get_embedded_gerber_data(filename: &str) -> &'static str {
     match filename {
         "cmod_s7-F_Cu.gbr" => include_str!("../../../../assets/cmod_s7-F_Cu.gbr"),

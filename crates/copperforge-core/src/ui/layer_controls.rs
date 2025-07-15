@@ -1,4 +1,4 @@
-use crate::{DemoLensApp, layer_operations::LayerType};
+use crate::{DemoLensApp, ecs::{LayerType, Side}};
 use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use eframe::emath::Vec2;
 use egui_mobius_reactive::*; 
@@ -45,8 +45,9 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
         if ui.button("TOP").clicked() {
             for layer_type in LayerType::all() {
                 let visible = match layer_type {
-                    LayerType::TopCopper | LayerType::TopSilk | LayerType::TopSoldermask | LayerType::TopPaste => true,
-                    LayerType::BottomCopper | LayerType::BottomSilk | LayerType::BottomSoldermask | LayerType::BottomPaste => false,
+                    LayerType::Copper(1) | LayerType::Silkscreen(Side::Top) | LayerType::Soldermask(Side::Top) | LayerType::Paste(Side::Top) => true,
+                    LayerType::Copper(_) => false,  // All other copper layers (inner/bottom)
+                    LayerType::Silkscreen(Side::Bottom) | LayerType::Soldermask(Side::Bottom) | LayerType::Paste(Side::Bottom) => false,
                     LayerType::MechanicalOutline => true, // Keep outline visible
                 };
                 crate::ecs::set_layer_visibility(&mut app.ecs_world, layer_type, visible);
@@ -57,8 +58,9 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
         if ui.button("BOTTOM").clicked() {
             for layer_type in LayerType::all() {
                 let visible = match layer_type {
-                    LayerType::TopCopper | LayerType::TopSilk | LayerType::TopSoldermask | LayerType::TopPaste => false,
-                    LayerType::BottomCopper | LayerType::BottomSilk | LayerType::BottomSoldermask | LayerType::BottomPaste => true,
+                    LayerType::Copper(1) | LayerType::Silkscreen(Side::Top) | LayerType::Soldermask(Side::Top) | LayerType::Paste(Side::Top) => false,
+                    LayerType::Copper(_) => true,  // All other copper layers (inner/bottom)
+                    LayerType::Silkscreen(Side::Bottom) | LayerType::Soldermask(Side::Bottom) | LayerType::Paste(Side::Bottom) => true,
                     LayerType::MechanicalOutline => true, // Keep outline visible
                 };
                 crate::ecs::set_layer_visibility(&mut app.ecs_world, layer_type, visible);
@@ -69,7 +71,7 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
         if ui.button("ASSEMBLY").clicked() {
             for layer_type in LayerType::all() {
                 let visible = match layer_type {
-                    LayerType::TopSilk | LayerType::BottomSilk | LayerType::MechanicalOutline => true,
+                    LayerType::Silkscreen(_) | LayerType::MechanicalOutline => true,
                     _ => false, // Hide copper, soldermask, and paste layers
                 };
                 crate::ecs::set_layer_visibility(&mut app.ecs_world, layer_type, visible);
@@ -217,7 +219,7 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
                 let layer_assignments = crate::ecs::get_layer_assignments(&app.ecs_world);
                 let current_selection = layer_assignments.get(&unassigned.filename)
                     .copied()
-                    .unwrap_or(LayerType::TopCopper); // Default selection
+                    .unwrap_or(LayerType::Copper(1)); // Default selection
                 
                 egui::ComboBox::from_id_salt(&unassigned.filename)
                     .selected_text(current_selection.display_name())
@@ -236,88 +238,31 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
             });
         }
         
-        // Apply assignments
+        // Apply assignments using ECS system
         for (filename, layer_type) in assignments_to_make {
-            if let Some(unassigned_idx) = app.layer_manager.unassigned_gerbers.iter().position(|u| u.filename == filename) {
-                let unassigned = app.layer_manager.unassigned_gerbers.remove(unassigned_idx);
-                
-                // Create layer entity using ECS factory
-                let entity = crate::ecs::create_gerber_layer_entity(
-                    &mut app.ecs_world,
-                    layer_type,
-                    unassigned.parsed_layer.clone(),
-                    Some(unassigned.content.clone()),
-                    Some(filename.clone().into()),
-                    true,
-                );
-                
-                // Update layer manager tracking
-                app.layer_manager.layer_entities.insert(layer_type, entity);
-                app.layer_manager.layer_assignments.insert(filename.clone(), layer_type);
-                
-                // Also update legacy cache for backward compatibility
-                let mut layer_info = crate::layer_operations::LayerInfo::new(
-                    layer_type,
-                    Some(unassigned.parsed_layer),
-                    Some(unassigned.content),
-                    true,
-                );
-                layer_info.initialize_coordinates_from_gerber();
-                app.layer_manager.layers.insert(layer_type, layer_info);
-                
-                logger.log_info(&format!("Assigned {} to {:?}", filename, layer_type));
-                app.needs_initial_view = true;
+            match crate::ecs::assign_gerber_to_layer_system(&mut app.ecs_world, filename.clone(), layer_type) {
+                Ok(_entity) => {
+                    logger.log_info(&format!("Assigned {} to {:?}", filename, layer_type));
+                    app.needs_initial_view = true;
+                }
+                Err(e) => {
+                    logger.log_error(&format!("Failed to assign {}: {}", filename, e));
+                }
             }
         }
         
         if crate::ecs::has_unassigned_gerbers(&app.ecs_world) {
             ui.add_space(8.0);
             if ui.button("Auto-detect All").clicked() {
-                let mut newly_assigned = Vec::new();
-                
-                for unassigned in crate::ecs::get_unassigned_gerbers(&app.ecs_world) {
-                    if let Some(detected_type) = crate::ecs::detect_layer_type(&app.ecs_world, &unassigned.filename) {
-                        if crate::ecs::get_layer_by_type_readonly(&mut app.ecs_world, detected_type).is_none() {
-                            newly_assigned.push((unassigned.filename.clone(), detected_type));
-                        }
-                    }
-                }
-                
-                for (filename, layer_type) in &newly_assigned {
-                    if let Some(unassigned_idx) = app.layer_manager.unassigned_gerbers.iter().position(|u| &u.filename == filename) {
-                        let unassigned = app.layer_manager.unassigned_gerbers.remove(unassigned_idx);
-                        
-                        // Create layer entity using ECS factory
-                        let entity = crate::ecs::create_gerber_layer_entity(
-                            &mut app.ecs_world,
-                            *layer_type,
-                            unassigned.parsed_layer.clone(),
-                            Some(unassigned.content.clone()),
-                            Some(filename.clone().into()),
-                            true,
-                        );
-                        
-                        // Update layer manager tracking
-                        app.layer_manager.layer_entities.insert(*layer_type, entity);
-                        app.layer_manager.layer_assignments.insert(filename.clone(), *layer_type);
-                        
-                        // Also update legacy cache for backward compatibility
-                        let mut layer_info = crate::layer_operations::LayerInfo::new(
-                            *layer_type,
-                            Some(unassigned.parsed_layer),
-                            Some(unassigned.content),
-                            true,
-                        );
-                        layer_info.initialize_coordinates_from_gerber();
-                        app.layer_manager.layers.insert(*layer_type, layer_info);
-                        
-                        logger.log_info(&format!("Auto-detected {} as {:?}", filename, layer_type));
-                    }
-                }
+                // Use ECS system for auto-detection and assignment
+                let newly_assigned = crate::ecs::auto_assign_gerbers_system(&mut app.ecs_world);
                 
                 if newly_assigned.is_empty() {
                     logger.log_warning("Could not auto-detect any remaining files");
                 } else {
+                    for (filename, layer_type) in newly_assigned {
+                        logger.log_info(&format!("Auto-detected {} as {:?}", filename, layer_type));
+                    }
                     app.needs_initial_view = true;
                 }
             }

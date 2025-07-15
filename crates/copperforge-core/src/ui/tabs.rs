@@ -147,7 +147,6 @@ fn render_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
 
 fn render_quadrant_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
     if ui.checkbox(&mut app.display_manager.quadrant_view_enabled, "Quadrant View").clicked() {
-        app.display_manager.update_layer_positions(&mut app.layer_manager);
         crate::ecs::mark_coordinates_dirty_ecs(&mut app.ecs_world);
         app.needs_initial_view = true;
     }
@@ -173,7 +172,7 @@ fn render_quadrant_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
         {
             let spacing_mm = spacing_value * conversion_factor;
             app.display_manager.set_quadrant_offset_magnitude(spacing_mm);
-            app.display_manager.update_layer_positions(&mut app.layer_manager);
+            crate::ecs::mark_coordinates_dirty_ecs(&mut app.ecs_world);
         }
         
         ui.separator();
@@ -193,21 +192,23 @@ fn render_layer_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
         app.display_manager.showing_top = !app.display_manager.showing_top;
         
         // Auto-toggle layer visibility based on flip state (using ECS)
-        for layer_type in crate::layer_operations::LayerType::all() {
+        for layer_type in crate::ecs::LayerType::all() {
             let visible = match layer_type {
-                crate::layer_operations::LayerType::TopCopper |
-                crate::layer_operations::LayerType::TopSilk |
-                crate::layer_operations::LayerType::TopSoldermask |
-                crate::layer_operations::LayerType::TopPaste => {
+                crate::ecs::LayerType::Copper(1) |
+                crate::ecs::LayerType::Silkscreen(crate::ecs::Side::Top) |
+                crate::ecs::LayerType::Soldermask(crate::ecs::Side::Top) |
+                crate::ecs::LayerType::Paste(crate::ecs::Side::Top) => {
                     app.display_manager.showing_top
                 },
-                crate::layer_operations::LayerType::BottomCopper |
-                crate::layer_operations::LayerType::BottomSilk |
-                crate::layer_operations::LayerType::BottomSoldermask |
-                crate::layer_operations::LayerType::BottomPaste => {
+                crate::ecs::LayerType::Copper(_) => {
                     !app.display_manager.showing_top
                 },
-                crate::layer_operations::LayerType::MechanicalOutline => {
+                crate::ecs::LayerType::Silkscreen(crate::ecs::Side::Bottom) |
+                crate::ecs::LayerType::Soldermask(crate::ecs::Side::Bottom) |
+                crate::ecs::LayerType::Paste(crate::ecs::Side::Bottom) => {
+                    !app.display_manager.showing_top
+                },
+                crate::ecs::LayerType::MechanicalOutline => {
                     // Leave outline visibility unchanged, get current state from ECS
                     crate::ecs::get_layer_visibility(&mut app.ecs_world, layer_type)
                 }
@@ -711,7 +712,7 @@ fn render_drc_violations(app: &mut DemoLensApp, painter: &Painter) {
 }
 
 fn render_board_dimensions(app: &mut DemoLensApp, painter: &Painter, viewport: &Rect) {
-    if let Some((_entity, _layer_info, gerber_data, _visibility)) = crate::ecs::get_layer_data(&mut app.ecs_world, crate::layer_operations::LayerType::MechanicalOutline) {
+    if let Some((_entity, _layer_info, gerber_data, _visibility)) = crate::ecs::get_layer_data(&mut app.ecs_world, crate::ecs::LayerType::MechanicalOutline) {
         let bbox = gerber_data.0.bounding_box();
         let width_mm = bbox.width();
         let height_mm = bbox.height();

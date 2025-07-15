@@ -1108,11 +1108,11 @@ pub fn check_trace_width_in_gerber_data(
 
 /// Main DRC check function - runs all configured DRC checks
 pub fn run_simple_drc_check(
-    layers: &HashMap<crate::layer_operations::LayerType, crate::layer_operations::LayerInfo>,
+    layers: &HashMap<crate::ecs::LayerType, crate::ui::drc_panel::LayerInfo>,
     drc_rules: &DrcRules,
     trace_quality_issues: &mut Vec<TraceQualityIssue>
 ) -> Vec<DrcViolation> {
-    use crate::layer_operations::LayerType;
+    use crate::ecs::LayerType;
     
     let mut violations = Vec::new();
     
@@ -1137,7 +1137,7 @@ pub fn run_simple_drc_check(
     // Check each copper layer for trace width violations
     for (layer_type, layer_info) in layers {
         // Only check copper layers
-        if !matches!(layer_type, LayerType::TopCopper | LayerType::BottomCopper) {
+        if !layer_type.is_copper() {
             continue;
         }
         
@@ -1204,7 +1204,7 @@ pub fn run_simple_drc_check(
         if let Some(raw_data) = &layer_info.raw_gerber_data {
             let raw_violations = check_trace_width_in_gerber_data(
                 raw_data, 
-                layer_type.display_name(), 
+                &layer_type.display_name(), 
                 drc_rules.min_trace_width,
                 &boundary
             );

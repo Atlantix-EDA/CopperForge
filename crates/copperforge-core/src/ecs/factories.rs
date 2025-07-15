@@ -1,6 +1,6 @@
 use bevy_ecs::prelude::*;
 use gerber_viewer::GerberLayer;
-use crate::layer_operations::{LayerType, LayerInfo as LayerInfoOrig};
+use super::{LayerType, Side};
 use crate::ecs::components::*;
 use std::path::PathBuf;
 
@@ -41,6 +41,7 @@ pub fn create_gerber_layer_entity(
     )).id()
 }
 
+/* DEPRECATED: LayerManager migration function (no longer needed)
 /// Factory for creating a layer entity from existing LayerInfo
 pub fn create_layer_from_info(
     world: &mut World,
@@ -70,6 +71,7 @@ pub fn create_layer_from_info(
         BoundingBoxCache { bounds },
     )).id()
 }
+*/
 
 /// Factory for creating a mechanical outline layer entity
 pub fn create_mechanical_outline_entity(
@@ -99,7 +101,7 @@ pub fn create_copper_layer_entity(
 ) -> Entity {
     // Ensure we're creating a copper layer
     match layer_type {
-        LayerType::TopCopper | LayerType::BottomCopper => {
+        LayerType::Copper(_) => {
             let entity_id = create_gerber_layer_entity(
                 world,
                 layer_type,
@@ -128,7 +130,7 @@ pub fn create_silk_layer_entity(
 ) -> Entity {
     // Ensure we're creating a silk layer
     match layer_type {
-        LayerType::TopSilk | LayerType::BottomSilk => {
+        LayerType::Silkscreen(_) => {
             create_gerber_layer_entity(
                 world,
                 layer_type,
@@ -152,7 +154,7 @@ pub fn create_soldermask_layer_entity(
 ) -> Entity {
     // Ensure we're creating a soldermask layer
     match layer_type {
-        LayerType::TopSoldermask | LayerType::BottomSoldermask => {
+        LayerType::Soldermask(_) => {
             create_gerber_layer_entity(
                 world,
                 layer_type,
@@ -176,7 +178,7 @@ pub fn create_paste_layer_entity(
 ) -> Entity {
     // Ensure we're creating a paste layer
     match layer_type {
-        LayerType::TopPaste | LayerType::BottomPaste => {
+        LayerType::Paste(_) => {
             create_gerber_layer_entity(
                 world,
                 layer_type,
@@ -193,19 +195,20 @@ pub fn create_paste_layer_entity(
 /// Utility function to determine z-order for layer rendering
 fn layer_type_to_z_order(layer_type: &LayerType) -> i32 {
     match layer_type {
-        LayerType::TopPaste => 90,
-        LayerType::TopSilk => 80,
-        LayerType::TopSoldermask => 70,
-        LayerType::TopCopper => 60,
-        LayerType::BottomCopper => 50,
-        LayerType::BottomSoldermask => 40,
-        LayerType::BottomSilk => 30,
-        LayerType::BottomPaste => 20,
+        LayerType::Paste(Side::Top) => 90,
+        LayerType::Silkscreen(Side::Top) => 80,
+        LayerType::Soldermask(Side::Top) => 70,
+        LayerType::Copper(1) => 60,  // Top copper
+        LayerType::Copper(n) => 50 - (*n as i32),  // All other copper layers (inner/bottom)
+        LayerType::Soldermask(Side::Bottom) => 40,
+        LayerType::Silkscreen(Side::Bottom) => 30,
+        LayerType::Paste(Side::Bottom) => 20,
         LayerType::MechanicalOutline => 10,
     }
 }
 
-/// Bulk factory for creating multiple layer entities from a LayerManager
+/* DEPRECATED: LayerManager factory (no longer needed)
+/// Bulk factory for creating multiple layer entities from a LayerManager (deprecated)
 pub fn create_layers_from_manager(
     world: &mut World,
     layer_manager: &crate::layer_operations::LayerManager,
@@ -221,6 +224,7 @@ pub fn create_layers_from_manager(
     
     entities
 }
+*/
 
 /// Factory for creating a layer entity with custom transform
 pub fn create_layer_with_transform(

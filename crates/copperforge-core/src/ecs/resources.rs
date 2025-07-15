@@ -1,6 +1,6 @@
 use bevy_ecs::prelude::*;
 use gerber_viewer::ViewState;
-use crate::layer_operations::{LayerType, detection::{LayerDetector, UnassignedGerber}};
+use super::{LayerType, LayerDetector, UnassignedGerber};
 use std::collections::HashMap;
 
 // Simple view mode enum

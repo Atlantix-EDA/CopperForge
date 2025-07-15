@@ -1,8 +1,10 @@
 use bevy_ecs::prelude::*;
 use crate::ecs::components::*;
+use crate::ecs::resources::*;
 use gerber_viewer::{GerberRenderer, RenderConfiguration, GerberTransform, ViewState};
 use egui::Painter;
 use crate::display::DisplayManager;
+use super::{LayerType, UnassignedGerber};
 
 /// ECS-based rendering system for gerber layers
 /// This system queries all layer entities and renders them using gerber-viewer
@@ -81,12 +83,12 @@ pub fn render_layers_system_enhanced(
         // This allows manual layer control overrides regardless of top/bottom view
         
         // Skip mechanical outline in quadrant view (it will be rendered with each layer)
-        if display_manager.quadrant_view_enabled && layer_info.layer_type == crate::layer_operations::LayerType::MechanicalOutline {
+        if display_manager.quadrant_view_enabled && layer_info.layer_type == LayerType::MechanicalOutline {
             continue;
         }
         
         // Skip paste layers in quadrant view (user doesn't want to see them)
-        if display_manager.quadrant_view_enabled && matches!(layer_info.layer_type, crate::layer_operations::LayerType::TopPaste | crate::layer_operations::LayerType::BottomPaste) {
+        if display_manager.quadrant_view_enabled && matches!(layer_info.layer_type, LayerType::Paste(_)) {
             continue;
         }
         
@@ -233,7 +235,7 @@ fn get_mechanical_outline_layer(world: &mut World) -> Option<(gerber_viewer::Ger
     let mut query = world.query::<(&GerberData, &RenderProperties, &LayerInfo)>();
     
     for (gerber_data, render_props, layer_info) in query.iter(world) {
-        if layer_info.layer_type == crate::layer_operations::LayerType::MechanicalOutline {
+        if layer_info.layer_type == LayerType::MechanicalOutline {
             return Some((gerber_data.0.clone(), render_props.color));
         }
     }
@@ -339,15 +341,15 @@ pub fn z_order_system(
     for (mut render_props, layer_info) in &mut query {
         // Update z-order based on layer type
         render_props.z_order = match layer_info.layer_type {
-            crate::layer_operations::LayerType::TopPaste => 90,
-            crate::layer_operations::LayerType::TopSilk => 80,
-            crate::layer_operations::LayerType::TopSoldermask => 70,
-            crate::layer_operations::LayerType::TopCopper => 60,
-            crate::layer_operations::LayerType::BottomCopper => 50,
-            crate::layer_operations::LayerType::BottomSoldermask => 40,
-            crate::layer_operations::LayerType::BottomSilk => 30,
-            crate::layer_operations::LayerType::BottomPaste => 20,
-            crate::layer_operations::LayerType::MechanicalOutline => 10,
+            LayerType::Paste(crate::ecs::Side::Top) => 90,
+            LayerType::Silkscreen(crate::ecs::Side::Top) => 80,
+            LayerType::Soldermask(crate::ecs::Side::Top) => 70,
+            LayerType::Copper(1) => 60,  // Top copper
+            LayerType::Copper(n) => 50 - (n as i32),  // All other copper layers (inner/bottom)
+            LayerType::Soldermask(crate::ecs::Side::Bottom) => 40,
+            LayerType::Silkscreen(crate::ecs::Side::Bottom) => 30,
+            LayerType::Paste(crate::ecs::Side::Bottom) => 20,
+            LayerType::MechanicalOutline => 10,
         };
     }
 }
@@ -416,15 +418,15 @@ pub fn run_ecs_systems(
     let mut z_order_query = world.query::<(&mut RenderProperties, &LayerInfo)>();
     for (mut render_props, layer_info) in z_order_query.iter_mut(world) {
         render_props.z_order = match layer_info.layer_type {
-            crate::layer_operations::LayerType::TopPaste => 90,
-            crate::layer_operations::LayerType::TopSilk => 80,
-            crate::layer_operations::LayerType::TopSoldermask => 70,
-            crate::layer_operations::LayerType::TopCopper => 60,
-            crate::layer_operations::LayerType::BottomCopper => 50,
-            crate::layer_operations::LayerType::BottomSoldermask => 40,
-            crate::layer_operations::LayerType::BottomSilk => 30,
-            crate::layer_operations::LayerType::BottomPaste => 20,
-            crate::layer_operations::LayerType::MechanicalOutline => 10,
+            LayerType::Paste(crate::ecs::Side::Top) => 90,
+            LayerType::Silkscreen(crate::ecs::Side::Top) => 80,
+            LayerType::Soldermask(crate::ecs::Side::Top) => 70,
+            LayerType::Copper(1) => 60,  // Top copper
+            LayerType::Copper(n) => 50 - (n as i32),  // All other copper layers (inner/bottom)
+            LayerType::Soldermask(crate::ecs::Side::Bottom) => 40,
+            LayerType::Silkscreen(crate::ecs::Side::Bottom) => 30,
+            LayerType::Paste(crate::ecs::Side::Bottom) => 20,
+            LayerType::MechanicalOutline => 10,
         };
     }
     
@@ -450,4 +452,211 @@ pub fn run_ecs_systems(
         
         bounds_cache.bounds = transformed_bounds;
     }
+}
+
+// ============================================================================
+// GERBER ASSIGNMENT SYSTEMS
+// ============================================================================
+
+/// System to assign an unassigned gerber to a layer type
+/// This creates a new layer entity and removes the gerber from unassigned list
+pub fn assign_gerber_to_layer_system(
+    world: &mut World,
+    filename: String,
+    layer_type: LayerType,
+) -> Result<Entity, String> {
+    // Find and remove the unassigned gerber
+    let unassigned_gerber = {
+        let mut unassigned_res = world.get_resource_mut::<UnassignedGerbers>()
+            .ok_or("UnassignedGerbers resource not found")?;
+        
+        let unassigned_idx = unassigned_res.0.iter().position(|u| u.filename == filename)
+            .ok_or("Unassigned gerber not found")?;
+        
+        unassigned_res.0.remove(unassigned_idx)
+    };
+    
+    // Check if layer type is already assigned
+    if crate::ecs::get_layer_by_type(world, layer_type).is_some() {
+        // Put the gerber back in unassigned list
+        if let Some(mut unassigned_res) = world.get_resource_mut::<UnassignedGerbers>() {
+            unassigned_res.0.push(unassigned_gerber);
+        }
+        return Err(format!("Layer type {:?} is already assigned", layer_type));
+    }
+    
+    // Create new layer entity using ECS factory
+    let entity = crate::ecs::create_gerber_layer_entity(
+        world,
+        layer_type,
+        unassigned_gerber.parsed_layer.clone(),
+        Some(unassigned_gerber.content.clone()),
+        Some(filename.clone().into()),
+        true, // visible by default
+    );
+    
+    // Update layer assignments
+    crate::ecs::add_layer_assignment(world, filename, layer_type);
+    
+    Ok(entity)
+}
+
+/// System to auto-detect and assign multiple unassigned gerbers
+/// Returns a list of successfully assigned (filename, layer_type) pairs
+pub fn auto_assign_gerbers_system(world: &mut World) -> Vec<(String, LayerType)> {
+    let mut newly_assigned = Vec::new();
+    
+    // Get list of unassigned gerbers to process (clone to avoid borrow conflicts)
+    let unassigned_list = {
+        let unassigned_res = world.get_resource::<UnassignedGerbers>();
+        unassigned_res.map(|res| res.0.clone()).unwrap_or_default()
+    };
+    
+    // Try to detect and assign each unassigned gerber
+    for unassigned in unassigned_list {
+        if let Some(detected_type) = crate::ecs::detect_layer_type(world, &unassigned.filename) {
+            // Check if this layer type is already assigned
+            if crate::ecs::get_layer_by_type(world, detected_type).is_none() {
+                // Try to assign it
+                if assign_gerber_to_layer_system(world, unassigned.filename.clone(), detected_type).is_ok() {
+                    newly_assigned.push((unassigned.filename, detected_type));
+                }
+            }
+        }
+    }
+    
+    newly_assigned
+}
+
+/// System to clear all layers and unassigned gerbers
+/// This is used when loading a new project
+pub fn clear_all_layers_system(world: &mut World) {
+    // Remove all layer entities
+    let entities_to_remove: Vec<Entity> = {
+        let mut query = world.query::<(Entity, &LayerInfo)>();
+        query.iter(world).map(|(entity, _)| entity).collect()
+    };
+    
+    for entity in entities_to_remove {
+        world.despawn(entity);
+    }
+    
+    // Clear unassigned gerbers
+    if let Some(mut unassigned_res) = world.get_resource_mut::<UnassignedGerbers>() {
+        unassigned_res.0.clear();
+    }
+    
+    // Clear layer assignments
+    if let Some(mut assignments_res) = world.get_resource_mut::<LayerAssignments>() {
+        assignments_res.0.clear();
+    }
+}
+
+/// System to add multiple unassigned gerbers
+/// This is used when loading gerber files from a directory
+pub fn add_unassigned_gerbers_system(world: &mut World, gerbers: Vec<UnassignedGerber>) {
+    if let Some(mut unassigned_res) = world.get_resource_mut::<UnassignedGerbers>() {
+        unassigned_res.0.extend(gerbers);
+    }
+}
+
+/// System to load gerbers from a directory and assign them
+/// Returns (loaded_count, unassigned_count)
+pub fn load_gerbers_from_directory_system(
+    world: &mut World,
+    gerber_dir: &std::path::Path,
+) -> Result<(usize, usize), String> {
+    use std::io::BufReader;
+    use gerber_viewer::gerber_parser::parse;
+    use gerber_viewer::GerberLayer;
+    
+    let mut loaded_count = 0;
+    let mut unassigned_count = 0;
+    let mut gerbers_to_add = Vec::new();
+    
+    // Read directory and collect all gerber files
+    let entries = std::fs::read_dir(gerber_dir)
+        .map_err(|e| format!("Failed to read directory: {}", e))?;
+    
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) == Some("gbr") {
+            let filename = path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+            
+            // Try to load and parse the gerber file
+            match std::fs::read_to_string(&path) {
+                Ok(gerber_content) => {
+                    let reader = BufReader::new(gerber_content.as_bytes());
+                    match parse(reader) {
+                        Ok(doc) => {
+                            let commands = doc.into_commands();
+                            let gerber_layer = GerberLayer::new(commands);
+                            
+                            // Try to detect layer type
+                            if let Some(detected_type) = crate::ecs::detect_layer_type(world, &filename) {
+                                // Check if this layer type is already assigned
+                                let layer_assignments = crate::ecs::get_layer_assignments(world);
+                                if let Some(existing_assignment) = layer_assignments.iter()
+                                    .find(|(_, layer_type)| **layer_type == detected_type)
+                                    .map(|(fname, _)| fname.clone()) {
+                                    // Layer type already assigned - add to unassigned
+                                    gerbers_to_add.push((filename, gerber_content, gerber_layer, None, existing_assignment));
+                                    unassigned_count += 1;
+                                } else {
+                                    // Try to assign directly
+                                    gerbers_to_add.push((filename, gerber_content, gerber_layer, Some(detected_type), String::new()));
+                                    loaded_count += 1;
+                                }
+                            } else {
+                                // Could not detect - add to unassigned
+                                gerbers_to_add.push((filename, gerber_content, gerber_layer, None, String::new()));
+                                unassigned_count += 1;
+                            }
+                        }
+                        Err(_e) => {
+                            // Parse failed - skip this file
+                            continue;
+                        }
+                    }
+                }
+                Err(_e) => {
+                    // Read failed - skip this file
+                    continue;
+                }
+            }
+        }
+    }
+    
+    // Now process all the collected gerbers
+    for (filename, gerber_content, gerber_layer, detected_type_opt, _existing_assignment) in gerbers_to_add {
+        if let Some(detected_type) = detected_type_opt {
+            // Create layer entity directly
+            let _entity = crate::ecs::create_gerber_layer_entity(
+                world,
+                detected_type,
+                gerber_layer,
+                Some(gerber_content),
+                Some(filename.clone().into()),
+                true, // visible by default
+            );
+            
+            // Update layer assignments
+            crate::ecs::add_layer_assignment(world, filename, detected_type);
+        } else {
+            // Add to unassigned
+            let unassigned = UnassignedGerber {
+                filename,
+                content: gerber_content,
+                parsed_layer: gerber_layer,
+            };
+            if let Some(mut unassigned_res) = world.get_resource_mut::<UnassignedGerbers>() {
+                unassigned_res.0.push(unassigned);
+            }
+        }
+    }
+    
+    Ok((loaded_count, unassigned_count))
 }
