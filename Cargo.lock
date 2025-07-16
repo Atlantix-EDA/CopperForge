@@ -1484,6 +1484,7 @@ dependencies = [
 [[package]]
 name = "egui_lens"
 version = "0.1.0"
+source = "git+https://github.com/saturn77/egui_lens.git#8024dc2a6f05b303b7eb210c2d62b75e29c5b59b"
 dependencies = [
  "chrono",
  "dirs",

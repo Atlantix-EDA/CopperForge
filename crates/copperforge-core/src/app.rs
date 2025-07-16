@@ -79,6 +79,9 @@ pub struct DemoLensApp {
     // Origin setting mode
     pub setting_origin_mode: bool,
     
+    // Track if origin has been set by user
+    pub origin_has_been_set: bool,
+    
     // Enterprise feature: Ruler tool
     pub ruler_active: bool,
     pub ruler_start: Option<nalgebra::Point2<f64>>,
@@ -92,6 +95,11 @@ pub struct DemoLensApp {
     
     // Pending BOM components (loaded from project before BOM tab is opened)
     pub pending_bom_components: Option<Vec<project_manager::bom::BomComponent>>,
+    
+    // Cross-probe signal handling
+    pub cross_probe_slot: Option<egui_mobius::slot::Slot<project_manager::bom::BomComponent>>,
+    pub cross_probe_slot_started: bool,
+    pub pending_cross_probe: egui_mobius::types::Value<Option<project_manager::bom::BomComponent>>,
     
     // Project manager state
     pub project_manager_state: Option<project_manager::ProjectManagerState>,
@@ -170,6 +178,7 @@ impl DemoLensApp {
             use_24_hour_clock: false, // Default to 12-hour format
             show_about_modal: false,
             setting_origin_mode: false,
+            origin_has_been_set: false,
             ruler_active: false,
             ruler_start: None,
             ruler_end: None,
@@ -177,6 +186,9 @@ impl DemoLensApp {
             ruler_drag_start: None,
             bom_state: None,
             pending_bom_components: None,
+            cross_probe_slot: None,
+            cross_probe_slot_started: false,
+            pending_cross_probe: egui_mobius::types::Value::new(None),
             project_manager_state: None,
         };
         
@@ -289,6 +301,37 @@ impl DemoLensApp {
 
         self.view_state.scale = scale;
         self.needs_initial_view = false;
+    }
+    
+    /// Zoom to a specific BOM component location
+    pub fn zoom_to_component(&mut self, component: &project_manager::bom::BomComponent, viewport: Rect) {
+        // Only allow cross-probing if origin has been set
+        if !self.origin_has_been_set {
+            let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
+            logger.log_warning("Please set the origin before using cross-probing");
+            return;
+        }
+        
+        // Component coordinates from KiCad (in mm)
+        let comp_x = component.x_location;
+        let comp_y = component.y_location;
+        
+        // Just center the component at the current zoom level
+        let viewport_center = viewport.center();
+        self.view_state.translation = Vec2::new(
+            viewport_center.x - (comp_x as f32 * self.view_state.scale),
+            viewport_center.y + (comp_y as f32 * self.view_state.scale),
+        );
+        
+        // Update ECS view state
+        if let Some(mut view_state_resource) = self.ecs_world.get_resource_mut::<ecs::ViewStateResource>() {
+            view_state_resource.view_state = self.view_state.clone();
+        }
+        
+        // Log the action
+        let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
+        logger.log_info(&format!("Cross-probed to component: {} at ({:.2}, {:.2})", 
+                                component.reference, comp_x, comp_y));
     }
     
     
@@ -462,6 +505,42 @@ impl eframe::App for DemoLensApp {
         if crate::ecs::are_coordinates_dirty(&self.ecs_world) {
             // Use ECS-based coordinate updates for better sync
             crate::ecs::update_coordinates_from_display(&mut self.ecs_world, &self.display_manager);
+        }
+        
+        // Process cross-probe signals from BOM component selection
+        if let Some(ref mut cross_probe_slot) = self.cross_probe_slot {
+            // Check if slot is not started yet
+            if !self.cross_probe_slot_started {
+                let pending_cross_probe = self.pending_cross_probe.clone();
+                
+                cross_probe_slot.start(move |component: project_manager::bom::BomComponent| {
+                    // Store the component for the UI thread to process
+                    *pending_cross_probe.lock().unwrap() = Some(component);
+                });
+                
+                self.cross_probe_slot_started = true;
+            }
+        }
+        
+        // Check if there's a pending cross-probe to process
+        let pending_component = {
+            self.pending_cross_probe.lock().unwrap().take()
+        };
+        
+        if let Some(component) = pending_component {
+            // Get the current viewport
+            let viewport = ctx.available_rect();
+            
+            // Zoom to the selected component
+            self.zoom_to_component(&component, viewport);
+            
+            // Log the cross-probe action
+            let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
+            logger.log_info(&format!("Cross-probed to component: {} at ({:.2}, {:.2})", 
+                                    component.reference, component.x_location, component.y_location));
+            
+            // Request repaint to show the zoomed view
+            ctx.request_repaint();
         }
         
         // No longer need legacy sync - UI uses ECS directly

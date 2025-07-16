@@ -279,6 +279,7 @@ fn render_transform_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
     if origin_set {
         if ui.button("🎯 Reset Origin").clicked() {
             app.display_manager.design_offset = crate::display::VectorOffset { x: 0.0, y: 0.0 };
+            app.origin_has_been_set = false;
             
             // Force view refresh to properly center coordinates at the new origin
             app.needs_initial_view = true;
@@ -489,6 +490,7 @@ fn handle_viewport_interactions(ui: &mut egui::Ui, app: &mut DemoLensApp, viewpo
                     y: final_coords.y,
                 };
                 app.setting_origin_mode = false;
+                app.origin_has_been_set = true;
                 
                 // Force view refresh to properly center coordinates at the new origin
                 app.needs_initial_view = true;

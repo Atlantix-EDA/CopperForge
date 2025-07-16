@@ -1,3 +1,6 @@
+
+
+
 [workspace]
 resolver = "2"
 members = [
@@ -45,7 +48,7 @@ gerber_parser = "0.3.0"
 nalgebra = "0.33"
 
 # Egui Mobius framework
-egui_lens = { path = "../egui_lens/crates/egui_lens" }
+egui_lens = { git = "https://github.com/saturn77/egui_lens.git" }
 egui_mobius_reactive = { version = "0.3.0-alpha.32" }
 egui_mobius = { version = "0.3.0-alpha.32" }
 

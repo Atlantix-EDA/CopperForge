@@ -36,13 +36,18 @@ pub struct BomPanelState {
     // Store last backend events for UI processing
     pub last_error: Value<Option<String>>,
     pub last_info: Value<Option<String>>,
+    
+    // Cross-probing
+    pub selected_component: Value<Option<BomComponent>>,
+    pub cross_probe_signal: Signal<BomComponent>,
 }
 
 impl BomPanelState {
-    pub fn new() -> (Self, Slot<BomEvent>, Signal<BomBackendEvent>) {
+    pub fn new() -> (Self, Slot<BomEvent>, Signal<BomBackendEvent>, Slot<BomComponent>) {
         // Create signal/slot pairs
         let (signal_to_backend, slot_to_backend) = factory::create_signal_slot::<BomEvent>();
         let (signal_from_backend, mut slot_from_backend) = factory::create_signal_slot::<BomBackendEvent>();
+        let (cross_probe_signal, cross_probe_slot) = factory::create_signal_slot::<BomComponent>();
         
         // Create shared state values
         let components = Value::new(Vec::new());
@@ -98,9 +103,11 @@ impl BomPanelState {
             update_needed,
             last_error,
             last_info,
+            selected_component: Value::new(None),
+            cross_probe_signal,
         };
         
-        (state, slot_to_backend, signal_from_backend)
+        (state, slot_to_backend, signal_from_backend, cross_probe_slot)
     }
     
     /// Get filtered component count without cloning
@@ -344,7 +351,7 @@ pub fn show_bom_panel(
     
     // Initialize BOM state if not already done
     if app.bom_state.is_none() {
-        let (bom_state, slot_to_backend, signal_from_backend) = BomPanelState::new();
+        let (bom_state, slot_to_backend, signal_from_backend, cross_probe_slot) = BomPanelState::new();
         
         // Clone values for the backend thread
         let auto_refresh = bom_state.auto_refresh.clone();
@@ -355,7 +362,11 @@ pub fn show_bom_panel(
             bom_backend_thread(slot_to_backend, signal_from_backend, auto_refresh, refresh_interval);
         });
         
+        // Don't start the cross-probe slot here - let the main app handle it
+        // The slot needs access to the app's zoom_to_component method
+        
         app.bom_state = Some(bom_state);
+        app.cross_probe_slot = Some(cross_probe_slot);
         
         // Check for pending BOM components loaded from a project
         if let Some(pending_components) = app.pending_bom_components.take() {
@@ -470,7 +481,8 @@ pub fn show_bom_panel(
         {
             let components = bom_state.components.lock().unwrap();
             let filter_text = bom_state.filter_text.lock().unwrap();
-            show_bom_table_optimized(ui, &components, &filter_text, app.global_units_mils);
+            let mut selected_component = bom_state.selected_component.lock().unwrap();
+            show_bom_table_optimized(ui, &components, &filter_text, app.global_units_mils, &mut selected_component, &bom_state.cross_probe_signal);
         }
         
         // Request repaint if needed
@@ -481,8 +493,8 @@ pub fn show_bom_panel(
     }
 }
 
-/// Show the BOM table - optimized version with virtual scrolling for large lists
-fn show_bom_table_optimized(ui: &mut egui::Ui, components: &[BomComponent], filter_text: &str, global_units_mils: bool) {
+/// Show the BOM table using TableBuilder with cross-probing support
+fn show_bom_table_optimized(ui: &mut egui::Ui, components: &[BomComponent], filter_text: &str, global_units_mils: bool, selected_component: &mut Option<BomComponent>, cross_probe_signal: &Signal<BomComponent>) {
     let filter_lower = filter_text.to_lowercase();
     let should_filter = !filter_text.is_empty();
     
@@ -509,8 +521,15 @@ fn show_bom_table_optimized(ui: &mut egui::Ui, components: &[BomComponent], filt
         return;
     }
     
+    // Configure column labels with proper units
+    let x_label = if global_units_mils { "X (mils)" } else { "X (mm)" };
+    let y_label = if global_units_mils { "Y (mils)" } else { "Y (mm)" };
+    
     // Use virtual scrolling for large lists to improve performance
     let use_virtual_scrolling = filtered_components.len() > 100;
+    
+    // Track row selection for cross-probing
+    let mut clicked_row_index: Option<usize> = None;
     
     if use_virtual_scrolling {
         // Virtual scrolling version for large lists
@@ -529,8 +548,8 @@ fn show_bom_table_optimized(ui: &mut egui::Ui, components: &[BomComponent], filt
                 header.col(|ui| { ui.strong("Item"); });
                 header.col(|ui| { ui.strong("Reference"); });
                 header.col(|ui| { ui.strong("Description"); });
-                header.col(|ui| { ui.strong("X (mm)"); });
-                header.col(|ui| { ui.strong("Y (mm)"); });
+                header.col(|ui| { ui.strong(x_label); });
+                header.col(|ui| { ui.strong(y_label); });
                 header.col(|ui| { ui.strong("Rotation (°)"); });
                 header.col(|ui| { ui.strong("Value"); });
                 header.col(|ui| { ui.strong("Footprint"); });
@@ -541,7 +560,10 @@ fn show_bom_table_optimized(ui: &mut egui::Ui, components: &[BomComponent], filt
                     |row| {
                         let row_index = row.index();
                         if let Some(component) = filtered_components.get(row_index) {
-                            render_component_row(row, component, global_units_mils);
+                            let response = render_component_row_clickable(row, component, global_units_mils, row_index + 1);
+                            if response.clicked() {
+                                clicked_row_index = Some(row_index);
+                            }
                         }
                     },
                 );
@@ -563,19 +585,31 @@ fn show_bom_table_optimized(ui: &mut egui::Ui, components: &[BomComponent], filt
                 header.col(|ui| { ui.strong("Item"); });
                 header.col(|ui| { ui.strong("Reference"); });
                 header.col(|ui| { ui.strong("Description"); });
-                header.col(|ui| { ui.strong("X (mm)"); });
-                header.col(|ui| { ui.strong("Y (mm)"); });
+                header.col(|ui| { ui.strong(x_label); });
+                header.col(|ui| { ui.strong(y_label); });
                 header.col(|ui| { ui.strong("Rotation (°)"); });
                 header.col(|ui| { ui.strong("Value"); });
                 header.col(|ui| { ui.strong("Footprint"); });
             })
             .body(|mut body| {
-                for component in filtered_components {
+                for (row_index, component) in filtered_components.iter().enumerate() {
                     body.row(18.0, |row| {
-                        render_component_row(row, component, global_units_mils);
+                        let response = render_component_row_clickable(row, component, global_units_mils, row_index + 1);
+                        if response.clicked() {
+                            clicked_row_index = Some(row_index);
+                        }
                     });
                 }
             });
+    }
+    
+    // Handle selection for cross-probing
+    if let Some(selected_index) = clicked_row_index {
+        if let Some(component) = filtered_components.get(selected_index) {
+            *selected_component = Some((*component).clone());
+            // Send cross-probe signal to gerber viewer
+            cross_probe_signal.send((*component).clone()).unwrap();
+        }
     }
 }
 
@@ -615,6 +649,56 @@ fn render_component_row(mut row: egui_extras::TableRow, component: &BomComponent
     row.col(|ui| {
         ui.label(&component.footprint);
     });
+}
+
+/// Render a single component row with click detection for cross-probing
+fn render_component_row_clickable(mut row: egui_extras::TableRow, component: &BomComponent, global_units_mils: bool, item_number: usize) -> egui::Response {
+    let mut response = None;
+    
+    row.col(|ui| {
+        response = Some(ui.selectable_label(false, item_number.to_string()));
+    });
+    row.col(|ui| {
+        let r = ui.selectable_label(false, &component.reference);
+        if response.is_none() { response = Some(r); }
+    });
+    row.col(|ui| {
+        let r = ui.selectable_label(false, &component.description);
+        if response.is_none() { response = Some(r); }
+    });
+    row.col(|ui| {
+        let x_text = if global_units_mils {
+            format!("{:.0}", component.x_location / 0.0254)
+        } else {
+            format!("{:.2}", component.x_location)
+        };
+        let r = ui.selectable_label(false, x_text);
+        if response.is_none() { response = Some(r); }
+    });
+    row.col(|ui| {
+        let y_text = if global_units_mils {
+            format!("{:.0}", component.y_location / 0.0254)
+        } else {
+            format!("{:.2}", component.y_location)
+        };
+        let r = ui.selectable_label(false, y_text);
+        if response.is_none() { response = Some(r); }
+    });
+    row.col(|ui| {
+        let r = ui.selectable_label(false, format!("{:.1}", component.orientation));
+        if response.is_none() { response = Some(r); }
+    });
+    row.col(|ui| {
+        let r = ui.selectable_label(false, &component.value);
+        if response.is_none() { response = Some(r); }
+    });
+    row.col(|ui| {
+        let r = ui.selectable_label(false, &component.footprint);
+        if response.is_none() { response = Some(r); }
+    });
+    
+    // Return the first response found from the row cells
+    response.unwrap()
 }
 
 /// Show the BOM table - legacy version
