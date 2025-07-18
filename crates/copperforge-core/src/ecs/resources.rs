@@ -26,6 +26,72 @@ impl Default for ViewStateResource {
     }
 }
 
+// ECS-managed zoom and view state
+#[derive(Resource, Clone, Debug)]
+pub struct ZoomResource {
+    pub scale: f32,
+    pub center_x: f32,
+    pub center_y: f32,
+    pub min_scale: f32,
+    pub max_scale: f32,
+}
+
+impl Default for ZoomResource {
+    fn default() -> Self {
+        Self {
+            scale: 1.0,
+            center_x: 0.0,
+            center_y: 0.0,
+            min_scale: 0.001,
+            max_scale: 1000.0,
+        }
+    }
+}
+
+impl ZoomResource {
+    pub fn new(scale: f32, center_x: f32, center_y: f32) -> Self {
+        Self {
+            scale: scale.clamp(0.001, 1000.0),
+            center_x,
+            center_y,
+            min_scale: 0.001,
+            max_scale: 1000.0,
+        }
+    }
+    
+    pub fn set_scale(&mut self, scale: f32) {
+        self.scale = scale.clamp(self.min_scale, self.max_scale);
+    }
+    
+    pub fn zoom_in(&mut self, factor: f32) {
+        self.set_scale(self.scale * factor);
+    }
+    
+    pub fn zoom_out(&mut self, factor: f32) {
+        self.set_scale(self.scale / factor);
+    }
+    
+    pub fn set_center(&mut self, x: f32, y: f32) {
+        self.center_x = x;
+        self.center_y = y;
+    }
+    
+    pub fn get_zoom_percentage(&self) -> f32 {
+        self.scale * 100.0
+    }
+    
+    pub fn reset_to_fit(&mut self, content_width: f32, content_height: f32, viewport_width: f32, viewport_height: f32) {
+        // Calculate scale to fit content with some margin
+        let scale_x = viewport_width / content_width;
+        let scale_y = viewport_height / content_height;
+        self.set_scale(scale_x.min(scale_y) * 0.95);
+        
+        // Center the view
+        self.center_x = 0.0;
+        self.center_y = 0.0;
+    }
+}
+
 // Global rendering configuration
 #[derive(Resource, Clone)]
 pub struct RenderConfig {

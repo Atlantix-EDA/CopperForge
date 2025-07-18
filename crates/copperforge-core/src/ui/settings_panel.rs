@@ -1,4 +1,5 @@
 use crate::DemoLensApp;
+use crate::ecs::UnitsResource;
 use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
 use chrono_tz::Tz;
@@ -20,16 +21,40 @@ pub fn show_settings_panel<'a>(
         ui.label("Display Units");
         ui.horizontal(|ui| {
             ui.label("Global Units:");
-            let prev_units = app.global_units_mils;
-            ui.selectable_value(&mut app.global_units_mils, false, "Millimeters (mm)");
-            ui.selectable_value(&mut app.global_units_mils, true, "Mils (1/1000 inch)");
             
-            if prev_units != app.global_units_mils {
+            // Get current units from ECS
+            let _current_unit = if let Some(units_resource) = app.ecs_world.get_resource::<UnitsResource>() {
+                units_resource.display_unit
+            } else {
+                crate::ecs::DisplayUnit::Millimeters
+            };
+            
+            // Track if units changed
+            let mut units_changed = false;
+            let prev_units = app.global_units_mils;
+            
+            // Update legacy global_units_mils based on selection
+            if ui.selectable_value(&mut app.global_units_mils, false, "Millimeters (mm)").clicked() {
+                units_changed = true;
+            }
+            if ui.selectable_value(&mut app.global_units_mils, true, "Mils (1/1000 inch)").clicked() {
+                units_changed = true;
+            }
+            
+            // Additional units options (disabled for now)
+            ui.add_enabled(false, egui::Button::new("Micrometers (µm)"));
+            ui.add_enabled(false, egui::Button::new("Nanometers (nm)"));
+            
+            if units_changed || prev_units != app.global_units_mils {
+                // Sync to ECS
+                app.sync_units_to_ecs();
+                
                 let units_name = if app.global_units_mils { "mils" } else { "mm" };
                 logger.log_info(&format!("Changed global units to {}", units_name));
             }
         });
         ui.label("Affects: Grid spacing, board dimensions, cursor position, zoom selection");
+        ui.label("Internal precision: 1 nanometer (integer-based like KiCad)");
     });
     
     ui.add_space(20.0);

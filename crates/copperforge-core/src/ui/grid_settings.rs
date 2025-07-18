@@ -1,4 +1,5 @@
 use crate::{DemoLensApp, project::constants::LOG_TYPE_GRID, display::grid::{get_grid_status, GridStatus}};
+use crate::ecs::{UnitsResource, mm_to_nm, nm_to_mm, mils_to_nm, nm_to_mils};
 use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
 
@@ -19,7 +20,11 @@ pub fn show_grid_panel<'a>(
     }
     
     ui.horizontal(|ui| {
-        let label = if app.global_units_mils {
+        // Get units from ECS
+        let units_resource = app.ecs_world.get_resource::<UnitsResource>()
+            .expect("UnitsResource should exist");
+        
+        let label = if units_resource.is_mils() {
             "Grid Spacing (mils):"
         } else {
             "Grid Spacing (mm):"
@@ -28,9 +33,10 @@ pub fn show_grid_panel<'a>(
         
         let _prev_spacing_mm = app.grid_settings.spacing_mm;
         
-        if app.global_units_mils {
-            // Convert to mils for display
-            let mut spacing_mils = app.grid_settings.spacing_mm / 0.0254;
+        if units_resource.is_mils() {
+            // Convert to mils for display using nanometer precision
+            let spacing_nm = mm_to_nm(app.grid_settings.spacing_mm);
+            let mut spacing_mils = nm_to_mils(spacing_nm);
             let prev_mils = spacing_mils;
             
             // Add slider
@@ -48,7 +54,9 @@ pub fn show_grid_panel<'a>(
             );
             
             if slider_response.changed() || text_response.changed() {
-                app.grid_settings.spacing_mm = spacing_mils * 0.0254;
+                // Convert back through nanometers for precision
+                let spacing_nm = mils_to_nm(spacing_mils);
+                app.grid_settings.spacing_mm = nm_to_mm(spacing_nm);
                 logger.log_custom(
                     LOG_TYPE_GRID,
                     &format!("Grid spacing changed from {:.1} to {:.1} mils", prev_mils, spacing_mils)

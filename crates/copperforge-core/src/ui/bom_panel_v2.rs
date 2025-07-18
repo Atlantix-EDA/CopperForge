@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 use crate::DemoLensApp;
+use crate::ecs::{UnitsResource, mm_to_nm, nm_to_mils};
 use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState};
 use egui_lens::LogColors;
 use egui_mobius_reactive::*;
@@ -341,6 +342,12 @@ fn generate_description(footprint: &FootprintData) -> String {
 // This follows the pattern from the real_kicad_ecs example
 
 /// Show the BOM panel
+/// Helper to get units resource from app
+fn get_units(app: &DemoLensApp) -> &UnitsResource {
+    app.ecs_world.get_resource::<UnitsResource>()
+        .expect("UnitsResource should exist")
+}
+
 pub fn show_bom_panel(
     ui: &mut egui::Ui,
     app: &mut DemoLensApp,
@@ -348,6 +355,12 @@ pub fn show_bom_panel(
     log_colors: &Dynamic<LogColors>,
 ) {
     let logger = ReactiveEventLogger::with_colors(logger_state, log_colors);
+    
+    // Get units resource information before any mutable borrows
+    let is_mils = {
+        let units_resource = get_units(app);
+        units_resource.is_mils()
+    };
     
     // Initialize BOM state if not already done
     if app.bom_state.is_none() {
@@ -482,7 +495,8 @@ pub fn show_bom_panel(
             let components = bom_state.components.lock().unwrap();
             let filter_text = bom_state.filter_text.lock().unwrap();
             let mut selected_component = bom_state.selected_component.lock().unwrap();
-            show_bom_table_optimized(ui, &components, &filter_text, app.global_units_mils, &mut selected_component, &bom_state.cross_probe_signal);
+            
+            show_bom_table_optimized(ui, &components, &filter_text, is_mils, &mut selected_component, &bom_state.cross_probe_signal);
         }
         
         // Request repaint if needed
@@ -494,7 +508,7 @@ pub fn show_bom_panel(
 }
 
 /// Show the BOM table using TableBuilder with cross-probing support
-fn show_bom_table_optimized(ui: &mut egui::Ui, components: &[BomComponent], filter_text: &str, global_units_mils: bool, selected_component: &mut Option<BomComponent>, cross_probe_signal: &Signal<BomComponent>) {
+fn show_bom_table_optimized(ui: &mut egui::Ui, components: &[BomComponent], filter_text: &str, is_mils: bool, selected_component: &mut Option<BomComponent>, cross_probe_signal: &Signal<BomComponent>) {
     let filter_lower = filter_text.to_lowercase();
     let should_filter = !filter_text.is_empty();
     
@@ -522,8 +536,8 @@ fn show_bom_table_optimized(ui: &mut egui::Ui, components: &[BomComponent], filt
     }
     
     // Configure column labels with proper units
-    let x_label = if global_units_mils { "X (mils)" } else { "X (mm)" };
-    let y_label = if global_units_mils { "Y (mils)" } else { "Y (mm)" };
+    let x_label = if is_mils { "X (mils)" } else { "X (mm)" };
+    let y_label = if is_mils { "Y (mils)" } else { "Y (mm)" };
     
     // Use virtual scrolling for large lists to improve performance
     let use_virtual_scrolling = filtered_components.len() > 100;
@@ -560,7 +574,7 @@ fn show_bom_table_optimized(ui: &mut egui::Ui, components: &[BomComponent], filt
                     |row| {
                         let row_index = row.index();
                         if let Some(component) = filtered_components.get(row_index) {
-                            let response = render_component_row_clickable(row, component, global_units_mils, row_index + 1);
+                            let response = render_component_row_clickable(row, component, is_mils, row_index + 1);
                             if response.clicked() {
                                 clicked_row_index = Some(row_index);
                             }
@@ -594,7 +608,7 @@ fn show_bom_table_optimized(ui: &mut egui::Ui, components: &[BomComponent], filt
             .body(|mut body| {
                 for (row_index, component) in filtered_components.iter().enumerate() {
                     body.row(18.0, |row| {
-                        let response = render_component_row_clickable(row, component, global_units_mils, row_index + 1);
+                        let response = render_component_row_clickable(row, component, is_mils, row_index + 1);
                         if response.clicked() {
                             clicked_row_index = Some(row_index);
                         }
@@ -614,7 +628,7 @@ fn show_bom_table_optimized(ui: &mut egui::Ui, components: &[BomComponent], filt
 }
 
 /// Render a single component row - extracted for reuse
-fn render_component_row(mut row: egui_extras::TableRow, component: &BomComponent, global_units_mils: bool) {
+fn render_component_row(mut row: egui_extras::TableRow, component: &BomComponent, is_mils: bool) {
     row.col(|ui| {
         ui.label(&component.item_number);
     });
@@ -625,16 +639,18 @@ fn render_component_row(mut row: egui_extras::TableRow, component: &BomComponent
         ui.label(&component.description);
     });
     row.col(|ui| {
-        let x_text = if global_units_mils {
-            format!("{:.0}", component.x_location / 0.0254)
+        let x_text = if is_mils {
+            let x_nm = mm_to_nm(component.x_location as f32);
+            format!("{:.0}", nm_to_mils(x_nm))
         } else {
             format!("{:.2}", component.x_location)
         };
         ui.label(x_text);
     });
     row.col(|ui| {
-        let y_text = if global_units_mils {
-            format!("{:.0}", component.y_location / 0.0254)
+        let y_text = if is_mils {
+            let y_nm = mm_to_nm(component.y_location as f32);
+            format!("{:.0}", nm_to_mils(y_nm))
         } else {
             format!("{:.2}", component.y_location)
         };
@@ -652,7 +668,7 @@ fn render_component_row(mut row: egui_extras::TableRow, component: &BomComponent
 }
 
 /// Render a single component row with click detection for cross-probing
-fn render_component_row_clickable(mut row: egui_extras::TableRow, component: &BomComponent, global_units_mils: bool, item_number: usize) -> egui::Response {
+fn render_component_row_clickable(mut row: egui_extras::TableRow, component: &BomComponent, is_mils: bool, item_number: usize) -> egui::Response {
     let mut response = None;
     
     row.col(|ui| {
@@ -667,8 +683,9 @@ fn render_component_row_clickable(mut row: egui_extras::TableRow, component: &Bo
         if response.is_none() { response = Some(r); }
     });
     row.col(|ui| {
-        let x_text = if global_units_mils {
-            format!("{:.0}", component.x_location / 0.0254)
+        let x_text = if is_mils {
+            let x_nm = mm_to_nm(component.x_location as f32);
+            format!("{:.0}", nm_to_mils(x_nm))
         } else {
             format!("{:.2}", component.x_location)
         };
@@ -676,8 +693,9 @@ fn render_component_row_clickable(mut row: egui_extras::TableRow, component: &Bo
         if response.is_none() { response = Some(r); }
     });
     row.col(|ui| {
-        let y_text = if global_units_mils {
-            format!("{:.0}", component.y_location / 0.0254)
+        let y_text = if is_mils {
+            let y_nm = mm_to_nm(component.y_location as f32);
+            format!("{:.0}", nm_to_mils(y_nm))
         } else {
             format!("{:.2}", component.y_location)
         };
@@ -702,7 +720,7 @@ fn render_component_row_clickable(mut row: egui_extras::TableRow, component: &Bo
 }
 
 /// Show the BOM table - legacy version
-fn show_bom_table(ui: &mut egui::Ui, components: &[BomComponent], global_units_mils: bool) {
+fn show_bom_table(ui: &mut egui::Ui, components: &[BomComponent], is_mils: bool) {
     if components.is_empty() {
         ui.centered_and_justified(|ui| {
             ui.label("No components available. Make sure KiCad is running with a PCB open.");
@@ -761,16 +779,18 @@ fn show_bom_table(ui: &mut egui::Ui, components: &[BomComponent], global_units_m
                         ui.label(&component.description);
                     });
                     row.col(|ui| {
-                        let x_text = if global_units_mils {
-                            format!("{:.0}", component.x_location / 0.0254)
+                        let x_text = if is_mils {
+                            let x_nm = mm_to_nm(component.x_location as f32);
+                            format!("{:.0}", nm_to_mils(x_nm))
                         } else {
                             format!("{:.2}", component.x_location)
                         };
                         ui.label(x_text);
                     });
                     row.col(|ui| {
-                        let y_text = if global_units_mils {
-                            format!("{:.0}", component.y_location / 0.0254)
+                        let y_text = if is_mils {
+                            let y_nm = mm_to_nm(component.y_location as f32);
+                            format!("{:.0}", nm_to_mils(y_nm))
                         } else {
                             format!("{:.2}", component.y_location)
                         };

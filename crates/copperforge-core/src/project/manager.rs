@@ -44,6 +44,7 @@ pub struct ProjectConfig {
     pub auto_reload_on_change: bool,
     pub user_timezone: Option<String>,
     pub use_24_hour_clock: bool,
+    pub global_units_mils: bool, // true = mils, false = mm
 }
 
 impl Default for ProjectConfig {
@@ -54,6 +55,7 @@ impl Default for ProjectConfig {
             auto_reload_on_change: true,
             user_timezone: None,
             use_24_hour_clock: false, // Default to 12-hour
+            global_units_mils: false, // Default to mm
         }
     }
 }

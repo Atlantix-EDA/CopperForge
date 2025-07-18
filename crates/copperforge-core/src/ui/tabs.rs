@@ -1,5 +1,6 @@
 use crate::DemoLensApp;
 use crate::ui;
+use crate::ecs::{UnitsResource, mm_to_nm, nm_to_mm, mils_to_nm, nm_to_mils};
 
 use eframe::emath::{Rect, Vec2};
 use eframe::epaint::Color32;
@@ -47,6 +48,12 @@ pub struct Tab {
 }
 
 impl Tab {
+    /// Helper to get units resource from app
+    fn get_units(app: &DemoLensApp) -> &UnitsResource {
+        app.ecs_world.get_resource::<UnitsResource>()
+            .expect("UnitsResource should exist")
+    }
+    
     pub fn new(kind: TabKind, surface: SurfaceIndex, node: NodeIndex) -> Self {
         Self {
             kind,
@@ -138,6 +145,8 @@ fn render_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
         
         // Second row: Measurement and grid tools
         ui.horizontal(|ui| {
+            render_zoom_display(ui, app);
+            ui.separator();
             render_ruler_controls(ui, app);
             ui.separator();
             render_grid_controls(ui, app);
@@ -155,14 +164,18 @@ fn render_quadrant_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
         ui.separator();
         ui.label("Spacing:");
         
-        let (mut spacing_value, units_suffix, conversion_factor) = if app.global_units_mils {
-            (app.display_manager.quadrant_offset_magnitude / 0.0254, "mils", 0.0254)
+        // Get units from ECS
+        let units_resource = Tab::get_units(app);
+        
+        let (mut spacing_value, units_suffix, conversion_factor) = if units_resource.is_mils() {
+            let spacing_nm = mm_to_nm(app.display_manager.quadrant_offset_magnitude as f32);
+            (nm_to_mils(spacing_nm), "mils", 0.0254)
         } else {
-            (app.display_manager.quadrant_offset_magnitude, "mm", 1.0)
+            (app.display_manager.quadrant_offset_magnitude as f32, "mm", 1.0)
         };
         
-        let speed = if app.global_units_mils { 10.0 } else { 1.0 };
-        let max_range = if app.global_units_mils { 20000.0 } else { 500.0 };
+        let speed = if units_resource.is_mils() { 10.0 } else { 1.0 };
+        let max_range = if units_resource.is_mils() { 20000.0 } else { 500.0 };
         
         if ui.add(egui::DragValue::new(&mut spacing_value)
             .suffix(units_suffix)
@@ -171,7 +184,7 @@ fn render_quadrant_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
             .changed() 
         {
             let spacing_mm = spacing_value * conversion_factor;
-            app.display_manager.set_quadrant_offset_magnitude(spacing_mm);
+            app.display_manager.set_quadrant_offset_magnitude(spacing_mm as f64);
             crate::ecs::mark_coordinates_dirty_ecs(&mut app.ecs_world);
         }
         
@@ -309,7 +322,12 @@ fn render_grid_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
     let grid_spacings_mils = [100.0, 50.0, 25.0, 10.0, 5.0, 2.0, 1.0];
     let grid_spacings_mm = [2.54, 1.27, 0.635, 0.254, 0.127, 0.0508, 0.0254];
     
-    let spacings = if app.global_units_mils {
+    let is_mils = {
+        let units_resource = Tab::get_units(app);
+        units_resource.is_mils()
+    };
+    
+    let spacings = if is_mils {
         &grid_spacings_mils[..]
     } else {
         &grid_spacings_mm[..]
@@ -318,9 +336,13 @@ fn render_grid_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
     // Find current selection
     let mut current_spacing_display = "Custom".to_string();
     for &spacing in spacings {
-        let spacing_mm = if app.global_units_mils { spacing * 0.0254 } else { spacing };
+        let spacing_mm = if is_mils { 
+            nm_to_mm(mils_to_nm(spacing)) 
+        } else { 
+            spacing 
+        };
         if (app.grid_settings.spacing_mm - spacing_mm).abs() < 0.001 {
-            current_spacing_display = if app.global_units_mils {
+            current_spacing_display = if is_mils {
                 format!("{} mils", spacing as i32)
             } else {
                 format!("{:.3} mm", spacing)
@@ -333,8 +355,12 @@ fn render_grid_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
         .selected_text(current_spacing_display)
         .show_ui(ui, |ui| {
             for &spacing in spacings {
-                let spacing_mm = if app.global_units_mils { spacing * 0.0254 } else { spacing };
-                let label = if app.global_units_mils {
+                let spacing_mm = if is_mils { 
+                    nm_to_mm(mils_to_nm(spacing)) 
+                } else { 
+                    spacing 
+                };
+                let label = if is_mils {
                     format!("{} mils", spacing as i32)
                 } else {
                     format!("{:.3} mm", spacing)
@@ -377,10 +403,14 @@ fn render_ruler_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
             let dy = end.y - start.y;
             let distance = (dx * dx + dy * dy).sqrt();
             
-            if app.global_units_mils {
-                let distance_mils = distance / 0.0254;
+            let units_resource = Tab::get_units(app);
+            if units_resource.is_mils() {
+                let distance_nm = mm_to_nm(distance as f32);
+                let distance_mils = nm_to_mils(distance_nm);
+                let dx_nm = mm_to_nm(dx as f32);
+                let dy_nm = mm_to_nm(dy as f32);
                 ui.label(format!("Distance: {:.2} mils", distance_mils));
-                ui.label(format!("ΔX: {:.2} mils, ΔY: {:.2} mils", dx / 0.0254, dy / 0.0254));
+                ui.label(format!("ΔX: {:.2} mils, ΔY: {:.2} mils", nm_to_mils(dx_nm), nm_to_mils(dy_nm)));
             } else {
                 ui.label(format!("Distance: {:.3} mm", distance));
                 ui.label(format!("ΔX: {:.3} mm, ΔY: {:.3} mm", dx, dy));
@@ -424,6 +454,9 @@ fn handle_viewport_interactions(ui: &mut egui::Ui, app: &mut DemoLensApp, viewpo
     
     // Handle zoom window
     handle_zoom_window(ui, app, viewport, mouse_pos_screen, response);
+    
+    // Handle mouse wheel zoom
+    handle_mouse_wheel_zoom(ui, app, viewport, response);
     
     // Update UI state if not dragging zoom window
     if !app.zoom_window_dragging {
@@ -547,6 +580,8 @@ fn handle_zoom_window(ui: &mut egui::Ui, app: &mut DemoLensApp, viewport: &Rect,
                     viewport_center.x - (gerber_center_x * new_scale as f64) as f32,
                     viewport_center.y + (gerber_center_y * new_scale as f64) as f32
                 );
+                
+                app.sync_zoom_to_ecs(); // Sync zoom changes to ECS
             }
         }
         
@@ -558,6 +593,48 @@ fn handle_zoom_window(ui: &mut egui::Ui, app: &mut DemoLensApp, viewport: &Rect,
     if app.zoom_window_dragging && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
         app.zoom_window_dragging = false;
         app.zoom_window_start = None;
+    }
+}
+
+fn handle_mouse_wheel_zoom(ui: &mut egui::Ui, app: &mut DemoLensApp, _viewport: &Rect, response: &egui::Response) {
+    if !response.contains_pointer() {
+        return;
+    }
+    
+    let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
+    if scroll_delta == 0.0 {
+        return;
+    }
+    
+    // Get mouse position for zoom center
+    let mouse_pos = ui.input(|i| i.pointer.hover_pos());
+    if let Some(mouse_pos) = mouse_pos {
+        // Calculate zoom factor (positive scroll = zoom in, negative = zoom out)
+        let zoom_factor = if scroll_delta > 0.0 {
+            1.1 // Zoom in
+        } else {
+            1.0 / 1.1 // Zoom out
+        };
+        
+        // Get current scale and calculate new scale
+        let old_scale = app.view_state.scale;
+        let new_scale = (old_scale * zoom_factor).clamp(0.01, 100.0);
+        
+        // Calculate the gerber coordinates at the mouse position before scaling
+        let gerber_point = app.view_state.screen_to_gerber_coords(mouse_pos);
+        
+        // Update the scale
+        app.view_state.scale = new_scale;
+        
+        // Calculate the new screen position of the same gerber point
+        let new_screen_pos = app.view_state.gerber_to_screen_coords(gerber_point);
+        
+        // Adjust translation to keep the mouse cursor over the same gerber point
+        let translation_adjustment = mouse_pos - new_screen_pos;
+        app.view_state.translation += translation_adjustment;
+        
+        // Sync with ECS zoom resource
+        app.sync_zoom_to_ecs();
     }
 }
 
@@ -719,9 +796,12 @@ fn render_board_dimensions(app: &mut DemoLensApp, painter: &Painter, viewport: &
         let width_mm = bbox.width();
         let height_mm = bbox.height();
         
-        let dimension_text = if app.global_units_mils {
-            let width_mils = width_mm / 0.0254;
-            let height_mils = height_mm / 0.0254;
+        let units_resource = Tab::get_units(app);
+        let dimension_text = if units_resource.is_mils() {
+            let width_nm = mm_to_nm(width_mm as f32);
+            let height_nm = mm_to_nm(height_mm as f32);
+            let width_mils = nm_to_mils(width_nm);
+            let height_mils = nm_to_mils(height_nm);
             format!("{:.0} x {:.0} mils", width_mils, height_mils)
         } else {
             format!("{:.1} x {:.1} mm", width_mm, height_mm)
@@ -802,12 +882,16 @@ fn render_ruler(app: &mut DemoLensApp, painter: &Painter) {
             let distance = (dx * dx + dy * dy).sqrt();
             
             // Create measurement text with dx/dy display
-            let measurement_text = if app.global_units_mils {
+            let units_resource = Tab::get_units(app);
+            let measurement_text = if units_resource.is_mils() {
+                let distance_nm = mm_to_nm(distance as f32);
+                let dx_nm = mm_to_nm(dx as f32);
+                let dy_nm = mm_to_nm(dy as f32);
                 format!(
                     "{:.2} mils\nΔX: {:.2}\nΔY: {:.2}",
-                    distance / 0.0254,
-                    dx / 0.0254,
-                    dy / 0.0254
+                    nm_to_mils(distance_nm),
+                    nm_to_mils(dx_nm),
+                    nm_to_mils(dy_nm)
                 )
             } else {
                 format!(
@@ -924,9 +1008,12 @@ fn render_cursor_info(ui: &mut egui::Ui, app: &mut DemoLensApp, painter: &Painte
                 gerber_pos.y - app.display_manager.design_offset.y
             );
             
-            let cursor_text = if app.global_units_mils {
-                let x_mils = adjusted_pos.x / 0.0254;
-                let y_mils = adjusted_pos.y / 0.0254;
+            let units_resource = Tab::get_units(app);
+            let cursor_text = if units_resource.is_mils() {
+                let x_nm = mm_to_nm(adjusted_pos.x as f32);
+                let y_nm = mm_to_nm(adjusted_pos.y as f32);
+                let x_mils = nm_to_mils(x_nm);
+                let y_mils = nm_to_mils(y_nm);
                 format!("({:.0}, {:.0}) mils", x_mils, y_mils)
             } else {
                 format!("({:.2}, {:.2}) mm", adjusted_pos.x, adjusted_pos.y)
@@ -986,7 +1073,8 @@ fn render_cursor_info(ui: &mut egui::Ui, app: &mut DemoLensApp, painter: &Painte
     
     // Unit display
     let unit_toggle_pos = viewport.max - Vec2::new(10.0, 30.0);
-    let unit_text = if app.global_units_mils { "mils" } else { "mm" };
+    let units_resource = Tab::get_units(app);
+    let unit_text = if units_resource.is_mils() { "mils" } else { "mm" };
     painter.text(
         unit_toggle_pos,
         egui::Align2::RIGHT_BOTTOM,
@@ -1013,6 +1101,34 @@ impl<'a> egui_dock::TabViewer for TabViewer<'a> {
         };
         tab.content(ui, &mut params);
     }
+}
+
+fn render_zoom_display(ui: &mut egui::Ui, app: &mut DemoLensApp) {
+    // Get zoom info from ECS, fallback to legacy ViewState
+    let (zoom_percentage, scale_factor) = if let Some(zoom_resource) = app.ecs_world.get_resource::<crate::ecs::ZoomResource>() {
+        (zoom_resource.get_zoom_percentage(), zoom_resource.scale)
+    } else {
+        (app.view_state.scale * 100.0, app.view_state.scale)
+    };
+    
+    // Format zoom display with appropriate precision
+    let zoom_text = if zoom_percentage >= 100.0 {
+        format!("🔍 {:.0}%", zoom_percentage)
+    } else if zoom_percentage >= 10.0 {
+        format!("🔍 {:.1}%", zoom_percentage)
+    } else {
+        format!("🔍 {:.2}%", zoom_percentage)
+    };
+    
+    // Display zoom with a distinct visual style
+    ui.label(egui::RichText::new(zoom_text)
+        .color(egui::Color32::from_rgb(100, 200, 100))
+        .strong())
+        .on_hover_text(format!(
+            "Current Zoom Level (ECS)\nScale Factor: {:.3}x\nPercentage: {:.2}%",
+            scale_factor,
+            zoom_percentage
+        ));
 }
 
 /// Draw a red X marker for DRC violations

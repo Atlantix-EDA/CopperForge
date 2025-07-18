@@ -115,6 +115,41 @@ impl Drop for DemoLensApp {
 }
 
 impl DemoLensApp {
+    /// Sync units between legacy global_units_mils and ECS UnitsResource
+    pub fn sync_units_to_ecs(&mut self) {
+        if let Some(mut units_resource) = self.ecs_world.get_resource_mut::<ecs::UnitsResource>() {
+            if self.global_units_mils {
+                units_resource.set_mils();
+            } else {
+                units_resource.set_mm();
+            }
+        }
+    }
+    
+    /// Sync units from ECS UnitsResource to legacy global_units_mils
+    pub fn sync_units_from_ecs(&mut self) {
+        if let Some(units_resource) = self.ecs_world.get_resource::<ecs::UnitsResource>() {
+            self.global_units_mils = units_resource.is_mils();
+        }
+    }
+    
+    /// Sync zoom from legacy view_state to ECS ZoomResource
+    pub fn sync_zoom_to_ecs(&mut self) {
+        if let Some(mut zoom_resource) = self.ecs_world.get_resource_mut::<ecs::ZoomResource>() {
+            zoom_resource.set_scale(self.view_state.scale);
+            zoom_resource.set_center(self.view_state.translation.x, self.view_state.translation.y);
+        }
+    }
+    
+    /// Sync zoom from ECS ZoomResource to legacy view_state
+    pub fn sync_zoom_from_ecs(&mut self) {
+        if let Some(zoom_resource) = self.ecs_world.get_resource::<ecs::ZoomResource>() {
+            self.view_state.scale = zoom_resource.scale;
+            self.view_state.translation.x = zoom_resource.center_x;
+            self.view_state.translation.y = zoom_resource.center_y;
+        }
+    }
+    
     /// Render layers using ECS system
     pub fn render_layers_ecs(&mut self, painter: &egui::Painter) {
         // Update view state resource
@@ -196,6 +231,17 @@ impl DemoLensApp {
             // Load time settings from saved config
             app.user_timezone = project_config.user_timezone.clone();
             app.use_24_hour_clock = project_config.use_24_hour_clock;
+            app.global_units_mils = project_config.global_units_mils;
+            
+            // Sync units with ECS resource
+            if let Some(mut units_resource) = app.ecs_world.get_resource_mut::<ecs::UnitsResource>() {
+                if app.global_units_mils {
+                    units_resource.set_mils();
+                } else {
+                    units_resource.set_mm();
+                }
+            }
+            
             app.project_manager = ProjectManager::from_config(project_config);
         }
         
@@ -300,6 +346,7 @@ impl DemoLensApp {
         }
 
         self.view_state.scale = scale;
+        self.sync_zoom_to_ecs(); // Sync zoom changes to ECS
         self.needs_initial_view = false;
     }
     
@@ -441,6 +488,7 @@ impl DemoLensApp {
         config.state = self.project_manager.state.clone(); // Save current project state!
         config.user_timezone = self.user_timezone.clone();
         config.use_24_hour_clock = self.use_24_hour_clock;
+        config.global_units_mils = self.global_units_mils;
         
         if let Err(e) = config.save_to_file(&self.config_path) {
             eprintln!("Failed to save settings: {}", e);
@@ -589,6 +637,7 @@ impl eframe::App for DemoLensApp {
             // U key - toggle units (mm/mils)
             if i.key_pressed(egui::Key::U) {
                 self.global_units_mils = !self.global_units_mils;
+                self.sync_units_to_ecs(); // Sync to ECS units system
                 let units_name = if self.global_units_mils { "mils" } else { "mm" };
                 let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
                 logger.log_info(&format!("Toggled units to {} (U key)", units_name));

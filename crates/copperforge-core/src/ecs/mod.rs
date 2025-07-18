@@ -5,6 +5,7 @@ pub mod resources;
 pub mod systems;
 pub mod factories;
 pub mod detection;
+pub mod units;
 
 pub use types::*;
 pub use components::*;
@@ -12,6 +13,7 @@ pub use resources::*;
 pub use systems::*;
 pub use factories::*;
 pub use detection::*;
+pub use units::*;
 
 use bevy_ecs::prelude::*;
 // All types now local to ECS module - no more layer_operations dependency
@@ -28,6 +30,8 @@ pub fn setup_ecs_world() -> World {
     world.insert_resource(UnassignedGerbers::default());
     world.insert_resource(LayerDetectorResource::default());
     world.insert_resource(CoordinateUpdateTracker::default());
+    world.insert_resource(UnitsResource::default());
+    world.insert_resource(ZoomResource::default());
     
     world
 }

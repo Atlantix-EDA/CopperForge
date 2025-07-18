@@ -169,14 +169,14 @@ impl Default for DrcRules {
 }
 
 impl DrcRules {
-    /// Convert mm to mils (1 mm = 39.3701 mils)
+    /// Convert mm to mils using nanometer precision
     pub fn mm_to_mils(mm: f32) -> f32 {
-        mm * 39.3701
+        crate::ecs::nm_to_mils(crate::ecs::mm_to_nm(mm))
     }
     
-    /// Convert mils to mm (1 mil = 0.0254 mm)
+    /// Convert mils to mm using nanometer precision
     pub fn mils_to_mm(mils: f32) -> f32 {
-        mils * 0.0254
+        crate::ecs::nm_to_mm(crate::ecs::mils_to_nm(mils))
     }
     
     /// Get display value (convert to mils if use_mils is true)
