@@ -89,6 +89,10 @@ pub struct DemoLensApp {
     pub ruler_dragging: bool,
     pub ruler_drag_start: Option<nalgebra::Point2<f64>>,
     
+    // Latched measurement (persists after measurement mode is exited)
+    pub latched_measurement_start: Option<nalgebra::Point2<f64>>,
+    pub latched_measurement_end: Option<nalgebra::Point2<f64>>,
+    
     
     // BOM panel state
     pub bom_state: Option<ui::BomPanelState>,
@@ -219,6 +223,8 @@ impl DemoLensApp {
             ruler_end: None,
             ruler_dragging: false,
             ruler_drag_start: None,
+            latched_measurement_start: None,
+            latched_measurement_end: None,
             bom_state: None,
             pending_bom_components: None,
             cross_probe_slot: None,
@@ -674,31 +680,61 @@ impl eframe::App for DemoLensApp {
                 logger.log_info("Aligned view to grid (A key)");
                 }
             
-            // M key - toggle ruler mode
+            // M key - toggle ruler mode with latched measurement support
             if i.key_pressed(egui::Key::M) {
-                self.ruler_active = !self.ruler_active;
-                if !self.ruler_active {
+                if self.ruler_active {
+                    // Exiting measurement mode - latch the current measurement if complete
+                    if self.ruler_start.is_some() && self.ruler_end.is_some() {
+                        self.latched_measurement_start = self.ruler_start;
+                        self.latched_measurement_end = self.ruler_end;
+                    }
+                    
                     // Clear ruler when deactivated
+                    self.ruler_active = false;
                     self.ruler_start = None;
                     self.ruler_end = None;
                     self.ruler_dragging = false;
+                    
+                    let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
+                    logger.log_info("Ruler mode deactivated (M key) - measurement latched");
+                } else {
+                    // Starting new measurement mode - clear previous latched measurement
+                    self.latched_measurement_start = None;
+                    self.latched_measurement_end = None;
+                    
+                    self.ruler_active = true;
+                    
+                    let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
+                    logger.log_info("Ruler mode activated (M key) - previous measurement cleared");
                 }
-                
-                let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
-                let mode_text = if self.ruler_active { "activated" } else { "deactivated" };
-                logger.log_info(&format!("Ruler mode {} (M key)", mode_text));
                 }
             
-            // ESC key - cancel measurement mode
+            // ESC key - cancel measurement mode with latching support
             if i.key_pressed(egui::Key::Escape) && self.ruler_active {
-                self.ruler_active = false;
+                // Latch the current measurement if complete
+                if self.ruler_start.is_some() && self.ruler_end.is_some() {
+                    self.latched_measurement_start = self.ruler_start;
+                    self.latched_measurement_end = self.ruler_end;
+                    
+                    // Debug log the latched values
+                    let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
+                    if let (Some(start), Some(end)) = (self.ruler_start, self.ruler_end) {
+                        logger.log_info(&format!("Latching measurement - Start: ({:.6}, {:.6}), End: ({:.6}, {:.6})", 
+                                                start.x, start.y, end.x, end.y));
+                        let dx = end.x - start.x;
+                        let dy = end.y - start.y;
+                        logger.log_info(&format!("Latching deltas - ΔX: {:.6}, ΔY: {:.6}", dx, dy));
+                    }
+                }
+                
                 // Clear ruler when deactivated
+                self.ruler_active = false;
                 self.ruler_start = None;
                 self.ruler_end = None;
                 self.ruler_dragging = false;
                 
                 let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
-                logger.log_info("Ruler mode cancelled (ESC key)");
+                logger.log_info("Ruler mode cancelled (ESC key) - measurement latched");
                 }
             });
         }

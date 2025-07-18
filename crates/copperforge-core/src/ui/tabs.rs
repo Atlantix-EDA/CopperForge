@@ -407,19 +407,42 @@ fn render_ruler_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
             if units_resource.is_mils() {
                 let distance_nm = mm_to_nm(distance as f32);
                 let distance_mils = nm_to_mils(distance_nm);
-                let dx_nm = mm_to_nm(dx as f32);
-                let dy_nm = mm_to_nm(dy as f32);
-                ui.label(format!("Distance: {:.2} mils", distance_mils));
-                ui.label(format!("ΔX: {:.2} mils, ΔY: {:.2} mils", nm_to_mils(dx_nm), nm_to_mils(dy_nm)));
+                let dx_nm = mm_to_nm(dx.abs() as f32);
+                let dy_nm = mm_to_nm(dy.abs() as f32);
+                ui.label(format!("📏 Distance: {:.2} mils", distance_mils));
+                ui.label(format!("📐 ΔX: {:.3} mils, ΔY: {:.3} mils", nm_to_mils(dx_nm), nm_to_mils(dy_nm)));
             } else {
-                ui.label(format!("Distance: {:.3} mm", distance));
-                ui.label(format!("ΔX: {:.3} mm, ΔY: {:.3} mm", dx, dy));
+                ui.label(format!("📏 Distance: {:.3} mm", distance));
+                ui.label(format!("📐 ΔX: {:.3} mm, ΔY: {:.3} mm", dx.abs(), dy.abs()));
             }
         } else if app.ruler_start.is_some() {
             ui.label("Click second point to complete measurement");
         } else {
             ui.label("Click first point to start measurement (or press M to toggle)");
         }
+    }
+    // Show latched measurement if not in active measurement mode
+    else if let (Some(start), Some(end)) = (app.latched_measurement_start, app.latched_measurement_end) {
+        let dx = end.x - start.x;
+        let dy = end.y - start.y;
+        let distance = (dx * dx + dy * dy).sqrt();
+        
+        let units_resource = Tab::get_units(app);
+        if units_resource.is_mils() {
+            let distance_nm = mm_to_nm(distance as f32);
+            let distance_mils = nm_to_mils(distance_nm);
+            let dx_nm = mm_to_nm(dx.abs() as f32);
+            let dy_nm = mm_to_nm(dy.abs() as f32);
+            let dx_mils = nm_to_mils(dx_nm);
+            let dy_mils = nm_to_mils(dy_nm);
+            ui.label(egui::RichText::new(format!("📏 Distance: {:.2} mils", distance_mils)).color(egui::Color32::LIGHT_GRAY));
+            // Use more precision for deltas to avoid showing 0.00 for small values
+            ui.label(egui::RichText::new(format!("📐 ΔX: {:.3} mils, ΔY: {:.3} mils", dx_mils, dy_mils)).color(egui::Color32::LIGHT_GRAY));
+        } else {
+            ui.label(egui::RichText::new(format!("📏 Distance: {:.3} mm", distance)).color(egui::Color32::LIGHT_GRAY));
+            ui.label(egui::RichText::new(format!("📐 ΔX: {:.3} mm, ΔY: {:.3} mm", dx.abs(), dy.abs())).color(egui::Color32::LIGHT_GRAY));
+        }
+        ui.label(egui::RichText::new("(Previous measurement - press M to start new)").color(egui::Color32::GRAY).italics());
     }
 }
 
@@ -498,6 +521,30 @@ fn handle_viewport_interactions(ui: &mut egui::Ui, app: &mut DemoLensApp, viewpo
                     "Click to set origin",
                     egui::FontId::default(),
                     Color32::YELLOW,
+                );
+            }
+        }
+        
+        // Show visual feedback when in measurement mode
+        if app.ruler_active && !app.setting_origin_mode {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+            
+            // Draw preview text at cursor
+            if let Some(mouse_pos) = ui.input(|i| i.pointer.hover_pos()) {
+                let painter = ui.painter();
+                
+                // Draw preview text
+                let text = if app.ruler_start.is_some() && app.ruler_end.is_none() {
+                    "Click second point to complete measurement"
+                } else {
+                    "Click to start measurement"
+                };
+                painter.text(
+                    mouse_pos + Vec2::new(20.0, -20.0),
+                    egui::Align2::LEFT_BOTTOM,
+                    text,
+                    egui::FontId::default(),
+                    Color32::CYAN,
                 );
             }
         }
@@ -703,6 +750,9 @@ fn render_overlays(app: &mut DemoLensApp, painter: &Painter, viewport: &Rect) {
     // Enterprise feature: Ruler visualization
     render_ruler(app, painter);
     
+    // Custom measurement crosshair
+    render_measurement_crosshair(app, painter);
+    
     // Zoom window
     render_zoom_window(app, painter);
 }
@@ -852,29 +902,43 @@ fn render_zoom_window(app: &mut DemoLensApp, painter: &Painter) {
 }
 
 fn render_ruler(app: &mut DemoLensApp, painter: &Painter) {
-    if !app.ruler_active {
-        return;
+    // Render active ruler if active
+    if app.ruler_active {
+        render_ruler_measurement(app, painter, app.ruler_start, app.ruler_end, true);
     }
-    
+    // Render latched ruler if not active but latched measurement exists
+    else if app.latched_measurement_start.is_some() && app.latched_measurement_end.is_some() {
+        render_ruler_measurement(app, painter, app.latched_measurement_start, app.latched_measurement_end, false);
+    }
+}
+
+fn render_ruler_measurement(app: &mut DemoLensApp, painter: &Painter, start_opt: Option<nalgebra::Point2<f64>>, end_opt: Option<nalgebra::Point2<f64>>, is_active: bool) {
     // Draw ruler points and line
-    if let Some(start) = app.ruler_start {
+    if let Some(start) = start_opt {
         let start_screen = app.view_state.gerber_to_screen_coords(start);
         
-        // Draw start point
-        painter.circle_filled(start_screen, 4.0, Color32::RED);
-        painter.circle_stroke(start_screen, 6.0, Stroke::new(2.0, Color32::WHITE));
+        // Choose colors based on active/latched state
+        let (point_color, line_color, text_color) = if is_active {
+            (Color32::RED, Color32::WHITE, Color32::WHITE)
+        } else {
+            (Color32::GRAY, Color32::LIGHT_GRAY, Color32::LIGHT_GRAY)
+        };
         
-        if let Some(end) = app.ruler_end {
+        // Draw start point
+        painter.circle_filled(start_screen, 4.0, point_color);
+        painter.circle_stroke(start_screen, 6.0, Stroke::new(2.0, line_color));
+        
+        if let Some(end) = end_opt {
             let end_screen = app.view_state.gerber_to_screen_coords(end);
             
             // Draw end point
-            painter.circle_filled(end_screen, 4.0, Color32::RED);
-            painter.circle_stroke(end_screen, 6.0, Stroke::new(2.0, Color32::WHITE));
+            painter.circle_filled(end_screen, 4.0, point_color);
+            painter.circle_stroke(end_screen, 6.0, Stroke::new(2.0, line_color));
             
             // Draw ruler line
             painter.line_segment(
                 [start_screen, end_screen],
-                Stroke::new(3.0, Color32::WHITE)
+                Stroke::new(3.0, line_color)
             );
             
             let dx = end.x - start.x;
@@ -885,8 +949,8 @@ fn render_ruler(app: &mut DemoLensApp, painter: &Painter) {
             let units_resource = Tab::get_units(app);
             let measurement_text = if units_resource.is_mils() {
                 let distance_nm = mm_to_nm(distance as f32);
-                let dx_nm = mm_to_nm(dx as f32);
-                let dy_nm = mm_to_nm(dy as f32);
+                let dx_nm = mm_to_nm(dx.abs() as f32);
+                let dy_nm = mm_to_nm(dy.abs() as f32);
                 format!(
                     "{:.2} mils\nΔX: {:.2}\nΔY: {:.2}",
                     nm_to_mils(distance_nm),
@@ -906,20 +970,22 @@ fn render_ruler(app: &mut DemoLensApp, painter: &Painter) {
             let text_offset = Vec2::new(20.0, -45.0);
             let text_pos = end_screen + text_offset;
             
-            // Draw text background
-            let text_size = painter.text(
-                text_pos,
-                egui::Align2::LEFT_TOP,
-                "",
-                egui::FontId::monospace(16.0),
-                Color32::WHITE,
-            ).size();
-            
-            let background_rect = egui::Rect::from_min_size(
-                text_pos - Vec2::new(6.0, 6.0),
-                text_size + Vec2::new(12.0, 12.0)
-            );
-            painter.rect_filled(background_rect, 6.0, Color32::from_rgba_unmultiplied(0, 0, 0, 240));
+            // Draw text background (only for active measurements)
+            if is_active {
+                let text_size = painter.text(
+                    text_pos,
+                    egui::Align2::LEFT_TOP,
+                    "",
+                    egui::FontId::monospace(16.0),
+                    text_color,
+                ).size();
+                
+                let background_rect = egui::Rect::from_min_size(
+                    text_pos - Vec2::new(6.0, 6.0),
+                    text_size + Vec2::new(12.0, 12.0)
+                );
+                painter.rect_filled(background_rect, 6.0, Color32::from_rgba_unmultiplied(0, 0, 0, 240));
+            }
             
             // Draw measurement text at endpoint
             painter.text(
@@ -927,7 +993,7 @@ fn render_ruler(app: &mut DemoLensApp, painter: &Painter) {
                 egui::Align2::LEFT_TOP,
                 measurement_text,
                 egui::FontId::monospace(16.0),
-                Color32::WHITE,
+                text_color,
             );
         }
     }
@@ -1081,6 +1147,61 @@ fn render_cursor_info(ui: &mut egui::Ui, app: &mut DemoLensApp, painter: &Painte
         format!("Mouse: {}", unit_text),
         egui::FontId::default(),
         Color32::from_rgb(150, 150, 150),
+    );
+}
+
+fn render_measurement_crosshair(app: &mut DemoLensApp, painter: &Painter) {
+    // Skip if in origin setting mode
+    if app.setting_origin_mode {
+        return;
+    }
+    
+    // Draw crosshairs for active measurement points
+    if app.ruler_active {
+        if let Some(start_point) = app.ruler_start {
+            let screen_pos = app.view_state.gerber_to_screen_coords(start_point);
+            draw_measurement_crosshair(painter, screen_pos, Color32::from_rgb(139, 0, 0)); // Dark red for active
+        }
+        
+        if let Some(end_point) = app.ruler_end {
+            let screen_pos = app.view_state.gerber_to_screen_coords(end_point);
+            draw_measurement_crosshair(painter, screen_pos, Color32::from_rgb(139, 0, 0)); // Dark red for active
+        }
+    }
+    // Draw crosshairs for latched measurement points (grayed out)
+    else {
+        if let Some(start_point) = app.latched_measurement_start {
+            let screen_pos = app.view_state.gerber_to_screen_coords(start_point);
+            draw_measurement_crosshair(painter, screen_pos, Color32::from_rgb(100, 100, 100)); // Gray for latched
+        }
+        
+        if let Some(end_point) = app.latched_measurement_end {
+            let screen_pos = app.view_state.gerber_to_screen_coords(end_point);
+            draw_measurement_crosshair(painter, screen_pos, Color32::from_rgb(100, 100, 100)); // Gray for latched
+        }
+    }
+}
+
+fn draw_measurement_crosshair(painter: &Painter, center: Pos2, color: Color32) {
+    let crosshair_size = 12.0;
+    let stroke = egui::Stroke::new(2.0, color);
+    
+    // Horizontal line
+    painter.line_segment(
+        [
+            center + Vec2::new(-crosshair_size, 0.0),
+            center + Vec2::new(crosshair_size, 0.0),
+        ],
+        stroke,
+    );
+    
+    // Vertical line
+    painter.line_segment(
+        [
+            center + Vec2::new(0.0, -crosshair_size),
+            center + Vec2::new(0.0, crosshair_size),
+        ],
+        stroke,
     );
 }
 
