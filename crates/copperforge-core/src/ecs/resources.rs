@@ -34,6 +34,7 @@ pub struct ZoomResource {
     pub center_y: f32,
     pub min_scale: f32,
     pub max_scale: f32,
+    pub fit_to_view_scale: f32, // Reference scale for percentage calculations
 }
 
 impl Default for ZoomResource {
@@ -44,6 +45,7 @@ impl Default for ZoomResource {
             center_y: 0.0,
             min_scale: 0.001,
             max_scale: 1000.0,
+            fit_to_view_scale: 1.0,
         }
     }
 }
@@ -56,6 +58,7 @@ impl ZoomResource {
             center_y,
             min_scale: 0.001,
             max_scale: 1000.0,
+            fit_to_view_scale: scale, // Use initial scale as fit-to-view reference
         }
     }
     
@@ -76,15 +79,24 @@ impl ZoomResource {
         self.center_y = y;
     }
     
+    pub fn set_fit_to_view_scale(&mut self, scale: f32) {
+        self.fit_to_view_scale = scale.clamp(self.min_scale, self.max_scale);
+    }
+    
     pub fn get_zoom_percentage(&self) -> f32 {
-        self.scale * 100.0
+        // Calculate percentage relative to fit-to-view scale
+        // fit_to_view_scale = 100%, so current_scale / fit_to_view_scale * 100
+        (self.scale / self.fit_to_view_scale) * 100.0
     }
     
     pub fn reset_to_fit(&mut self, content_width: f32, content_height: f32, viewport_width: f32, viewport_height: f32) {
         // Calculate scale to fit content with some margin
         let scale_x = viewport_width / content_width;
         let scale_y = viewport_height / content_height;
-        self.set_scale(scale_x.min(scale_y) * 0.95);
+        let fit_scale = scale_x.min(scale_y) * 0.95;
+        
+        self.set_scale(fit_scale);
+        self.fit_to_view_scale = fit_scale; // Update reference scale
         
         // Center the view
         self.center_x = 0.0;

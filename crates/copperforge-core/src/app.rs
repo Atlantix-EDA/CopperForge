@@ -346,7 +346,14 @@ impl DemoLensApp {
         }
 
         self.view_state.scale = scale;
-        self.sync_zoom_to_ecs(); // Sync zoom changes to ECS
+        
+        // Update ECS zoom resource and set fit-to-view reference
+        if let Some(mut zoom_resource) = self.ecs_world.get_resource_mut::<ecs::ZoomResource>() {
+            zoom_resource.set_scale(scale);
+            zoom_resource.set_fit_to_view_scale(scale); // This scale becomes the 100% reference
+            zoom_resource.set_center(self.view_state.translation.x, self.view_state.translation.y);
+        }
+        
         self.needs_initial_view = false;
     }
     
@@ -681,6 +688,18 @@ impl eframe::App for DemoLensApp {
                 let mode_text = if self.ruler_active { "activated" } else { "deactivated" };
                 logger.log_info(&format!("Ruler mode {} (M key)", mode_text));
                 }
+            
+            // ESC key - cancel measurement mode
+            if i.key_pressed(egui::Key::Escape) && self.ruler_active {
+                self.ruler_active = false;
+                // Clear ruler when deactivated
+                self.ruler_start = None;
+                self.ruler_end = None;
+                self.ruler_dragging = false;
+                
+                let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
+                logger.log_info("Ruler mode cancelled (ESC key)");
+                }
             });
         }
         
@@ -763,6 +782,13 @@ impl eframe::App for DemoLensApp {
                         });
                     });
                     
+                    ui.horizontal(|ui| {
+                        ui.label("ESC");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label("Cancel measurement mode");
+                        });
+                    });
+                    
                     ui.separator();
                     ui.heading("Mouse Controls");
                     
@@ -797,7 +823,7 @@ impl eframe::App for DemoLensApp {
                     ui.horizontal(|ui| {
                         ui.label("Escape");
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label("Cancel zoom selection");
+                            ui.label("Cancel zoom selection / measurement mode");
                         });
                     });
                 });
