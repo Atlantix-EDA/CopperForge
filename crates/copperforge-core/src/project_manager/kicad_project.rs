@@ -444,12 +444,18 @@ fn create_readme(info: &NewKicadProjectInfo) -> Result<(), KicadProjectError> {
     let path = info.project_dir().join("README.md");
     let now = Utc::now();
 
+    // Build pedigree section with proper line breaks
+    let pedigree = format!(
+        "**Author:** {}\n\n**Company:** {}\n\n**Created:** {}",
+        info.author,
+        info.company,
+        now.format("%Y-%m-%d")
+    );
+
     let content = format!(
 r#"# {}
 
-**Author:** {}
-**Company:** {}
-**Created:** {}
+{}
 
 ## Description
 
@@ -475,9 +481,7 @@ Created with CopperForge v{} - PCB & CAM for KiCad
 *Generated on {}*
 "#,
         info.name,
-        info.author,
-        info.company,
-        now.format("%Y-%m-%d"),
+        pedigree,
         info.description,
         info.name,
         info.name,
