@@ -232,58 +232,137 @@ pub fn show_create_project_dialog(
         .collapsible(false)
         .resizable(false)
         .movable(true)
-        .default_pos(egui::Pos2::new(400.0, 200.0))
-        .max_size(egui::Vec2::new(500.0, 400.0))
+        .default_pos(egui::Pos2::new(300.0, 150.0))
+        .min_size(egui::Vec2::new(550.0, 500.0))
         .show(ctx, |ui| {
             ui.vertical(|ui| {
+                // Toggle between creating new or importing existing
+                ui.horizontal(|ui| {
+                    ui.label("Project Type:");
+                    ui.radio_value(&mut manager_state.create_new_kicad_project, true, "🆕 Create New KiCad Project");
+                    ui.radio_value(&mut manager_state.create_new_kicad_project, false, "📂 Import Existing PCB");
+                });
+
+                ui.separator();
+                ui.add_space(10.0);
+
+                // Common fields
                 ui.label("Project Name:");
                 ui.text_edit_singleline(&mut manager_state.new_project_name);
-                
+
                 ui.add_space(5.0);
-                
+
                 ui.label("Description:");
                 ui.text_edit_multiline(&mut manager_state.new_project_description);
-                
+
                 ui.add_space(5.0);
-                
+
                 ui.label("Tags (comma-separated):");
                 ui.text_edit_singleline(&mut manager_state.new_project_tags);
-                
+
                 ui.add_space(10.0);
-                
-                // PCB file selection
-                ui.horizontal(|ui| {
-                    ui.label("PCB File:");
-                    
-                    let pcb_file_text = if let Some(ref path) = manager_state.new_project_pcb_path {
-                        path.file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_else(|| "Unknown file".to_string())
-                    } else {
-                        "No PCB file selected".to_string()
-                    };
-                    
-                    ui.label(&pcb_file_text);
-                    
-                    if ui.button("Browse...").clicked() {
-                        manager_state.show_pcb_file_dialog = true;
+
+                // Show different fields based on project type
+                if manager_state.create_new_kicad_project {
+                    ui.heading("New KiCad Project Settings");
+                    ui.separator();
+
+                    // Location
+                    ui.horizontal(|ui| {
+                        ui.label("Location:");
+                        let location_text = manager_state.new_kicad_project_location
+                            .to_string_lossy()
+                            .to_string();
+                        ui.label(&location_text);
+
+                        if ui.button("Browse...").clicked() {
+                            manager_state.show_location_dialog = true;
+                        }
+                    });
+
+                    // Handle location dialog
+                    if manager_state.show_location_dialog {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .set_title("Select Project Location")
+                            .pick_folder()
+                        {
+                            manager_state.new_kicad_project_location = path;
+                        }
+                        manager_state.show_location_dialog = false;
                     }
-                });
-                
-                // Handle PCB file dialog
-                if manager_state.show_pcb_file_dialog {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("KiCad PCB", &["kicad_pcb"])
-                        .set_title("Select PCB File")
-                        .pick_file() 
-                    {
-                        manager_state.new_project_pcb_path = Some(path);
+
+                    ui.add_space(5.0);
+
+                    // Author
+                    ui.horizontal(|ui| {
+                        ui.label("Author:");
+                        ui.text_edit_singleline(&mut manager_state.new_kicad_project_author);
+                    });
+
+                    ui.add_space(5.0);
+
+                    // Company
+                    ui.horizontal(|ui| {
+                        ui.label("Company:");
+                        ui.text_edit_singleline(&mut manager_state.new_kicad_project_company);
+                    });
+
+                    ui.add_space(10.0);
+
+                    // Library options
+                    ui.heading("Library Configuration");
+                    ui.separator();
+
+                    ui.checkbox(&mut manager_state.include_kiverse, "Include KiVerse Symbol Library");
+                    ui.checkbox(&mut manager_state.include_atlantix_resistors, "Include Atlantix-EDA Resistor Library");
+
+                    ui.add_space(5.0);
+
+                    // KiVerse path
+                    ui.horizontal(|ui| {
+                        ui.label("KiVerse Path:");
+                        let kiverse_text = manager_state.kiverse_path
+                            .to_string_lossy()
+                            .to_string();
+                        ui.label(&kiverse_text);
+                    });
+                    ui.label("💡 Default: ~/.kicad_libs/kiverse");
+
+                } else {
+                    // Import existing PCB file
+                    ui.horizontal(|ui| {
+                        ui.label("PCB File:");
+
+                        let pcb_file_text = if let Some(ref path) = manager_state.new_project_pcb_path {
+                            path.file_name()
+                                .map(|n| n.to_string_lossy().to_string())
+                                .unwrap_or_else(|| "Unknown file".to_string())
+                        } else {
+                            "No PCB file selected".to_string()
+                        };
+
+                        ui.label(&pcb_file_text);
+
+                        if ui.button("Browse...").clicked() {
+                            manager_state.show_pcb_file_dialog = true;
+                        }
+                    });
+
+                    // Handle PCB file dialog
+                    if manager_state.show_pcb_file_dialog {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("KiCad PCB", &["kicad_pcb"])
+                            .set_title("Select PCB File")
+                            .pick_file()
+                        {
+                            manager_state.new_project_pcb_path = Some(path);
+                        }
+                        manager_state.show_pcb_file_dialog = false;
                     }
-                    manager_state.show_pcb_file_dialog = false;
                 }
-                
+
                 ui.add_space(15.0);
-                
+
                 // Buttons
                 ui.horizontal(|ui| {
                     if ui.button("Create").clicked() {
@@ -292,30 +371,41 @@ pub fn show_create_project_dialog(
                             manager_state.last_error = Some("Project name cannot be empty".to_string());
                             return;
                         }
-                        
-                        // Get PCB file path from dialog selection
-                        let pcb_path = if let Some(ref path) = manager_state.new_project_pcb_path {
-                            path.clone()
-                        } else {
-                            manager_state.last_error = Some("Please select a PCB file first".to_string());
-                            return;
-                        };
-                        
+
                         // Parse tags
                         let tags: Vec<String> = manager_state.new_project_tags
                             .split(',')
                             .map(|s| s.trim().to_string())
                             .filter(|s| !s.is_empty())
                             .collect();
-                        
-                        // Create project
-                        match manager_state.create_project(
-                            manager_state.new_project_name.clone(),
-                            manager_state.new_project_description.clone(),
-                            pcb_path,
-                            tags,
-                            bom_components.clone(),
-                        ) {
+
+                        // Create project based on type
+                        let result = if manager_state.create_new_kicad_project {
+                            // Create new KiCad project from scratch
+                            manager_state.create_new_kicad_project_from_scratch(
+                                manager_state.new_project_name.clone(),
+                                manager_state.new_project_description.clone(),
+                                tags,
+                            )
+                        } else {
+                            // Import existing PCB
+                            let pcb_path = if let Some(ref path) = manager_state.new_project_pcb_path {
+                                path.clone()
+                            } else {
+                                manager_state.last_error = Some("Please select a PCB file first".to_string());
+                                return;
+                            };
+
+                            manager_state.create_project(
+                                manager_state.new_project_name.clone(),
+                                manager_state.new_project_description.clone(),
+                                pcb_path,
+                                tags,
+                                bom_components.clone(),
+                            )
+                        };
+
+                        match result {
                             Ok(project_id) => {
                                 logger.log_info(&format!("Created project: {} (ID: {})", manager_state.new_project_name, project_id));
                                 manager_state.reset_create_dialog();
@@ -325,7 +415,7 @@ pub fn show_create_project_dialog(
                             }
                         }
                     }
-                    
+
                     if ui.button("Cancel").clicked() {
                         manager_state.reset_create_dialog();
                     }

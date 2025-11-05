@@ -1,5 +1,6 @@
 pub mod database;
 pub mod bom;
+pub mod kicad_project;
 
 use database::{ProjectDatabase, ProjectData, ProjectMetadata, generate_project_id, ProjectDatabaseError};
 use bom::BomComponent;
@@ -21,10 +22,20 @@ pub struct ProjectManagerState {
     pub new_project_pcb_path: Option<PathBuf>,
     pub show_pcb_file_dialog: bool,
     pub last_error: Option<String>,
+    // New fields for creating KiCad projects from scratch
+    pub create_new_kicad_project: bool,
+    pub new_kicad_project_location: PathBuf,
+    pub new_kicad_project_author: String,
+    pub new_kicad_project_company: String,
+    pub include_kiverse: bool,
+    pub include_atlantix_resistors: bool,
+    pub kiverse_path: PathBuf,
+    pub show_location_dialog: bool,
 }
 
 impl Default for ProjectManagerState {
     fn default() -> Self {
+        let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         Self {
             database: None,
             current_project: None,
@@ -39,6 +50,14 @@ impl Default for ProjectManagerState {
             new_project_pcb_path: None,
             show_pcb_file_dialog: false,
             last_error: None,
+            create_new_kicad_project: true,  // Default to creating new projects
+            new_kicad_project_location: home_dir.clone(),
+            new_kicad_project_author: String::new(),
+            new_kicad_project_company: String::new(),
+            include_kiverse: true,
+            include_atlantix_resistors: true,
+            kiverse_path: home_dir.join(".kicad_libs/kiverse"),
+            show_location_dialog: false,
         }
     }
 }
@@ -188,6 +207,62 @@ impl ProjectManagerState {
         }
     }
 
+    /// Create a new KiCad project from scratch
+    pub fn create_new_kicad_project_from_scratch(
+        &mut self,
+        name: String,
+        description: String,
+        tags: Vec<String>,
+    ) -> Result<String, ProjectDatabaseError> {
+        use kicad_project::{NewKicadProjectInfo, create_kicad_project};
+
+        // Create project info
+        let mut project_info = NewKicadProjectInfo::new(name.clone(), self.new_kicad_project_location.clone());
+        project_info.author = self.new_kicad_project_author.clone();
+        project_info.description = description.clone();
+        project_info.company = self.new_kicad_project_company.clone();
+        project_info.include_kiverse = self.include_kiverse;
+        project_info.include_atlantix_resistors = self.include_atlantix_resistors;
+        project_info.kiverse_path = Some(self.kiverse_path.clone());
+
+        // Create the KiCad project files
+        let _project_dir = create_kicad_project(&project_info)
+            .map_err(|e| ProjectDatabaseError::DatabaseWrite(format!("Failed to create KiCad project: {}", e)))?;
+
+        // Now add to our project database
+        let pcb_file_path = project_info.pcb_file_path();
+
+        if let Some(ref database) = self.database {
+            let project_id = generate_project_id();
+            let now = Utc::now();
+
+            let metadata = ProjectMetadata {
+                id: project_id.clone(),
+                name,
+                description,
+                pcb_file_path,
+                created_at: now,
+                last_modified: now,
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                tags,
+            };
+
+            let project_data = ProjectData {
+                metadata: metadata.clone(),
+                bom_components: Vec::new(),
+                notes: String::new(),
+            };
+
+            database.save_project(&project_data)?;
+            self.project_list = database.list_projects()?;
+            self.current_project = Some(project_data);
+
+            Ok(project_id)
+        } else {
+            Err(ProjectDatabaseError::DatabaseRead("Database not initialized".to_string()))
+        }
+    }
+
     /// Reset create dialog
     pub fn reset_create_dialog(&mut self) {
         self.show_create_dialog = false;
@@ -196,5 +271,6 @@ impl ProjectManagerState {
         self.new_project_tags.clear();
         self.new_project_pcb_path = None;
         self.show_pcb_file_dialog = false;
+        self.show_location_dialog = false;
     }
 }
