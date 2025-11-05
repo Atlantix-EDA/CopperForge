@@ -312,10 +312,30 @@ fn create_sym_lib_table(info: &NewKicadProjectInfo) -> Result<(), KicadProjectEr
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "${HOME}/.kicad_libs/kiverse".to_string());
 
-        entries.push(format!(
-            r#"  (lib (name "KiVerse")(type "KiCad")(uri "{}/symbols/KiVerse.kicad_sym")(options "")(descr "KiVerse Symbol Library"))"#,
-            kiverse_base
-        ));
+        // Add all KiVerse symbol files
+        let kiverse_symbols_dir = if let Some(ref path) = info.kiverse_path {
+            path.join("kicad/symbols")
+        } else {
+            std::path::PathBuf::from(format!("{}/.kicad_libs/kiverse/kicad/symbols",
+                std::env::var("HOME").unwrap_or_else(|_| ".".to_string())))
+        };
+
+        // Scan for all .kicad_sym files in KiVerse
+        if kiverse_symbols_dir.exists() {
+            if let Ok(entries_iter) = std::fs::read_dir(&kiverse_symbols_dir) {
+                for entry in entries_iter.flatten() {
+                    if let Some(filename) = entry.file_name().to_str() {
+                        if filename.ends_with(".kicad_sym") {
+                            let lib_name = filename.trim_end_matches(".kicad_sym");
+                            entries.push(format!(
+                                r#"  (lib (name "{}")(type "KiCad")(uri "{}/kicad/symbols/{}")(options "")(descr "KiVerse Library"))"#,
+                                lib_name, kiverse_base, filename
+                            ));
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // Add Atlantix resistors if requested
@@ -324,13 +344,22 @@ fn create_sym_lib_table(info: &NewKicadProjectInfo) -> Result<(), KicadProjectEr
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "${HOME}/.kicad_libs/kiverse".to_string());
 
-        // Assuming atlantix resistors will be in KiVerse repo
-        let packages = vec!["0402", "0603", "0805", "1206", "1210", "2512"];
-        for pkg in packages {
-            entries.push(format!(
-                r#"  (lib (name "Atlantix_R_{}")(type "KiCad")(uri "{}/symbols/atlantix-eda/Atlantix_R_{}.kicad_sym")(options "")(descr "Atlantix Resistor Library {}"))"#,
-                pkg, kiverse_base, pkg, pkg
-            ));
+        // Point to atlantix-eda symbols in KiVerse (if they exist)
+        let atlantix_symbols_dir = if let Some(ref path) = info.kiverse_path {
+            path.join("kicad/symbols/atlantix-eda")
+        } else {
+            std::path::PathBuf::from(format!("{}/.kicad_libs/kiverse/kicad/symbols/atlantix-eda",
+                std::env::var("HOME").unwrap_or_else(|_| ".".to_string())))
+        };
+
+        if atlantix_symbols_dir.exists() {
+            let packages = vec!["0402", "0603", "0805", "1206", "1210", "2512"];
+            for pkg in packages {
+                entries.push(format!(
+                    r#"  (lib (name "Atlantix_R_{}")(type "KiCad")(uri "{}/kicad/symbols/atlantix-eda/Atlantix_R_{}.kicad_sym")(options "")(descr "Atlantix Resistor Library {}"))"#,
+                    pkg, kiverse_base, pkg, pkg
+                ));
+            }
         }
     }
 
@@ -355,10 +384,29 @@ fn create_fp_lib_table(info: &NewKicadProjectInfo) -> Result<(), KicadProjectErr
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "${HOME}/.kicad_libs/kiverse".to_string());
 
-        entries.push(format!(
-            r#"  (lib (name "KiVerse")(type "KiCad")(uri "{}/footprints/KiVerse.pretty")(options "")(descr "KiVerse Footprint Library"))"#,
-            kiverse_base
-        ));
+        // Scan for all .pretty directories in KiVerse
+        let kiverse_footprints_dir = if let Some(ref path) = info.kiverse_path {
+            path.join("kicad/footprints")
+        } else {
+            std::path::PathBuf::from(format!("{}/.kicad_libs/kiverse/kicad/footprints",
+                std::env::var("HOME").unwrap_or_else(|_| ".".to_string())))
+        };
+
+        if kiverse_footprints_dir.exists() {
+            if let Ok(entries_iter) = std::fs::read_dir(&kiverse_footprints_dir) {
+                for entry in entries_iter.flatten() {
+                    if let Some(dirname) = entry.file_name().to_str() {
+                        if dirname.ends_with(".pretty") && entry.path().is_dir() {
+                            let lib_name = dirname.trim_end_matches(".pretty");
+                            entries.push(format!(
+                                r#"  (lib (name "{}")(type "KiCad")(uri "{}/kicad/footprints/{}")(options "")(descr "KiVerse Footprint Library"))"#,
+                                lib_name, kiverse_base, dirname
+                            ));
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // Add Atlantix resistors if requested
@@ -367,10 +415,19 @@ fn create_fp_lib_table(info: &NewKicadProjectInfo) -> Result<(), KicadProjectErr
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "${HOME}/.kicad_libs/kiverse".to_string());
 
-        entries.push(format!(
-            r#"  (lib (name "Atlantix_Resistors")(type "KiCad")(uri "{}/footprints/atlantix-eda/Atlantix_Resistors.pretty")(options "")(descr "Atlantix Resistor Footprints"))"#,
-            kiverse_base
-        ));
+        let atlantix_footprints_dir = if let Some(ref path) = info.kiverse_path {
+            path.join("kicad/footprints/atlantix-eda/Atlantix_Resistors.pretty")
+        } else {
+            std::path::PathBuf::from(format!("{}/.kicad_libs/kiverse/kicad/footprints/atlantix-eda/Atlantix_Resistors.pretty",
+                std::env::var("HOME").unwrap_or_else(|_| ".".to_string())))
+        };
+
+        if atlantix_footprints_dir.exists() {
+            entries.push(format!(
+                r#"  (lib (name "Atlantix_Resistors")(type "KiCad")(uri "{}/kicad/footprints/atlantix-eda/Atlantix_Resistors.pretty")(options "")(descr "Atlantix Resistor Footprints"))"#,
+                kiverse_base
+            ));
+        }
     }
 
     let content = format!(
