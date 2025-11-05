@@ -607,87 +607,23 @@ fn show_project_database_section(ui: &mut egui::Ui, app: &mut DemoLensApp, logge
                 }
             }
             
-            // Inline create project section
-            if manager_state.show_create_dialog {
-                ui.separator();
-                ui.group(|ui| {
-                    ui.label("🆕 Create New Project");
-                    ui.separator();
-                    
-                    ui.horizontal(|ui| {
-                        ui.label("Name:");
-                        ui.text_edit_singleline(&mut manager_state.new_project_name);
-                    });
-                    
-                    ui.horizontal(|ui| {
-                        ui.label("Description:");
-                        ui.text_edit_singleline(&mut manager_state.new_project_description);
-                    });
-                    
-                    ui.horizontal(|ui| {
-                        ui.label("Tags:");
-                        ui.text_edit_singleline(&mut manager_state.new_project_tags);
-                    });
-                    
-                    ui.add_space(5.0);
-                    
-                    ui.horizontal(|ui| {
-                        if ui.button("✅ Create").clicked() {
-                            if !manager_state.new_project_name.trim().is_empty() {
-                                // Get PCB file path
-                                if let Some(pcb_path) = match &app.project_manager.state {
-                                    crate::project::ProjectState::Ready { pcb_path, .. } |
-                                    crate::project::ProjectState::PcbSelected { pcb_path } |
-                                    crate::project::ProjectState::GeneratingGerbers { pcb_path } |
-                                    crate::project::ProjectState::GerbersGenerated { pcb_path, .. } |
-                                    crate::project::ProjectState::LoadingGerbers { pcb_path, .. } => {
-                                        Some(pcb_path.clone())
-                                    },
-                                    _ => None,
-                                } {
-                                    // Parse tags
-                                    let tags: Vec<String> = manager_state.new_project_tags
-                                        .split(',')
-                                        .map(|s| s.trim().to_string())
-                                        .filter(|s| !s.is_empty())
-                                        .collect();
-                                    
-                                    // Get BOM components
-                                    let bom_components = if let Some(ref bom_state) = app.bom_state {
-                                        bom_state.components.lock().unwrap().clone()
-                                    } else {
-                                        Vec::new()
-                                    };
-                                    
-                                    // Create project
-                                    match manager_state.create_project(
-                                        manager_state.new_project_name.clone(),
-                                        manager_state.new_project_description.clone(),
-                                        pcb_path,
-                                        tags,
-                                        bom_components,
-                                    ) {
-                                        Ok(project_id) => {
-                                            logger.log_info(&format!("Created project: {} (ID: {})", manager_state.new_project_name, project_id));
-                                            manager_state.reset_create_dialog();
-                                        }
-                                        Err(e) => {
-                                            manager_state.last_error = Some(format!("Failed to create project: {}", e));
-                                        }
-                                    }
-                                } else {
-                                    manager_state.last_error = Some("Please select a PCB file first".to_string());
-                                }
-                            } else {
-                                manager_state.last_error = Some("Project name cannot be empty".to_string());
-                            }
-                        }
-                        
-                        if ui.button("❌ Cancel").clicked() {
-                            manager_state.reset_create_dialog();
-                        }
-                    });
-                });
+            // Show create project dialog (moved outside ui.group to be a modal window)
+            let show_create = manager_state.show_create_dialog;
+            let bom_components = if let Some(ref bom_state) = app.bom_state {
+                bom_state.components.lock().unwrap().clone()
+            } else {
+                Vec::new()
+            };
+
+            if show_create {
+                // Use the new enhanced create project dialog
+                crate::ui::project_manager_panel::show_create_project_dialog(
+                    ui.ctx(),
+                    manager_state,
+                    &app.project_manager.state,
+                    bom_components,
+                    logger,
+                );
             }
         }
     });
