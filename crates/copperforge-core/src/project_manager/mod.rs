@@ -263,7 +263,7 @@ impl ProjectManagerState {
         }
     }
 
-    /// Reset create dialog
+    /// Reset create dialog (clears project-specific fields only, keeps user preferences)
     pub fn reset_create_dialog(&mut self) {
         self.show_create_dialog = false;
         self.new_project_name.clear();
@@ -272,5 +272,14 @@ impl ProjectManagerState {
         self.new_project_pcb_path = None;
         self.show_pcb_file_dialog = false;
         self.show_location_dialog = false;
+        // Note: We keep author, company, location, and library preferences
+        // so the user doesn't have to re-enter them each time
+    }
+
+    /// Reset all fields including user preferences (for cancel action)
+    pub fn cancel_create_dialog(&mut self) {
+        self.reset_create_dialog();
+        // Could optionally clear user fields here if desired
+        // For now, we keep them to save typing
     }
 }

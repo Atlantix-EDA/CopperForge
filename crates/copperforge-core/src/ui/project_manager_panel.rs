@@ -395,16 +395,19 @@ pub fn show_create_project_dialog(
                         match result {
                             Ok(project_id) => {
                                 logger.log_info(&format!("Created project: {} (ID: {})", manager_state.new_project_name, project_id));
+                                // Only reset on success - this keeps user preferences but clears project fields
                                 manager_state.reset_create_dialog();
                             }
                             Err(e) => {
+                                // Don't reset on error - user can fix the issue and try again
                                 manager_state.last_error = Some(format!("Failed to create project: {}", e));
                             }
                         }
                     }
 
                     if ui.button("Cancel").clicked() {
-                        manager_state.reset_create_dialog();
+                        // On cancel, hide dialog but keep fields for next time
+                        manager_state.show_create_dialog = false;
                     }
                 });
             });
