@@ -509,28 +509,40 @@ impl DemoLensApp {
     }
     
     fn create_default_dock_state() -> DockState<Tab> {
+        // Load saved dock state if it exists
         if let Some(saved_dock_state) = Self::load_dock_state() {
             return saved_dock_state;
         }
-        
-        let view_settings_tab = Tab::new(TabKind::ViewSettings, SurfaceIndex::main(), NodeIndex(0));
+
+        // Create tabs matching the screenshot layout
+        let gerber_tab = Tab::new(TabKind::GerberView, SurfaceIndex::main(), NodeIndex(0));
         let drc_tab = Tab::new(TabKind::DRC, SurfaceIndex::main(), NodeIndex(1));
-        let project_tab = Tab::new(TabKind::Project, SurfaceIndex::main(), NodeIndex(2));
-        let settings_tab = Tab::new(TabKind::Settings, SurfaceIndex::main(), NodeIndex(3));
-        let gerber_tab = Tab::new(TabKind::GerberView, SurfaceIndex::main(), NodeIndex(4));
-        let log_tab = Tab::new(TabKind::EventLog, SurfaceIndex::main(), NodeIndex(5));
-        let bom_tab = Tab::new(TabKind::BOM, SurfaceIndex::main(), NodeIndex(6));
-        
+        let view_settings_tab = Tab::new(TabKind::ViewSettings, SurfaceIndex::main(), NodeIndex(2));
+
+        // Left side top tabs in exact order from screenshot
+        let project_tab = Tab::new(TabKind::Project, SurfaceIndex::main(), NodeIndex(3));
+        let pcb_file_tab = Tab::new(TabKind::PCBFile, SurfaceIndex::main(), NodeIndex(4));
+        let settings_tab = Tab::new(TabKind::Settings, SurfaceIndex::main(), NodeIndex(5));
+
+        // Left side bottom tabs
+        let projects_tab = Tab::new(TabKind::Projects, SurfaceIndex::main(), NodeIndex(6));
+
+        // Right side tabs
+        let log_tab = Tab::new(TabKind::EventLog, SurfaceIndex::main(), NodeIndex(7));
+        let bom_tab = Tab::new(TabKind::BOM, SurfaceIndex::main(), NodeIndex(8));
+
         let mut dock_state = DockState::new(vec![gerber_tab]);
         let surface = dock_state.main_surface_mut();
-        
-        let [left, _right] = surface.split_left(
+
+        let [left, right] = surface.split_left(
             NodeIndex::root(),
             0.3,
-            vec![view_settings_tab, drc_tab, project_tab, settings_tab, bom_tab],
+            vec![project_tab, pcb_file_tab, settings_tab],
         );
-        
-        surface.split_below(left, 0.7, vec![log_tab]);
+
+        surface.split_below(left, 0.7, vec![projects_tab]);
+        surface.split_below(right, 0.5, vec![log_tab, bom_tab]);
+        surface.split_right(right, 0.5, vec![drc_tab, view_settings_tab]);
         dock_state
     }
 }

@@ -1008,6 +1008,7 @@ dependencies = [
  "egui_dock",
  "egui_extras",
  "egui_lens",
+ "egui_ltreeview",
  "egui_mobius",
  "egui_mobius_reactive",
  "env_logger",
@@ -1507,6 +1508,15 @@ dependencies = [
  "serde_json",
  "sysinfo 0.34.2",
  "tokio",
+]
+
+[[package]]
+name = "egui_ltreeview"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49b0d47a25b8c98bf01f4281f7d516c6e6631817c2b367319d5b239fd3db1ec7"
+dependencies = [
+ "egui",
 ]
 
 [[package]]

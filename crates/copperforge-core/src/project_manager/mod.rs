@@ -1,11 +1,13 @@
 pub mod database;
 pub mod bom;
 pub mod kicad_project;
+pub mod kicad_global_libs;
 
 use database::{ProjectDatabase, ProjectData, ProjectMetadata, generate_project_id, ProjectDatabaseError};
 use bom::BomComponent;
 use std::path::{Path, PathBuf};
 use chrono::Utc;
+use egui_file_dialog::FileDialog;
 
 /// Project manager state
 pub struct ProjectManagerState {
@@ -20,7 +22,7 @@ pub struct ProjectManagerState {
     pub new_project_description: String,
     pub new_project_tags: String,
     pub new_project_pcb_path: Option<PathBuf>,
-    pub show_pcb_file_dialog: bool,
+    pub new_project_parent_id: Option<String>,
     pub last_error: Option<String>,
     // New fields for creating KiCad projects from scratch
     pub create_new_kicad_project: bool,
@@ -30,12 +32,30 @@ pub struct ProjectManagerState {
     pub include_kiverse: bool,
     pub include_atlantix_resistors: bool,
     pub kiverse_path: PathBuf,
-    pub show_location_dialog: bool,
+    // File dialogs
+    pub pcb_file_dialog: FileDialog,
+    pub location_dialog: FileDialog,
+    // Recent project names (for quick iteration)
+    pub recent_project_names: Vec<String>,
 }
 
 impl Default for ProjectManagerState {
     fn default() -> Self {
         let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+
+        // Get default author from git config or environment
+        let default_author = std::process::Command::new("git")
+            .args(&["config", "user.name"])
+            .output()
+            .ok()
+            .and_then(|output| String::from_utf8(output.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .or_else(|| std::env::var("USER").ok())
+            .unwrap_or_else(|| "James Bonanno".to_string());
+
+        let default_company = "Atlantix Engineering".to_string();
+
         Self {
             database: None,
             current_project: None,
@@ -48,16 +68,18 @@ impl Default for ProjectManagerState {
             new_project_description: String::new(),
             new_project_tags: String::new(),
             new_project_pcb_path: None,
-            show_pcb_file_dialog: false,
+            new_project_parent_id: None,
             last_error: None,
             create_new_kicad_project: true,  // Default to creating new projects
             new_kicad_project_location: home_dir.clone(),
-            new_kicad_project_author: String::new(),
-            new_kicad_project_company: String::new(),
+            new_kicad_project_author: default_author,
+            new_kicad_project_company: default_company,
             include_kiverse: true,
             include_atlantix_resistors: true,
             kiverse_path: home_dir.join(".kicad_libs/kiverse"),
-            show_location_dialog: false,
+            pcb_file_dialog: FileDialog::new(),
+            location_dialog: FileDialog::new(),
+            recent_project_names: Vec::new(),
         }
     }
 }
@@ -68,7 +90,31 @@ impl ProjectManagerState {
         let database = ProjectDatabase::new(db_path)?;
         self.project_list = database.list_projects()?;
         self.database = Some(database);
+
+        // Populate recent project names (5 most recent)
+        self.update_recent_project_names();
+
         Ok(())
+    }
+
+    /// Update recent project names list with the 5 most recently modified projects
+    fn update_recent_project_names(&mut self) {
+        let mut sorted = self.project_list.clone();
+        sorted.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
+        self.recent_project_names = sorted.iter()
+            .take(5)
+            .map(|p| p.name.clone())
+            .collect();
+    }
+
+    /// Load project metadata into create form fields by project name
+    pub fn load_project_metadata_into_form(&mut self, project_name: &str) {
+        if let Some(project) = self.project_list.iter().find(|p| p.name == project_name) {
+            self.new_project_name = project.name.clone();
+            self.new_project_description = project.description.clone();
+            self.new_project_tags = project.tags.join(", ");
+            // Note: Don't copy PCB path or parent_id - those should be fresh for new project
+        }
     }
 
     /// Create a new project
@@ -83,7 +129,7 @@ impl ProjectManagerState {
         if let Some(ref database) = self.database {
             let project_id = generate_project_id();
             let now = Utc::now();
-            
+
             let metadata = ProjectMetadata {
                 id: project_id.clone(),
                 name,
@@ -93,6 +139,7 @@ impl ProjectManagerState {
                 last_modified: now,
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 tags,
+                parent_id: self.new_project_parent_id.clone(),
             };
             
             let project_data = ProjectData {
@@ -104,7 +151,10 @@ impl ProjectManagerState {
             database.save_project(&project_data)?;
             self.project_list = database.list_projects()?;
             self.current_project = Some(project_data);
-            
+
+            // Update recent project names
+            self.update_recent_project_names();
+
             Ok(project_id)
         } else {
             Err(ProjectDatabaseError::DatabaseRead("Database not initialized".to_string()))
@@ -215,14 +265,30 @@ impl ProjectManagerState {
         tags: Vec<String>,
     ) -> Result<String, ProjectDatabaseError> {
         use kicad_project::{NewKicadProjectInfo, create_kicad_project};
+        use kicad_global_libs::setup_kiverse_globally;
+
+        // Setup KiVerse in global KiCad configuration if requested
+        if self.include_kiverse || self.include_atlantix_resistors {
+            let kiverse_path_option = if self.kiverse_path.exists() {
+                Some(self.kiverse_path.clone())
+            } else {
+                None
+            };
+
+            // Try to setup global libraries, but don't fail if it doesn't work
+            if let Err(e) = setup_kiverse_globally(kiverse_path_option) {
+                eprintln!("Warning: Failed to setup KiVerse globally: {}", e);
+                // Continue anyway - the project will still be created
+            }
+        }
 
         // Create project info
         let mut project_info = NewKicadProjectInfo::new(name.clone(), self.new_kicad_project_location.clone());
         project_info.author = self.new_kicad_project_author.clone();
         project_info.description = description.clone();
         project_info.company = self.new_kicad_project_company.clone();
-        project_info.include_kiverse = self.include_kiverse;
-        project_info.include_atlantix_resistors = self.include_atlantix_resistors;
+        project_info.include_kiverse = false;  // Don't create local library tables
+        project_info.include_atlantix_resistors = false;  // Don't create local library tables
         project_info.kiverse_path = Some(self.kiverse_path.clone());
 
         // Create the KiCad project files
@@ -245,6 +311,7 @@ impl ProjectManagerState {
                 last_modified: now,
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 tags,
+                parent_id: self.new_project_parent_id.clone(),
             };
 
             let project_data = ProjectData {
@@ -256,6 +323,9 @@ impl ProjectManagerState {
             database.save_project(&project_data)?;
             self.project_list = database.list_projects()?;
             self.current_project = Some(project_data);
+
+            // Update recent project names
+            self.update_recent_project_names();
 
             Ok(project_id)
         } else {
@@ -270,8 +340,7 @@ impl ProjectManagerState {
         self.new_project_description.clear();
         self.new_project_tags.clear();
         self.new_project_pcb_path = None;
-        self.show_pcb_file_dialog = false;
-        self.show_location_dialog = false;
+        self.new_project_parent_id = None;
         // Note: We keep author, company, location, and library preferences
         // so the user doesn't have to re-enter them each time
     }

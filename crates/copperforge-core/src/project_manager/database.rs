@@ -8,6 +8,27 @@ pub struct ProjectDatabase {
     db: sled::Db,
 }
 
+/// Old project metadata format (before parent_id was added)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OldProjectMetadata {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub pcb_file_path: PathBuf,
+    pub created_at: DateTime<Utc>,
+    pub last_modified: DateTime<Utc>,
+    pub version: String,
+    pub tags: Vec<String>,
+}
+
+/// Old project data format (before parent_id was added)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OldProjectData {
+    pub metadata: OldProjectMetadata,
+    pub bom_components: Vec<BomComponent>,
+    pub notes: String,
+}
+
 /// Project metadata stored in the database
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectMetadata {
@@ -19,6 +40,11 @@ pub struct ProjectMetadata {
     pub last_modified: DateTime<Utc>,
     pub version: String,
     pub tags: Vec<String>,
+    /// Optional parent project ID for hierarchical organization
+    /// None means this is a root-level project
+    /// Default to None for backward compatibility with old database entries
+    #[serde(default)]
+    pub parent_id: Option<String>,
 }
 
 /// Complete project data including BOM
@@ -56,14 +82,43 @@ impl ProjectDatabase {
     /// Load a project from the database
     pub fn load_project(&self, project_id: &str) -> Result<Option<ProjectData>, ProjectDatabaseError> {
         let key = format!("project:{}", project_id);
-        
+
         if let Some(value) = self.db.get(key.as_bytes())
             .map_err(|e| ProjectDatabaseError::DatabaseRead(e.to_string()))? {
-            
-            let project: ProjectData = bincode::deserialize(&value)
-                .map_err(|e| ProjectDatabaseError::Deserialization(e.to_string()))?;
-            
-            Ok(Some(project))
+
+            // Try to deserialize with current format
+            match bincode::deserialize::<ProjectData>(&value) {
+                Ok(project) => Ok(Some(project)),
+                Err(_) => {
+                    // Try to deserialize with old format (without parent_id)
+                    match bincode::deserialize::<OldProjectData>(&value) {
+                        Ok(old_project) => {
+                            // Migrate to new format
+                            let new_project = ProjectData {
+                                metadata: ProjectMetadata {
+                                    id: old_project.metadata.id,
+                                    name: old_project.metadata.name,
+                                    description: old_project.metadata.description,
+                                    pcb_file_path: old_project.metadata.pcb_file_path,
+                                    created_at: old_project.metadata.created_at,
+                                    last_modified: old_project.metadata.last_modified,
+                                    version: old_project.metadata.version,
+                                    tags: old_project.metadata.tags,
+                                    parent_id: None, // Default to root level
+                                },
+                                bom_components: old_project.bom_components,
+                                notes: old_project.notes,
+                            };
+
+                            // Save migrated project back to database
+                            self.save_project(&new_project)?;
+
+                            Ok(Some(new_project))
+                        }
+                        Err(e) => Err(ProjectDatabaseError::Deserialization(e.to_string()))
+                    }
+                }
+            }
         } else {
             Ok(None)
         }

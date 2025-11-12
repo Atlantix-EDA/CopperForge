@@ -53,3 +53,6 @@ futures = { workspace = true }
 sled = { workspace = true }
 bincode = { workspace = true }
 thiserror = { workspace = true }
+
+# Tree view
+egui_ltreeview = { workspace = true }

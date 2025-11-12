@@ -27,6 +27,8 @@ pub enum TabKind {
     GerberView,
     EventLog,
     Project,
+    Projects,  // Project database spreadsheet
+    PCBFile,   // PCB file management
     Settings,
     BOM,
 }
@@ -69,6 +71,8 @@ impl Tab {
             TabKind::GerberView => "Gerber View".to_string(),
             TabKind::EventLog => "Event Log".to_string(),
             TabKind::Project => "Project".to_string(),
+            TabKind::Projects => "Projects".to_string(),
+            TabKind::PCBFile => "PCB File".to_string(),
             TabKind::Settings => "Settings".to_string(),
             TabKind::BOM => "BOM".to_string(),
         }
@@ -102,6 +106,16 @@ impl Tab {
                 let logger_state_clone = params.app.logger_state.clone();
                 let log_colors_clone = params.app.log_colors.clone();
                 ui::show_project_panel(ui, params.app, &logger_state_clone, &log_colors_clone);
+            }
+            TabKind::Projects => {
+                let logger_state_clone = params.app.logger_state.clone();
+                let log_colors_clone = params.app.log_colors.clone();
+                ui::show_projects_panel(ui, params.app, &logger_state_clone, &log_colors_clone);
+            }
+            TabKind::PCBFile => {
+                let logger_state_clone = params.app.logger_state.clone();
+                let log_colors_clone = params.app.log_colors.clone();
+                ui::show_pcb_file_panel(ui, params.app, &logger_state_clone, &log_colors_clone);
             }
             TabKind::Settings => {
                 let logger_state_clone = params.app.logger_state.clone();

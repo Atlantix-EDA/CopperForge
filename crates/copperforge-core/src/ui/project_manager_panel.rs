@@ -235,7 +235,29 @@ pub fn show_create_project_dialog(
 
                 // Common fields
                 ui.label("Project Name:");
-                ui.text_edit_singleline(&mut manager_state.new_project_name);
+
+                ui.horizontal(|ui| {
+                    // Text entry field always visible for editing
+                    ui.text_edit_singleline(&mut manager_state.new_project_name);
+
+                    // Show ComboBox with recent project names
+                    egui::ComboBox::from_id_salt("project_name_combo_dialog")
+                        .selected_text("📋 Recent")
+                        .show_ui(ui, |ui| {
+                            if !manager_state.recent_project_names.is_empty() {
+                                // Clone the list to avoid borrow issues
+                                let recent_names = manager_state.recent_project_names.clone();
+                                for recent_name in &recent_names {
+                                    if ui.selectable_label(false, recent_name).clicked() {
+                                        // Load full project metadata (name, description, tags)
+                                        manager_state.load_project_metadata_into_form(recent_name);
+                                    }
+                                }
+                            } else {
+                                ui.label(egui::RichText::new("No recent projects").small().italics());
+                            }
+                        });
+                });
 
                 ui.add_space(5.0);
 
@@ -263,19 +285,13 @@ pub fn show_create_project_dialog(
                         ui.label(&location_text);
 
                         if ui.button("Browse...").clicked() {
-                            manager_state.show_location_dialog = true;
+                            manager_state.location_dialog.pick_directory();
                         }
                     });
 
                     // Handle location dialog
-                    if manager_state.show_location_dialog {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .set_title("Select Project Location")
-                            .pick_folder()
-                        {
-                            manager_state.new_kicad_project_location = path;
-                        }
-                        manager_state.show_location_dialog = false;
+                    if let Some(path) = manager_state.location_dialog.update(ui.ctx()).picked() {
+                        manager_state.new_kicad_project_location = path.to_path_buf();
                     }
 
                     ui.add_space(5.0);
@@ -331,20 +347,13 @@ pub fn show_create_project_dialog(
                         ui.label(&pcb_file_text);
 
                         if ui.button("Browse...").clicked() {
-                            manager_state.show_pcb_file_dialog = true;
+                            manager_state.pcb_file_dialog.pick_file();
                         }
                     });
 
                     // Handle PCB file dialog
-                    if manager_state.show_pcb_file_dialog {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("KiCad PCB", &["kicad_pcb"])
-                            .set_title("Select PCB File")
-                            .pick_file()
-                        {
-                            manager_state.new_project_pcb_path = Some(path);
-                        }
-                        manager_state.show_pcb_file_dialog = false;
+                    if let Some(path) = manager_state.pcb_file_dialog.update(ui.ctx()).picked() {
+                        manager_state.new_project_pcb_path = Some(path.to_path_buf());
                     }
                 }
 
