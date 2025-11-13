@@ -2,6 +2,7 @@ use crate::DemoLensApp;
 use crate::project_manager::ProjectManagerState;
 use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
+use egui_file_dialog::FileDialog;
 
 pub fn show_project_panel<'a>(
     ui: &mut egui::Ui,
@@ -200,11 +201,23 @@ fn show_create_project_form(
                         ui.label(egui::RichText::new("💡 Default: ~/.kicad_libs/kiverse").small().italics());
 
                     } else {
-                        // Import existing PCB file
+                        // Import existing KiCad project
                         ui.horizontal(|ui| {
-                            ui.label("PCB File:");
+                            ui.label("KiCad Project File (.kicad_pro):");
 
                             if ui.button("Browse...").clicked() {
+                                use std::sync::Arc;
+                                use std::mem;
+
+                                // Take the dialog, add filter, and put it back
+                                let dialog = mem::replace(&mut manager_state.pcb_file_dialog, FileDialog::new());
+                                manager_state.pcb_file_dialog = dialog
+                                    .add_file_filter("KiCad Project", Arc::new(|path: &std::path::Path| {
+                                        path.extension()
+                                            .and_then(|ext| ext.to_str())
+                                            .map(|ext| ext == "kicad_pro")
+                                            .unwrap_or(false)
+                                    }));
                                 manager_state.pcb_file_dialog.pick_file();
                             }
                         });
@@ -214,13 +227,15 @@ fn show_create_project_form(
                                 .map(|n| n.to_string_lossy().to_string())
                                 .unwrap_or_else(|| "Unknown file".to_string())
                         } else {
-                            "No PCB file selected".to_string()
+                            "No KiCad project file selected".to_string()
                         };
                         ui.label(egui::RichText::new(&pcb_file_text).small().monospace());
 
-                        // Handle PCB file dialog
-                        if let Some(path) = manager_state.pcb_file_dialog.update(ui.ctx()).picked() {
-                            manager_state.new_project_pcb_path = Some(path.to_path_buf());
+                        // Handle KiCad project file dialog
+                        if let Some(pro_path) = manager_state.pcb_file_dialog.update(ui.ctx()).picked() {
+                            // Convert .kicad_pro path to .kicad_pcb path
+                            let pcb_path = pro_path.with_extension("kicad_pcb");
+                            manager_state.new_project_pcb_path = Some(pcb_path);
                         }
                     }
 

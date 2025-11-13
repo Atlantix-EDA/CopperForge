@@ -148,6 +148,16 @@ pub fn show_projects_panel<'a>(
 
                     if let Some(ref selected_id) = manager_state.selected_project_id {
                         if let Some(project) = manager_state.project_list.iter().find(|p| &p.id == selected_id) {
+                            // Try to read metadata from .kicad_pro file
+                            let kicad_metadata = crate::project_manager::kicad_metadata::get_kicad_pro_path(&project.pcb_file_path)
+                                .and_then(|pro_path| {
+                                    if pro_path.exists() {
+                                        crate::project_manager::kicad_metadata::read_kicad_metadata(&pro_path).ok()
+                                    } else {
+                                        None
+                                    }
+                                });
+
                             egui::ScrollArea::vertical()
                                 .auto_shrink([false, false])
                                 .show(ui, |ui| {
@@ -161,9 +171,20 @@ pub fn show_projects_panel<'a>(
                                             ui.label(&project.name);
                                             ui.end_row();
 
-                                            ui.label(egui::RichText::new("Description:").strong());
-                                            ui.label(&project.description);
-                                            ui.end_row();
+                                            // Show Author from .kicad_pro if available
+                                            if let Some(ref metadata) = kicad_metadata {
+                                                if let Some(ref author) = metadata.author {
+                                                    ui.label(egui::RichText::new("Author:").strong());
+                                                    ui.label(author);
+                                                    ui.end_row();
+                                                }
+
+                                                if let Some(ref company) = metadata.company {
+                                                    ui.label(egui::RichText::new("Company:").strong());
+                                                    ui.label(company);
+                                                    ui.end_row();
+                                                }
+                                            }
 
                                             ui.label(egui::RichText::new("Created:").strong());
                                             ui.label(project.created_at.format("%Y-%m-%d %H:%M").to_string());
@@ -173,16 +194,95 @@ pub fn show_projects_panel<'a>(
                                             ui.label(project.last_modified.format("%Y-%m-%d %H:%M").to_string());
                                             ui.end_row();
 
-                                            ui.label(egui::RichText::new("Version:").strong());
-                                            ui.label(&project.version);
-                                            ui.end_row();
+                                            // Show date from .kicad_pro if available
+                                            if let Some(ref metadata) = kicad_metadata {
+                                                if let Some(ref date) = metadata.date {
+                                                    ui.label(egui::RichText::new("Project Date:").strong());
+                                                    ui.label(date);
+                                                    ui.end_row();
+                                                }
+                                            }
 
                                             ui.label(egui::RichText::new("Tags:").strong());
                                             ui.label(project.tags.join(", "));
                                             ui.end_row();
                                         });
 
-                                    ui.add_space(10.0);
+                                    ui.add_space(15.0);
+
+                                    // Description section
+                                    ui.separator();
+                                    ui.label(egui::RichText::new("Description").strong().size(14.0));
+                                    ui.add_space(5.0);
+
+                                    // Get available height for description area (fill remaining space)
+                                    let available_height = ui.available_height() - 80.0; // Leave room for buttons
+
+                                    egui::Frame::NONE
+                                        .fill(ui.visuals().extreme_bg_color)
+                                        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+                                        .inner_margin(egui::Margin::same(10))
+                                        .show(ui, |ui| {
+                                            ui.set_height(available_height.max(200.0));
+
+                                            // Use description from .kicad_pro if available, otherwise from database
+                                            let source_description = kicad_metadata.as_ref()
+                                                .and_then(|m| m.description.clone())
+                                                .unwrap_or_else(|| project.description.clone());
+
+                                            // Get or initialize the description buffer for this project
+                                            let description_id = egui::Id::new(format!("description_buffer_{}", selected_id));
+                                            let init_id = egui::Id::new(format!("description_initialized_{}", selected_id));
+
+                                            let mut temp_description = ui.ctx().memory_mut(|mem| {
+                                                // Check if we've initialized this project's description
+                                                let initialized = mem.data.get_temp::<bool>(init_id).unwrap_or(false);
+
+                                                if !initialized {
+                                                    // First time - initialize from source
+                                                    mem.data.insert_temp(init_id, true);
+                                                    mem.data.insert_temp(description_id, source_description.clone());
+                                                    source_description.clone()
+                                                } else {
+                                                    // Already initialized - use stored value
+                                                    mem.data.get_temp::<String>(description_id)
+                                                        .unwrap_or_else(|| source_description.clone())
+                                                }
+                                            });
+
+                                            // Create terminal-style text area (like Vescript FPGA Manager)
+                                            let text_edit_id = egui::Id::new(format!("description_edit_{}", selected_id));
+
+                                            let output = egui::TextEdit::multiline(&mut temp_description)
+                                                .id(text_edit_id)
+                                                .text_color(egui::Color32::GREEN)
+                                                .font(egui::TextStyle::Monospace)
+                                                .interactive(true)
+                                                .desired_rows(15)
+                                                .desired_width(f32::INFINITY)
+                                                .hint_text("Enter project description...")
+                                                .frame(false)  // Remove the frame/border
+                                                .show(ui);
+
+                                            // Store the current text in memory
+                                            ui.ctx().memory_mut(|mem| {
+                                                mem.data.insert_temp(description_id, temp_description.clone());
+                                            });
+
+                                            let response = output.response;
+
+                                            // Only save on focus lost (not on every keystroke)
+                                            if response.lost_focus() && temp_description != source_description {
+                                                ui.ctx().memory_mut(|mem| {
+                                                    mem.data.insert_temp(
+                                                        egui::Id::new("edit_description"),
+                                                        (selected_id.clone(), temp_description.clone())
+                                                    );
+                                                });
+                                            }
+                                        });
+
+                                    ui.add_space(15.0);
 
                                     // Action buttons
                                     ui.horizontal(|ui| {
@@ -206,6 +306,78 @@ pub fn show_projects_panel<'a>(
                     }
                 });
             });
+        }
+
+        // Handle description edit action
+        let edit_info = ui.ctx().memory(|mem| {
+            mem.data.get_temp::<(String, String)>(egui::Id::new("edit_description"))
+        });
+
+        if let Some((project_id, new_description)) = edit_info {
+            ui.ctx().memory_mut(|mem| {
+                mem.data.remove::<(String, String)>(egui::Id::new("edit_description"));
+            });
+
+            // Update the project description in the database
+            if let Some(project) = manager_state.project_list.iter().find(|p| p.id == project_id) {
+                let tags = project.tags.clone();
+                let name = project.name.clone();
+                let pcb_file_path = project.pcb_file_path.clone();
+
+                if let Err(e) = manager_state.update_project(&project_id, name.clone(), new_description.clone(), tags) {
+                    manager_state.last_error = Some(format!("Failed to update description: {}", e));
+                } else {
+                    logger.log_info(&format!("Updated description for project: {}", name));
+
+                    // Also try to update the .kicad_pro file if it exists
+                    let kicad_pro_path = crate::project_manager::kicad_metadata::get_kicad_pro_path(&pcb_file_path);
+                    if let Some(pro_path) = kicad_pro_path {
+                        if pro_path.exists() {
+                            // Try to update the description in the .kicad_pro file
+                            if let Err(e) = update_kicad_description(&pro_path, &new_description) {
+                                logger.log_warning(&format!("Could not update .kicad_pro description: {}", e));
+                            } else {
+                                logger.log_info("Updated description in .kicad_pro file");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Handle delete confirmation
+        if let Some(ref project_id) = manager_state.show_delete_confirmation {
+            let project_id_clone = project_id.clone();
+
+            // Get project name before deletion
+            let project_name = manager_state.project_list
+                .iter()
+                .find(|p| p.id == project_id_clone)
+                .map(|p| p.name.clone())
+                .unwrap_or_else(|| "Unknown".to_string());
+
+            egui::Window::new("Delete Project")
+                .collapsible(false)
+                .resizable(false)
+                .show(ui.ctx(), |ui| {
+                    ui.label("Are you sure you want to delete this project?");
+                    ui.label(egui::RichText::new("This action cannot be undone!").color(egui::Color32::RED));
+
+                    ui.horizontal(|ui| {
+                        if ui.button("✅ Yes, Delete").clicked() {
+                            if let Err(e) = manager_state.delete_project(&project_id_clone) {
+                                manager_state.last_error = Some(format!("Failed to delete project: {}", e));
+                            } else {
+                                logger.log_info(&format!("Project '{}' deleted successfully", project_name));
+                            }
+                            manager_state.show_delete_confirmation = None;
+                        }
+
+                        if ui.button("❌ Cancel").clicked() {
+                            manager_state.show_delete_confirmation = None;
+                        }
+                    });
+                });
         }
 
         // Handle project loading action
@@ -258,6 +430,33 @@ pub fn show_projects_panel<'a>(
             }
         }
     }
+}
+
+/// Helper function to update description in .kicad_pro file
+fn update_kicad_description(kicad_pro_path: &std::path::Path, new_description: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use serde_json::Value;
+
+    // Read the existing .kicad_pro file
+    let content = std::fs::read_to_string(kicad_pro_path)?;
+    let mut project: Value = serde_json::from_str(&content)?;
+
+    // Update the DESCRIPTION field in text_variables
+    if let Some(text_vars) = project.get_mut("text_variables") {
+        if let Some(obj) = text_vars.as_object_mut() {
+            obj.insert("DESCRIPTION".to_string(), Value::String(new_description.to_string()));
+        }
+    } else {
+        // Create text_variables if it doesn't exist
+        let mut text_vars = serde_json::Map::new();
+        text_vars.insert("DESCRIPTION".to_string(), Value::String(new_description.to_string()));
+        project["text_variables"] = Value::Object(text_vars);
+    }
+
+    // Write back to file with pretty formatting
+    let updated_content = serde_json::to_string_pretty(&project)?;
+    std::fs::write(kicad_pro_path, updated_content)?;
+
+    Ok(())
 }
 
 /// Tree node structure for organizing projects hierarchically

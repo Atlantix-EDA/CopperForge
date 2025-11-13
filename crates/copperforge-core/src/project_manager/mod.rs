@@ -2,6 +2,7 @@ pub mod database;
 pub mod bom;
 pub mod kicad_project;
 pub mod kicad_global_libs;
+pub mod kicad_metadata;
 
 use database::{ProjectDatabase, ProjectData, ProjectMetadata, generate_project_id, ProjectDatabaseError};
 use bom::BomComponent;
