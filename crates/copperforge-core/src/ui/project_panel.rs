@@ -223,19 +223,28 @@ fn show_create_project_form(
                                 // Read pedigree information from .kicad_pro file
                                 match crate::project_manager::kicad_metadata::read_kicad_metadata(&pro_path) {
                                     Ok(metadata) => {
+                                        let mut missing_fields = Vec::new();
+
                                         // Auto-populate form fields with pedigree data
                                         if let Some(author) = metadata.author {
                                             manager_state.new_kicad_project_author = author;
+                                        } else {
+                                            missing_fields.push("Author");
                                         }
+
                                         if let Some(company) = metadata.company {
                                             manager_state.new_kicad_project_company = company;
+                                        } else {
+                                            missing_fields.push("Company");
                                         }
+
                                         if let Some(description) = metadata.description {
                                             // Only populate if empty to avoid overwriting user input
                                             if manager_state.new_project_description.is_empty() {
                                                 manager_state.new_project_description = description;
                                             }
                                         }
+
                                         // Use filename as project name if not already set
                                         if manager_state.new_project_name.is_empty() {
                                             if let Some(file_stem) = pro_path.file_stem() {
@@ -244,6 +253,11 @@ fn show_create_project_form(
                                         }
 
                                         logger.log_info(&format!("Loaded pedigree from: {}", pro_path.display()));
+
+                                        // Warn about missing pedigree fields
+                                        if !missing_fields.is_empty() {
+                                            logger.log_warning(&format!("Missing pedigree information in .kicad_pro: {}", missing_fields.join(", ")));
+                                        }
                                     }
                                     Err(e) => {
                                         logger.log_warning(&format!("Could not read pedigree from .kicad_pro: {}", e));
