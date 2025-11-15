@@ -152,7 +152,25 @@ pub fn show_projects_panel<'a>(
                             let kicad_metadata = crate::project_manager::kicad_metadata::get_kicad_pro_path(&project.pcb_file_path)
                                 .and_then(|pro_path| {
                                     if pro_path.exists() {
-                                        crate::project_manager::kicad_metadata::read_kicad_metadata(&pro_path).ok()
+                                        match crate::project_manager::kicad_metadata::read_kicad_metadata(&pro_path) {
+                                            Ok(metadata) => {
+                                                // Check for missing pedigree fields
+                                                let mut missing_fields = Vec::new();
+                                                if metadata.author.is_none() {
+                                                    missing_fields.push("Author");
+                                                }
+                                                if metadata.company.is_none() {
+                                                    missing_fields.push("Company");
+                                                }
+
+                                                if !missing_fields.is_empty() {
+                                                    logger.log_warning(&format!("Missing pedigree information in .kicad_pro: {}", missing_fields.join(", ")));
+                                                }
+
+                                                Some(metadata)
+                                            }
+                                            Err(_) => None
+                                        }
                                     } else {
                                         None
                                     }
