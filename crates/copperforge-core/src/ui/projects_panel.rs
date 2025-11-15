@@ -162,13 +162,27 @@ pub fn show_projects_panel<'a>(
                                 .auto_shrink([false, false])
                                 .show(ui, |ui| {
                                     // Project metadata
+                                    // Editable fields stored in memory
+                                    let name_id = egui::Id::new(format!("edit_name_{}", selected_id));
+                                    let tags_id = egui::Id::new(format!("edit_tags_{}", selected_id));
+
+                                    let mut temp_name = ui.ctx().memory(|mem| {
+                                        mem.data.get_temp::<String>(name_id)
+                                            .unwrap_or_else(|| project.name.clone())
+                                    });
+
+                                    let mut temp_tags = ui.ctx().memory(|mem| {
+                                        mem.data.get_temp::<String>(tags_id)
+                                            .unwrap_or_else(|| project.tags.join(", "))
+                                    });
+
                                     egui::Grid::new("project_details_grid")
                                         .num_columns(2)
                                         .spacing([10.0, 5.0])
                                         .striped(true)
                                         .show(ui, |ui| {
                                             ui.label(egui::RichText::new("Name:").strong());
-                                            ui.label(&project.name);
+                                            ui.text_edit_singleline(&mut temp_name);
                                             ui.end_row();
 
                                             // Show Author from .kicad_pro if available
@@ -204,9 +218,15 @@ pub fn show_projects_panel<'a>(
                                             }
 
                                             ui.label(egui::RichText::new("Tags:").strong());
-                                            ui.label(project.tags.join(", "));
+                                            ui.text_edit_singleline(&mut temp_tags);
                                             ui.end_row();
                                         });
+
+                                    // Store edited values back to memory
+                                    ui.ctx().memory_mut(|mem| {
+                                        mem.data.insert_temp(name_id, temp_name.clone());
+                                        mem.data.insert_temp(tags_id, temp_tags.clone());
+                                    });
 
                                     ui.add_space(15.0);
 
@@ -292,9 +312,9 @@ pub fn show_projects_panel<'a>(
                                             });
                                         }
 
-                                        if ui.button("✏️ Edit Project").clicked() {
+                                        if ui.button("💾 Save Project").clicked() {
                                             ui.ctx().memory_mut(|mem| {
-                                                mem.data.insert_temp(egui::Id::new("edit_project"), selected_id.clone());
+                                                mem.data.insert_temp(egui::Id::new("save_project"), (selected_id.clone(), temp_name.clone(), temp_tags.clone()));
                                             });
                                         }
 
@@ -314,7 +334,58 @@ pub fn show_projects_panel<'a>(
             });
         }
 
-        // Handle description edit action
+        // Handle save project action (name, tags, description)
+        let save_info = ui.ctx().memory(|mem| {
+            mem.data.get_temp::<(String, String, String)>(egui::Id::new("save_project"))
+        });
+
+        if let Some((project_id, new_name, new_tags_str)) = save_info {
+            ui.ctx().memory_mut(|mem| {
+                mem.data.remove::<(String, String, String)>(egui::Id::new("save_project"));
+            });
+
+            // Parse tags
+            let new_tags: Vec<String> = new_tags_str
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+
+            // Get the current description from memory
+            let description_id = egui::Id::new(format!("description_{}", project_id));
+            let new_description = ui.ctx().memory(|mem| {
+                mem.data.get_temp::<String>(description_id)
+                    .unwrap_or_else(|| {
+                        manager_state.project_list.iter()
+                            .find(|p| p.id == project_id)
+                            .map(|p| p.description.clone())
+                            .unwrap_or_default()
+                    })
+            });
+
+            if let Err(e) = manager_state.update_project(&project_id, new_name.clone(), new_description.clone(), new_tags.clone()) {
+                manager_state.last_error = Some(format!("Failed to save project: {}", e));
+            } else {
+                logger.log_info(&format!("Saved project: {}", new_name));
+
+                // Try to update the .kicad_pro file if it exists
+                if let Some(project) = manager_state.project_list.iter().find(|p| p.id == project_id) {
+                    let kicad_pro_path = crate::project_manager::kicad_metadata::get_kicad_pro_path(&project.pcb_file_path);
+                    if let Some(pro_path) = kicad_pro_path {
+                        if pro_path.exists() {
+                            // Try to update the description in the .kicad_pro file
+                            if let Err(e) = update_kicad_description(&pro_path, &new_description) {
+                                logger.log_warning(&format!("Could not update .kicad_pro description: {}", e));
+                            } else {
+                                logger.log_info("Updated description in .kicad_pro file");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Handle description edit action (legacy - now handled by save_project)
         let edit_info = ui.ctx().memory(|mem| {
             mem.data.get_temp::<(String, String)>(egui::Id::new("edit_description"))
         });
