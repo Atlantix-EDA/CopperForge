@@ -42,47 +42,6 @@ fn show_create_project_form(
         app.project_manager_state = Some(state);
     }
 
-    // Handle edit project action from Projects tab
-    let edit_project_id = ui.ctx().memory(|mem| {
-        mem.data.get_temp::<String>(egui::Id::new("edit_project"))
-    });
-
-    if let Some(project_id) = edit_project_id {
-        ui.ctx().memory_mut(|mem| {
-            mem.data.remove::<String>(egui::Id::new("edit_project"));
-        });
-
-        // Load project into form for editing
-        if let Some(ref mut manager_state) = app.project_manager_state {
-            if let Some(project) = manager_state.project_list.iter().find(|p| p.id == project_id) {
-                // Populate form with project data
-                manager_state.new_project_name = project.name.clone();
-                manager_state.new_project_description = project.description.clone();
-                manager_state.new_project_tags = project.tags.join(", ");
-                manager_state.new_project_pcb_path = Some(project.pcb_file_path.clone());
-                manager_state.new_project_parent_id = project.parent_id.clone();
-                manager_state.create_new_kicad_project = false; // Set to import mode
-
-                // Try to load pedigree from .kicad_pro file
-                if let Some(pro_path) = crate::project_manager::kicad_metadata::get_kicad_pro_path(&project.pcb_file_path) {
-                    if let Ok(metadata) = crate::project_manager::kicad_metadata::read_kicad_metadata(&pro_path) {
-                        if let Some(author) = metadata.author {
-                            manager_state.new_kicad_project_author = author;
-                        }
-                        if let Some(company) = metadata.company {
-                            manager_state.new_kicad_project_company = company;
-                        }
-                    }
-                }
-
-                // Store the project ID being edited
-                manager_state.selected_project_id = Some(project_id.clone());
-
-                logger.log_info(&format!("Loaded project for editing: {}", project.name));
-            }
-        }
-    }
-
     if let Some(ref mut manager_state) = app.project_manager_state {
         // Handle any errors
         if let Some(error) = manager_state.last_error.take() {
@@ -354,11 +313,8 @@ fn show_create_project_form(
 
                     ui.add_space(10.0);
 
-                    // Create/Update button based on edit mode
-                    let is_editing = manager_state.selected_project_id.is_some();
-                    let button_text = if is_editing { "💾 Update Project" } else { "✅ Create Project" };
-
-                    if ui.button(button_text).clicked() {
+                    // Create Project button - only for creating new projects
+                    if ui.button("✅ Create Project").clicked() {
                         // Validate input
                         if manager_state.new_project_name.trim().is_empty() {
                             manager_state.last_error = Some("Project name cannot be empty".to_string());
@@ -372,67 +328,48 @@ fn show_create_project_form(
                             .filter(|s| !s.is_empty())
                             .collect();
 
-                        let result = if is_editing {
-                            // UPDATE existing project
-                            let project_id = manager_state.selected_project_id.clone().unwrap();
-                            manager_state.update_project(
-                                &project_id,
+                        // Get BOM components
+                        let bom_components = if let Some(ref bom_state) = app.bom_state {
+                            bom_state.components.lock().unwrap().clone()
+                        } else {
+                            Vec::new()
+                        };
+
+                        // Create project based on type
+                        let result = if manager_state.create_new_kicad_project {
+                            // Create new KiCad project from scratch
+                            manager_state.create_new_kicad_project_from_scratch(
                                 manager_state.new_project_name.clone(),
                                 manager_state.new_project_description.clone(),
                                 tags,
-                            ).map(|_| project_id)
+                            )
                         } else {
-                            // CREATE new project
-                            // Get BOM components
-                            let bom_components = if let Some(ref bom_state) = app.bom_state {
-                                bom_state.components.lock().unwrap().clone()
+                            // Import existing PCB
+                            let pcb_path = if let Some(ref path) = manager_state.new_project_pcb_path {
+                                path.clone()
                             } else {
-                                Vec::new()
+                                manager_state.last_error = Some("Please select a PCB file first".to_string());
+                                return;
                             };
 
-                            // Create project based on type
-                            if manager_state.create_new_kicad_project {
-                                // Create new KiCad project from scratch
-                                manager_state.create_new_kicad_project_from_scratch(
-                                    manager_state.new_project_name.clone(),
-                                    manager_state.new_project_description.clone(),
-                                    tags,
-                                )
-                            } else {
-                                // Import existing PCB
-                                let pcb_path = if let Some(ref path) = manager_state.new_project_pcb_path {
-                                    path.clone()
-                                } else {
-                                    manager_state.last_error = Some("Please select a PCB file first".to_string());
-                                    return;
-                                };
-
-                                manager_state.create_project(
-                                    manager_state.new_project_name.clone(),
-                                    manager_state.new_project_description.clone(),
-                                    pcb_path,
-                                    tags,
-                                    bom_components,
-                                )
-                            }
+                            manager_state.create_project(
+                                manager_state.new_project_name.clone(),
+                                manager_state.new_project_description.clone(),
+                                pcb_path,
+                                tags,
+                                bom_components,
+                            )
                         };
 
                         match result {
                             Ok(project_id) => {
-                                if is_editing {
-                                    logger.log_info(&format!("Updated project: {} (ID: {})", manager_state.new_project_name, project_id));
-                                } else {
-                                    logger.log_info(&format!("Created project: {} (ID: {})", manager_state.new_project_name, project_id));
-                                }
+                                logger.log_info(&format!("Created project: {} (ID: {})", manager_state.new_project_name, project_id));
                                 // Only reset on success - this keeps user preferences but clears project fields
                                 manager_state.reset_create_dialog();
-                                // Clear edit mode
-                                manager_state.selected_project_id = None;
                             }
                             Err(e) => {
                                 // Don't reset on error - user can fix the issue and try again
-                                let action = if is_editing { "update" } else { "create" };
-                                manager_state.last_error = Some(format!("Failed to {} project: {}", action, e));
+                                manager_state.last_error = Some(format!("Failed to create project: {}", e));
                             }
                         }
                     }
