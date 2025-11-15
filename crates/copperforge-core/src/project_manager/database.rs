@@ -127,24 +127,33 @@ impl ProjectDatabase {
     /// List all projects (metadata only for performance)
     pub fn list_projects(&self) -> Result<Vec<ProjectMetadata>, ProjectDatabaseError> {
         let mut projects = Vec::new();
-        
+
         // Use index for efficient listing
         if let Some(index_data) = self.db.get(b"index:projects")
             .map_err(|e| ProjectDatabaseError::DatabaseRead(e.to_string()))? {
-            
+
             let project_ids: Vec<String> = bincode::deserialize(&index_data)
                 .map_err(|e| ProjectDatabaseError::Deserialization(e.to_string()))?;
-            
+
             for project_id in project_ids {
-                if let Some(project) = self.load_project(&project_id)? {
-                    projects.push(project.metadata);
+                // Skip corrupted projects instead of failing completely
+                match self.load_project(&project_id) {
+                    Ok(Some(project)) => {
+                        projects.push(project.metadata);
+                    }
+                    Ok(None) => {
+                        eprintln!("Warning: Project {} not found in database", project_id);
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: Failed to load project {}: {}. Skipping corrupted entry.", project_id, e);
+                    }
                 }
             }
         }
-        
+
         // Sort by last modified (newest first)
         projects.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
-        
+
         Ok(projects)
     }
 

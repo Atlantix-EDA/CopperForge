@@ -45,6 +45,8 @@ pub struct ProjectConfig {
     pub user_timezone: Option<String>,
     pub use_24_hour_clock: bool,
     pub global_units_mils: bool, // true = mils, false = mm
+    #[serde(default)]
+    pub preferred_projects_directory: Option<PathBuf>, // Preferred location for PCB projects
 }
 
 impl Default for ProjectConfig {
@@ -56,6 +58,7 @@ impl Default for ProjectConfig {
             user_timezone: None,
             use_24_hour_clock: false, // Default to 12-hour
             global_units_mils: false, // Default to mm
+            preferred_projects_directory: None, // Will use home directory if not set
         }
     }
 }

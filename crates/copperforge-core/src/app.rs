@@ -107,6 +107,12 @@ pub struct DemoLensApp {
     
     // Project manager state
     pub project_manager_state: Option<project_manager::ProjectManagerState>,
+
+    // File dialogs
+    pub projects_directory_dialog: egui_file_dialog::FileDialog,
+
+    // Track last picked directory to avoid re-processing
+    pub last_picked_projects_directory: Option<PathBuf>,
 }
 
 impl Drop for DemoLensApp {
@@ -231,6 +237,8 @@ impl DemoLensApp {
             cross_probe_slot_started: false,
             pending_cross_probe: egui_mobius::types::Value::new(None),
             project_manager_state: None,
+            projects_directory_dialog: egui_file_dialog::FileDialog::new(),
+            last_picked_projects_directory: None,
         };
         
         if let Ok(project_config) = ProjectConfig::load_from_file(&app.config_path) {
@@ -496,7 +504,7 @@ impl DemoLensApp {
         None
     }
     
-    fn save_settings(&self) {
+    pub fn save_settings(&self) {
         let mut config = self.project_manager.config.clone();
         config.state = self.project_manager.state.clone(); // Save current project state!
         config.user_timezone = self.user_timezone.clone();

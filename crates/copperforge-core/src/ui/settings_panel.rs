@@ -137,13 +137,73 @@ pub fn show_settings_panel<'a>(
     });
     
     ui.add_space(20.0);
-    
+
+    // Project Directories Section
+    ui.group(|ui| {
+        ui.label("Project Directories");
+
+        // Preferred projects directory
+        ui.horizontal(|ui| {
+            ui.label("Preferred PCB Projects Directory:");
+        });
+
+        let current_dir_text = if let Some(ref dir) = app.project_manager.config.preferred_projects_directory {
+            dir.display().to_string()
+        } else {
+            "Not set (will use home directory)".to_string()
+        };
+
+        ui.label(egui::RichText::new(&current_dir_text).small().monospace());
+
+        ui.horizontal(|ui| {
+            if ui.button("📂 Browse...").clicked() {
+                use std::mem;
+
+                // Set initial directory to current preference if available
+                let dialog = mem::replace(&mut app.projects_directory_dialog, egui_file_dialog::FileDialog::new());
+                app.projects_directory_dialog = if let Some(ref current_dir) = app.project_manager.config.preferred_projects_directory {
+                    dialog.initial_directory(current_dir.clone())
+                } else {
+                    dialog
+                };
+                app.projects_directory_dialog.pick_directory();
+            }
+
+            if app.project_manager.config.preferred_projects_directory.is_some() {
+                if ui.button("Clear").clicked() {
+                    app.project_manager.config.preferred_projects_directory = None;
+                    app.save_settings();
+                    logger.log_info("Cleared preferred projects directory");
+                }
+            }
+        });
+
+        // Handle directory selection
+        let picked_path = app.projects_directory_dialog.update(ui.ctx()).picked().map(|p| p.to_path_buf());
+        if let Some(path) = picked_path {
+            // Only process if this is a NEW directory selection (not already processed)
+            let should_process = app.last_picked_projects_directory.as_ref() != Some(&path);
+
+            if should_process {
+                app.last_picked_projects_directory = Some(path.clone());
+                let path_display = path.display().to_string();
+                app.project_manager.config.preferred_projects_directory = Some(path);
+                app.save_settings();
+                logger.log_info(&format!("Set preferred projects directory to: {}", path_display));
+            }
+        }
+
+        ui.label(egui::RichText::new("💡 This directory will be used as the starting location when browsing for KiCad projects").small().italics());
+    });
+
+    ui.add_space(20.0);
+
     // Language Section (placeholder for future)
     ui.group(|ui| {
         ui.label("Language");
         ui.horizontal(|ui| {
             ui.label("Interface Language:");
-            
+
             egui::ComboBox::from_id_salt("language_selector")
                 .selected_text("English")
                 .show_ui(ui, |ui| {
@@ -155,5 +215,5 @@ pub fn show_settings_panel<'a>(
                 });
         });
     });
-    
+
 }

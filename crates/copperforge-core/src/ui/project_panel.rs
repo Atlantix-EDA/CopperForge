@@ -202,6 +202,56 @@ fn show_create_project_form(
 
                     } else {
                         // Import existing KiCad project
+                        ui.label(egui::RichText::new("Import Existing KiCad Project").strong());
+                        ui.separator();
+
+                        // Handle KiCad project file dialog FIRST (before UI rendering)
+                        if let Some(pro_path) = manager_state.pcb_file_dialog.update(ui.ctx()).picked() {
+                            let pro_path = pro_path.to_path_buf();
+
+                            // Only process if this is a NEW file selection (not already processed)
+                            let should_process = manager_state.last_picked_pro_path.as_ref() != Some(&pro_path);
+
+                            if should_process {
+                                // Store the path to prevent re-processing
+                                manager_state.last_picked_pro_path = Some(pro_path.clone());
+
+                                // Convert .kicad_pro path to .kicad_pcb path
+                                let pcb_path = pro_path.with_extension("kicad_pcb");
+                                manager_state.new_project_pcb_path = Some(pcb_path);
+
+                                // Read pedigree information from .kicad_pro file
+                                match crate::project_manager::kicad_metadata::read_kicad_metadata(&pro_path) {
+                                    Ok(metadata) => {
+                                        // Auto-populate form fields with pedigree data
+                                        if let Some(author) = metadata.author {
+                                            manager_state.new_kicad_project_author = author;
+                                        }
+                                        if let Some(company) = metadata.company {
+                                            manager_state.new_kicad_project_company = company;
+                                        }
+                                        if let Some(description) = metadata.description {
+                                            // Only populate if empty to avoid overwriting user input
+                                            if manager_state.new_project_description.is_empty() {
+                                                manager_state.new_project_description = description;
+                                            }
+                                        }
+                                        // Use filename as project name if not already set
+                                        if manager_state.new_project_name.is_empty() {
+                                            if let Some(file_stem) = pro_path.file_stem() {
+                                                manager_state.new_project_name = file_stem.to_string_lossy().to_string();
+                                            }
+                                        }
+
+                                        logger.log_info(&format!("Loaded pedigree from: {}", pro_path.display()));
+                                    }
+                                    Err(e) => {
+                                        logger.log_warning(&format!("Could not read pedigree from .kicad_pro: {}", e));
+                                    }
+                                }
+                            }
+                        }
+
                         ui.horizontal(|ui| {
                             ui.label("KiCad Project File (.kicad_pro):");
 
@@ -211,13 +261,20 @@ fn show_create_project_form(
 
                                 // Take the dialog, add filter, and put it back
                                 let dialog = mem::replace(&mut manager_state.pcb_file_dialog, FileDialog::new());
-                                manager_state.pcb_file_dialog = dialog
+                                let mut dialog = dialog
                                     .add_file_filter("KiCad Project", Arc::new(|path: &std::path::Path| {
                                         path.extension()
                                             .and_then(|ext| ext.to_str())
                                             .map(|ext| ext == "kicad_pro")
                                             .unwrap_or(false)
                                     }));
+
+                                // Set initial directory from preferences if available
+                                if let Some(ref preferred_dir) = app.project_manager.config.preferred_projects_directory {
+                                    dialog = dialog.initial_directory(preferred_dir.clone());
+                                }
+
+                                manager_state.pcb_file_dialog = dialog;
                                 manager_state.pcb_file_dialog.pick_file();
                             }
                         });
@@ -231,12 +288,27 @@ fn show_create_project_form(
                         };
                         ui.label(egui::RichText::new(&pcb_file_text).small().monospace());
 
-                        // Handle KiCad project file dialog
-                        if let Some(pro_path) = manager_state.pcb_file_dialog.update(ui.ctx()).picked() {
-                            // Convert .kicad_pro path to .kicad_pcb path
-                            let pcb_path = pro_path.with_extension("kicad_pcb");
-                            manager_state.new_project_pcb_path = Some(pcb_path);
-                        }
+                        ui.add_space(5.0);
+
+                        // Show pedigree fields (auto-populated from .kicad_pro)
+                        ui.label(egui::RichText::new("Pedigree Information").strong());
+                        ui.label(egui::RichText::new("💡 These fields are auto-populated from the .kicad_pro file").small().italics());
+                        ui.separator();
+
+                        egui::Grid::new("import_pedigree_grid")
+                            .num_columns(2)
+                            .spacing([10.0, 5.0])
+                            .show(ui, |ui| {
+                                // Author
+                                ui.label("Author:");
+                                ui.text_edit_singleline(&mut manager_state.new_kicad_project_author);
+                                ui.end_row();
+
+                                // Company
+                                ui.label("Company:");
+                                ui.text_edit_singleline(&mut manager_state.new_kicad_project_company);
+                                ui.end_row();
+                            });
                     }
 
                     ui.add_space(10.0);

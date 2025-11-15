@@ -38,6 +38,8 @@ pub struct ProjectManagerState {
     pub location_dialog: FileDialog,
     // Recent project names (for quick iteration)
     pub recent_project_names: Vec<String>,
+    // Track last picked file to avoid re-processing
+    pub last_picked_pro_path: Option<PathBuf>,
 }
 
 impl Default for ProjectManagerState {
@@ -81,6 +83,7 @@ impl Default for ProjectManagerState {
             pcb_file_dialog: FileDialog::new(),
             location_dialog: FileDialog::new(),
             recent_project_names: Vec::new(),
+            last_picked_pro_path: None,
         }
     }
 }
