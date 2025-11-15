@@ -313,8 +313,14 @@ fn show_create_project_form(
 
                     ui.add_space(10.0);
 
-                    // Create Project button - only for creating new projects
-                    if ui.button("✅ Create Project").clicked() {
+                    // Button text changes based on mode
+                    let button_text = if manager_state.create_new_kicad_project {
+                        "✅ Create Project"
+                    } else {
+                        "📥 Import Project"
+                    };
+
+                    if ui.button(button_text).clicked() {
                         // Validate input
                         if manager_state.new_project_name.trim().is_empty() {
                             manager_state.last_error = Some("Project name cannot be empty".to_string());
@@ -363,13 +369,15 @@ fn show_create_project_form(
 
                         match result {
                             Ok(project_id) => {
-                                logger.log_info(&format!("Created project: {} (ID: {})", manager_state.new_project_name, project_id));
+                                let action = if manager_state.create_new_kicad_project { "Created" } else { "Imported" };
+                                logger.log_info(&format!("{} project: {} (ID: {})", action, manager_state.new_project_name, project_id));
                                 // Only reset on success - this keeps user preferences but clears project fields
                                 manager_state.reset_create_dialog();
                             }
                             Err(e) => {
                                 // Don't reset on error - user can fix the issue and try again
-                                manager_state.last_error = Some(format!("Failed to create project: {}", e));
+                                let action = if manager_state.create_new_kicad_project { "create" } else { "import" };
+                                manager_state.last_error = Some(format!("Failed to {} project: {}", action, e));
                             }
                         }
                     }
