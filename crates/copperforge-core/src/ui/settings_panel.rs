@@ -198,6 +198,37 @@ pub fn show_settings_panel<'a>(
 
     ui.add_space(20.0);
 
+    // Library Configuration Section
+    ui.group(|ui| {
+        ui.label("KiCad Library Configuration");
+        ui.label(egui::RichText::new("💡 These settings apply when creating new KiCad projects").small().italics());
+        ui.separator();
+
+        // Initialize project manager state if needed to access library settings
+        if app.project_manager_state.is_none() {
+            let mut state = crate::project_manager::ProjectManagerState::default();
+            let db_path = app.config_path.join("projects.db");
+            let _ = state.initialize_database(&db_path);
+            app.project_manager_state = Some(state);
+        }
+
+        if let Some(ref mut manager_state) = app.project_manager_state {
+            ui.checkbox(&mut manager_state.include_kiverse, "Include KiVerse Symbol Library");
+            ui.checkbox(&mut manager_state.include_atlantix_resistors, "Include Atlantix-EDA Resistor Library");
+
+            ui.add_space(5.0);
+
+            ui.label("KiVerse Library Path:");
+            ui.horizontal(|ui| {
+                let kiverse_text = manager_state.kiverse_path.display().to_string();
+                ui.label(egui::RichText::new(&kiverse_text).small().monospace());
+            });
+            ui.label(egui::RichText::new("Default: ~/.kicad_libs/kiverse").small().italics());
+        }
+    });
+
+    ui.add_space(20.0);
+
     // Language Section (placeholder for future)
     ui.group(|ui| {
         ui.label("Language");

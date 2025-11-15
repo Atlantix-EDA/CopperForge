@@ -181,25 +181,6 @@ fn show_create_project_form(
                             manager_state.new_kicad_project_location = path.to_path_buf();
                         }
 
-                        ui.add_space(5.0);
-
-                        // Library options
-                        ui.label(egui::RichText::new("Library Configuration").strong());
-                        ui.separator();
-
-                        ui.checkbox(&mut manager_state.include_kiverse, "Include KiVerse Symbol Library");
-                        ui.checkbox(&mut manager_state.include_atlantix_resistors, "Include Atlantix-EDA Resistor Library");
-
-                        ui.add_space(3.0);
-
-                        // KiVerse path
-                        ui.label("KiVerse Path:");
-                        let kiverse_text = manager_state.kiverse_path
-                            .to_string_lossy()
-                            .to_string();
-                        ui.label(egui::RichText::new(&kiverse_text).small().monospace());
-                        ui.label(egui::RichText::new("💡 Default: ~/.kicad_libs/kiverse").small().italics());
-
                     } else {
                         // Import existing KiCad project
                         ui.label(egui::RichText::new("Import Existing KiCad Project").strong());
