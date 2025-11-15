@@ -94,53 +94,6 @@ fn show_create_project_form(
                     ui.label("Tags (comma-separated):");
                     ui.text_edit_singleline(&mut manager_state.new_project_tags);
 
-                    ui.add_space(3.0);
-
-                    // Parent project selection
-                    ui.label("Parent Project (optional):");
-                    ui.horizontal(|ui| {
-                        // Get list of potential parent projects (exclude projects with parents themselves for now)
-                        let root_projects: Vec<_> = manager_state.project_list
-                            .iter()
-                            .filter(|p| p.parent_id.is_none())
-                            .collect();
-
-                        // Show current selection or "None"
-                        let current_parent_name = if let Some(ref parent_id) = manager_state.new_project_parent_id {
-                            manager_state.project_list
-                                .iter()
-                                .find(|p| &p.id == parent_id)
-                                .map(|p| p.name.clone())
-                                .unwrap_or_else(|| "Unknown".to_string())
-                        } else {
-                            "None (Root Project)".to_string()
-                        };
-
-                        egui::ComboBox::from_id_salt("parent_project_selector")
-                            .selected_text(current_parent_name)
-                            .show_ui(ui, |ui| {
-                                // Option for no parent (root project)
-                                if ui.selectable_label(manager_state.new_project_parent_id.is_none(), "None (Root Project)").clicked() {
-                                    manager_state.new_project_parent_id = None;
-                                }
-
-                                ui.separator();
-
-                                // List all root projects as potential parents
-                                for project in root_projects {
-                                    let is_selected = manager_state.new_project_parent_id
-                                        .as_ref()
-                                        .map(|id| id == &project.id)
-                                        .unwrap_or(false);
-
-                                    if ui.selectable_label(is_selected, &project.name).clicked() {
-                                        manager_state.new_project_parent_id = Some(project.id.clone());
-                                    }
-                                }
-                            });
-                    });
-                    ui.label(egui::RichText::new("💡 Select a parent to create a sub-project under an existing project").small().italics());
-
                     ui.add_space(5.0);
 
                     // Show different fields based on project type
