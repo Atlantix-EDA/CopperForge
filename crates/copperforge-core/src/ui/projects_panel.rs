@@ -148,23 +148,35 @@ pub fn show_projects_panel<'a>(
 
                     if let Some(ref selected_id) = manager_state.selected_project_id {
                         if let Some(project) = manager_state.project_list.iter().find(|p| &p.id == selected_id) {
+                            // Check if we've already warned about missing pedigree for this project
+                            let warned_id = egui::Id::new(format!("pedigree_warned_{}", selected_id));
+                            let already_warned = ui.ctx().memory(|mem| {
+                                mem.data.get_temp::<bool>(warned_id).unwrap_or(false)
+                            });
+
                             // Try to read metadata from .kicad_pro file
                             let kicad_metadata = crate::project_manager::kicad_metadata::get_kicad_pro_path(&project.pcb_file_path)
                                 .and_then(|pro_path| {
                                     if pro_path.exists() {
                                         match crate::project_manager::kicad_metadata::read_kicad_metadata(&pro_path) {
                                             Ok(metadata) => {
-                                                // Check for missing pedigree fields
-                                                let mut missing_fields = Vec::new();
-                                                if metadata.author.is_none() {
-                                                    missing_fields.push("Author");
-                                                }
-                                                if metadata.company.is_none() {
-                                                    missing_fields.push("Company");
-                                                }
+                                                // Check for missing pedigree fields - only warn once per project
+                                                if !already_warned {
+                                                    let mut missing_fields = Vec::new();
+                                                    if metadata.author.is_none() {
+                                                        missing_fields.push("Author");
+                                                    }
+                                                    if metadata.company.is_none() {
+                                                        missing_fields.push("Company");
+                                                    }
 
-                                                if !missing_fields.is_empty() {
-                                                    logger.log_warning(&format!("Missing pedigree information in .kicad_pro: {}", missing_fields.join(", ")));
+                                                    if !missing_fields.is_empty() {
+                                                        logger.log_warning(&format!("Missing pedigree information in .kicad_pro: {}", missing_fields.join(", ")));
+                                                        // Mark as warned
+                                                        ui.ctx().memory_mut(|mem| {
+                                                            mem.data.insert_temp(warned_id, true);
+                                                        });
+                                                    }
                                                 }
 
                                                 Some(metadata)
