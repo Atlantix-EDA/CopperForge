@@ -292,6 +292,12 @@ pub fn show_projects_panel<'a>(
                                             });
                                         }
 
+                                        if ui.button("✏️ Edit Project").clicked() {
+                                            ui.ctx().memory_mut(|mem| {
+                                                mem.data.insert_temp(egui::Id::new("edit_project"), selected_id.clone());
+                                            });
+                                        }
+
                                         if ui.button("🗑️ Delete Project").clicked() {
                                             manager_state.show_delete_confirmation = Some(selected_id.clone());
                                         }
