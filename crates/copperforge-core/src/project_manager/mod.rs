@@ -79,7 +79,7 @@ impl Default for ProjectManagerState {
             new_kicad_project_company: default_company,
             include_kiverse: true,
             include_atlantix_resistors: true,
-            kiverse_path: home_dir.join(".kicad_libs/kiverse"),
+            kiverse_path: home_dir.join("kiverse"),
             pcb_file_dialog: FileDialog::new(),
             location_dialog: FileDialog::new(),
             recent_project_names: Vec::new(),

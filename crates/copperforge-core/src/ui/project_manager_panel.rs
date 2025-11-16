@@ -329,7 +329,7 @@ pub fn show_create_project_dialog(
                             .to_string();
                         ui.label(&kiverse_text);
                     });
-                    ui.label("💡 Default: ~/.kicad_libs/kiverse");
+                    ui.label("💡 Default: ~/kiverse");
 
                 } else {
                     // Import existing KiCad project

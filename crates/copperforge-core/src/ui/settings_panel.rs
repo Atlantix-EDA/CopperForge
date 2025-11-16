@@ -223,7 +223,7 @@ pub fn show_settings_panel<'a>(
                 let kiverse_text = manager_state.kiverse_path.display().to_string();
                 ui.label(egui::RichText::new(&kiverse_text).small().monospace());
             });
-            ui.label(egui::RichText::new("Default: ~/.kicad_libs/kiverse").small().italics());
+            ui.label(egui::RichText::new("Default: ~/kiverse").small().italics());
         }
     });
 

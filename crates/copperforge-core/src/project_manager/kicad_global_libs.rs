@@ -56,14 +56,14 @@ pub fn add_kiverse_to_global_sym_libs(kiverse_path: Option<PathBuf>) -> Result<(
     // Determine KiVerse base path
     let kiverse_base = kiverse_path.as_ref()
         .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "${HOME}/.kicad_libs/kiverse".to_string());
+        .unwrap_or_else(|| "${HOME}/kiverse".to_string());
 
     // Find all KiVerse symbol files
     let kiverse_symbols_dir = if let Some(path_str) = &kiverse_path {
         path_str.join("kicad/symbols")
     } else {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(format!("{}/.kicad_libs/kiverse/kicad/symbols", home))
+        PathBuf::from(format!("{}/kiverse/kicad/symbols", home))
     };
 
     if !kiverse_symbols_dir.exists() {
@@ -108,7 +108,7 @@ pub fn add_kiverse_to_global_sym_libs(kiverse_path: Option<PathBuf>) -> Result<(
         path.join("kicad/symbols/atlantix-eda")
     } else {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(format!("{}/.kicad_libs/kiverse/kicad/symbols/atlantix-eda", home))
+        PathBuf::from(format!("{}/kiverse/kicad/symbols/atlantix-eda", home))
     };
 
     if atlantix_dir.exists() {
@@ -173,14 +173,14 @@ pub fn add_kiverse_to_global_fp_libs(kiverse_path: Option<PathBuf>) -> Result<()
     // Determine KiVerse base path
     let kiverse_base = kiverse_path.as_ref()
         .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "${HOME}/.kicad_libs/kiverse".to_string());
+        .unwrap_or_else(|| "${HOME}/kiverse".to_string());
 
     // Find all KiVerse footprint directories
     let kiverse_footprints_dir = if let Some(path_str) = &kiverse_path {
         path_str.join("kicad/footprints")
     } else {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(format!("{}/.kicad_libs/kiverse/kicad/footprints", home))
+        PathBuf::from(format!("{}/kiverse/kicad/footprints", home))
     };
 
     if !kiverse_footprints_dir.exists() {
@@ -225,7 +225,7 @@ pub fn add_kiverse_to_global_fp_libs(kiverse_path: Option<PathBuf>) -> Result<()
         path.join("kicad/footprints/atlantix-eda/Atlantix_Resistors.pretty")
     } else {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(format!("{}/.kicad_libs/kiverse/kicad/footprints/atlantix-eda/Atlantix_Resistors.pretty", home))
+        PathBuf::from(format!("{}/kiverse/kicad/footprints/atlantix-eda/Atlantix_Resistors.pretty", home))
     };
 
     if atlantix_dir.exists() {

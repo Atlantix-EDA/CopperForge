@@ -24,7 +24,7 @@ cargo install just
 just setup-libraries
 ```
 
-This will clone KiVerse to `~/.kicad_libs/kiverse`.
+This will clone KiVerse to `~/kiverse`.
 
 ### 2. Create a New Project
 
@@ -84,8 +84,8 @@ The `.kicad_pro` file includes text variables:
 The generated `sym-lib-table` and `fp-lib-table` reference:
 
 ```
-${HOME}/.kicad_libs/kiverse/symbols/...
-${HOME}/.kicad_libs/kiverse/footprints/...
+${HOME}/kiverse/symbols/...
+${HOME}/kiverse/footprints/...
 ```
 
 ### Adding Atlantix Resistors to KiVerse
@@ -218,7 +218,7 @@ When you open your project in KiCad, you'll see the libraries available:
 Edit the library path in the create dialog or modify after creation:
 
 ```
-Default: ${HOME}/.kicad_libs/kiverse
+Default: ${HOME}/kiverse
 Custom: /path/to/your/libraries
 ```
 

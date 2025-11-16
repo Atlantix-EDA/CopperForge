@@ -310,13 +310,13 @@ fn create_sym_lib_table(info: &NewKicadProjectInfo) -> Result<(), KicadProjectEr
     if info.include_kiverse {
         let kiverse_base = info.kiverse_path.as_ref()
             .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "${HOME}/.kicad_libs/kiverse".to_string());
+            .unwrap_or_else(|| "${HOME}/kiverse".to_string());
 
         // Add all KiVerse symbol files
         let kiverse_symbols_dir = if let Some(ref path) = info.kiverse_path {
             path.join("kicad/symbols")
         } else {
-            std::path::PathBuf::from(format!("{}/.kicad_libs/kiverse/kicad/symbols",
+            std::path::PathBuf::from(format!("{}/kiverse/kicad/symbols",
                 std::env::var("HOME").unwrap_or_else(|_| ".".to_string())))
         };
 
@@ -342,13 +342,13 @@ fn create_sym_lib_table(info: &NewKicadProjectInfo) -> Result<(), KicadProjectEr
     if info.include_atlantix_resistors {
         let kiverse_base = info.kiverse_path.as_ref()
             .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "${HOME}/.kicad_libs/kiverse".to_string());
+            .unwrap_or_else(|| "${HOME}/kiverse".to_string());
 
         // Point to atlantix-eda symbols in KiVerse (if they exist)
         let atlantix_symbols_dir = if let Some(ref path) = info.kiverse_path {
             path.join("kicad/symbols/atlantix-eda")
         } else {
-            std::path::PathBuf::from(format!("{}/.kicad_libs/kiverse/kicad/symbols/atlantix-eda",
+            std::path::PathBuf::from(format!("{}/kiverse/kicad/symbols/atlantix-eda",
                 std::env::var("HOME").unwrap_or_else(|_| ".".to_string())))
         };
 
@@ -382,13 +382,13 @@ fn create_fp_lib_table(info: &NewKicadProjectInfo) -> Result<(), KicadProjectErr
     if info.include_kiverse {
         let kiverse_base = info.kiverse_path.as_ref()
             .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "${HOME}/.kicad_libs/kiverse".to_string());
+            .unwrap_or_else(|| "${HOME}/kiverse".to_string());
 
         // Scan for all .pretty directories in KiVerse
         let kiverse_footprints_dir = if let Some(ref path) = info.kiverse_path {
             path.join("kicad/footprints")
         } else {
-            std::path::PathBuf::from(format!("{}/.kicad_libs/kiverse/kicad/footprints",
+            std::path::PathBuf::from(format!("{}/kiverse/kicad/footprints",
                 std::env::var("HOME").unwrap_or_else(|_| ".".to_string())))
         };
 
@@ -413,12 +413,12 @@ fn create_fp_lib_table(info: &NewKicadProjectInfo) -> Result<(), KicadProjectErr
     if info.include_atlantix_resistors {
         let kiverse_base = info.kiverse_path.as_ref()
             .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "${HOME}/.kicad_libs/kiverse".to_string());
+            .unwrap_or_else(|| "${HOME}/kiverse".to_string());
 
         let atlantix_footprints_dir = if let Some(ref path) = info.kiverse_path {
             path.join("kicad/footprints/atlantix-eda/Atlantix_Resistors.pretty")
         } else {
-            std::path::PathBuf::from(format!("{}/.kicad_libs/kiverse/kicad/footprints/atlantix-eda/Atlantix_Resistors.pretty",
+            std::path::PathBuf::from(format!("{}/kiverse/kicad/footprints/atlantix-eda/Atlantix_Resistors.pretty",
                 std::env::var("HOME").unwrap_or_else(|_| ".".to_string())))
         };
 

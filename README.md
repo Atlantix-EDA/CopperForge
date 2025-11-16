@@ -68,7 +68,7 @@ The component import pipeline is a **massive productivity multiplier**. Traditio
 
 **CopperForge Way (30 seconds):**
 ```bash
-cd ~/.kicad_libs/kiverse
+cd ~/kiverse
 python3 import_component.py ADUM360N0BRQZ-RL7.zip
 ```
 
@@ -177,7 +177,7 @@ cargo run --release
 
 **Import a Component:**
 1. Download component zip from Digi-Key or SamacSys
-2. Run: `python3 ~/.kicad_libs/kiverse/import_component.py component.zip`
+2. Run: `python3 ~/kiverse/import_component.py component.zip`
 3. Component is now available in all your KiCad projects
 
 **View Real-time BOM:**
