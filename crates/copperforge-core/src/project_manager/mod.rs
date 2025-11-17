@@ -44,20 +44,14 @@ pub struct ProjectManagerState {
 
 impl Default for ProjectManagerState {
     fn default() -> Self {
+        Self::with_config(&crate::project::manager::ProjectConfig::default())
+    }
+}
+
+impl ProjectManagerState {
+    /// Create a new ProjectManagerState with values from ProjectConfig
+    pub fn with_config(config: &crate::project::manager::ProjectConfig) -> Self {
         let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-
-        // Get default author from git config or environment
-        let default_author = std::process::Command::new("git")
-            .args(&["config", "user.name"])
-            .output()
-            .ok()
-            .and_then(|output| String::from_utf8(output.stdout).ok())
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .or_else(|| std::env::var("USER").ok())
-            .unwrap_or_else(|| "James Bonanno".to_string());
-
-        let default_company = "Atlantix Engineering".to_string();
 
         Self {
             database: None,
@@ -75,10 +69,10 @@ impl Default for ProjectManagerState {
             last_error: None,
             create_new_kicad_project: true,  // Default to creating new projects
             new_kicad_project_location: home_dir.clone(),
-            new_kicad_project_author: default_author,
-            new_kicad_project_company: default_company,
-            include_kiverse: true,
-            include_atlantix_resistors: true,
+            new_kicad_project_author: config.default_author.clone(),
+            new_kicad_project_company: config.default_company.clone(),
+            include_kiverse: config.include_kiverse,
+            include_atlantix_resistors: config.include_atlantix_resistors,
             kiverse_path: home_dir.join("kiverse"),
             pcb_file_dialog: FileDialog::new(),
             location_dialog: FileDialog::new(),
@@ -86,9 +80,7 @@ impl Default for ProjectManagerState {
             last_picked_pro_path: None,
         }
     }
-}
 
-impl ProjectManagerState {
     /// Initialize the project database
     pub fn initialize_database(&mut self, db_path: &Path) -> Result<(), ProjectDatabaseError> {
         let database = ProjectDatabase::new(db_path)?;

@@ -138,7 +138,13 @@ impl ProjectDatabase {
             for project_id in project_ids {
                 // Skip corrupted projects instead of failing completely
                 match self.load_project(&project_id) {
-                    Ok(Some(project)) => {
+                    Ok(Some(mut project)) => {
+                        // Update last_modified from actual file modification time
+                        if let Ok(file_metadata) = std::fs::metadata(&project.metadata.pcb_file_path) {
+                            if let Ok(modified_time) = file_metadata.modified() {
+                                project.metadata.last_modified = modified_time.into();
+                            }
+                        }
                         projects.push(project.metadata);
                     }
                     Ok(None) => {

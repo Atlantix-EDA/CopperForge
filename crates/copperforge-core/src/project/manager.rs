@@ -47,6 +47,26 @@ pub struct ProjectConfig {
     pub global_units_mils: bool, // true = mils, false = mm
     #[serde(default)]
     pub preferred_projects_directory: Option<PathBuf>, // Preferred location for PCB projects
+    #[serde(default = "default_author")]
+    pub default_author: String,
+    #[serde(default = "default_company")]
+    pub default_company: String,
+    #[serde(default = "default_true")]
+    pub include_kiverse: bool,
+    #[serde(default = "default_true")]
+    pub include_atlantix_resistors: bool,
+}
+
+fn default_author() -> String {
+    "Nichola Tesla-Maxwell".to_string()
+}
+
+fn default_company() -> String {
+    "Starfleet".to_string()
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for ProjectConfig {
@@ -59,6 +79,10 @@ impl Default for ProjectConfig {
             use_24_hour_clock: false, // Default to 12-hour
             global_units_mils: false, // Default to mm
             preferred_projects_directory: None, // Will use home directory if not set
+            default_author: default_author(),
+            default_company: default_company(),
+            include_kiverse: true,
+            include_atlantix_resistors: true,
         }
     }
 }

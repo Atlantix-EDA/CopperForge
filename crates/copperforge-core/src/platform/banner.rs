@@ -19,11 +19,14 @@ impl Banner {
         // Add dependencies information
         self.message += "\n\nDEPENDENCIES";
         self.message += &format!("\nCopperForge      : {}", gui::VERSION);
+        self.message += &format!("\negui             : {}", env!("EGUI_VERSION"));
         self.message += &format!("\ngerber_viewer    : {}", env!("GERBER_VIEWER_VERSION"));
         self.message += &format!("\ngerber_types     : {}", env!("GERBER_TYPES_VERSION"));
         self.message += &format!("\ngerber_parser    : {}", env!("GERBER_PARSER_VERSION"));
         self.message += &format!("\negui-file-dialog : {}", env!("EGUI_FILE_DIALOG_VERSION"));
-        self.message += &format!("\negui_dock        : {}\n", env!("EGUI_DOCK_VERSION"));
+        self.message += &format!("\negui_dock        : {}", env!("EGUI_DOCK_VERSION"));
+        self.message += &format!("\negui_lens        : {}", env!("EGUI_LENS_VERSION"));
+        self.message += &format!("\negui_mobius      : {}\n", env!("EGUI_MOBIUS_VERSION"));
     }
 
     #[allow(dead_code)]

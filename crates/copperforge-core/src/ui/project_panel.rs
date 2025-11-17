@@ -31,7 +31,7 @@ fn show_create_project_form(
 ) {
     // Initialize project manager state if not already done
     if app.project_manager_state.is_none() {
-        let mut state = ProjectManagerState::default();
+        let mut state = ProjectManagerState::with_config(&app.project_manager.config);
 
         // Initialize database
         let db_path = app.config_path.join("projects.db");

@@ -75,6 +75,8 @@ pub struct DemoLensApp {
     
     // Modal states
     pub show_about_modal: bool,
+    pub show_kicad_version_modal: bool,
+    pub kicad_version: Option<String>,
     
     // Origin setting mode
     pub setting_origin_mode: bool,
@@ -222,6 +224,8 @@ impl DemoLensApp {
             user_timezone: None,
             use_24_hour_clock: false, // Default to 12-hour format
             show_about_modal: false,
+            show_kicad_version_modal: false,
+            kicad_version: None,
             setting_origin_mode: false,
             origin_has_been_set: false,
             ruler_active: false,
@@ -413,7 +417,26 @@ impl DemoLensApp {
             .color(egui::Color32::from_rgb(180, 200, 255))).clicked() {
             self.show_about_modal = true;
         }
-        
+
+        ui.separator();
+
+        // Show KiCad version button
+        // Detect KiCad version on first call
+        if self.kicad_version.is_none() {
+            self.kicad_version = Self::detect_kicad_version();
+        }
+
+        let kicad_text = if let Some(ref version) = self.kicad_version {
+            format!("KiCad {}", version)
+        } else {
+            "KiCad (not found)".to_string()
+        };
+
+        if ui.button(egui::RichText::new(kicad_text)
+            .color(egui::Color32::from_rgb(180, 255, 200))).clicked() {
+            self.show_kicad_version_modal = true;
+        }
+
         ui.separator();
         
         // Show clock with user's preferred format
@@ -435,7 +458,75 @@ impl DemoLensApp {
         
         ui.label(egui::RichText::new(clock_text).color(egui::Color32::from_rgb(220, 220, 220)));
     }
-    
+
+    /// Detect KiCad version by running kicad-cli
+    fn detect_kicad_version() -> Option<String> {
+        use std::process::Command;
+
+        // Try kicad-cli commands in PATH only
+        let commands = ["kicad-cli", "kicad-cli-nightly"];
+
+        for cmd in &commands {
+            if let Ok(output) = Command::new(cmd).arg("--version").output() {
+                if output.status.success() {
+                    let version_str = String::from_utf8_lossy(&output.stdout);
+                    // Parse version from output (format: "kicad-cli 9.0.0-rc1" or just "9.99.0")
+                    if let Some(line) = version_str.lines().next() {
+                        let version = if line.contains("kicad-cli") {
+                            // Format: "kicad-cli 9.0.0"
+                            line.split_whitespace().nth(1).map(|s| s.to_string())
+                        } else {
+                            // Format: just "9.99.0"
+                            Some(line.trim().to_string())
+                        };
+
+                        if let Some(mut version_string) = version {
+                            // Add "nightly" tag if using nightly build
+                            if cmd.contains("nightly") {
+                                version_string.push_str(" (nightly)");
+                            }
+                            return Some(version_string);
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Render the KiCad information modal
+    fn render_kicad_info_modal(&self, ui: &mut egui::Ui) {
+        ui.vertical_centered(|ui| {
+            ui.heading("KiCad PCB Design Software");
+            ui.add_space(10.0);
+
+            if let Some(ref version) = self.kicad_version {
+                ui.label(egui::RichText::new(format!("Version: {}", version))
+                    .size(16.0)
+                    .strong());
+            } else {
+                ui.label(egui::RichText::new("KiCad not detected on system")
+                    .size(14.0)
+                    .color(egui::Color32::from_rgb(255, 200, 100)));
+            }
+
+            ui.add_space(15.0);
+            ui.separator();
+            ui.add_space(15.0);
+
+            ui.label("KiCad is a free and open-source electronics design automation (EDA) suite.");
+            ui.label("It features schematic capture, integrated circuit simulation,");
+            ui.label("printed circuit board (PCB) layout, 3D viewing, and SPICE simulation.");
+
+            ui.add_space(10.0);
+
+            ui.hyperlink_to("🌐 Visit KiCad.org", "https://www.kicad.org/");
+            ui.hyperlink_to("📖 Documentation", "https://docs.kicad.org/");
+            ui.hyperlink_to("💬 Forums", "https://forum.kicad.info/");
+        });
+    }
+
     /// Show the main content area (dock layout without Project tab)
     #[allow(dead_code)]
     fn show_main_content(&mut self, ui: &mut egui::Ui) {
@@ -510,7 +601,15 @@ impl DemoLensApp {
         config.user_timezone = self.user_timezone.clone();
         config.use_24_hour_clock = self.use_24_hour_clock;
         config.global_units_mils = self.global_units_mils;
-        
+
+        // Save author/company/library settings from ProjectManagerState if it exists
+        if let Some(ref manager_state) = self.project_manager_state {
+            config.default_author = manager_state.new_kicad_project_author.clone();
+            config.default_company = manager_state.new_kicad_project_company.clone();
+            config.include_kiverse = manager_state.include_kiverse;
+            config.include_atlantix_resistors = manager_state.include_atlantix_resistors;
+        }
+
         if let Err(e) = config.save_to_file(&self.config_path) {
             eprintln!("Failed to save settings: {}", e);
         }
@@ -911,15 +1010,41 @@ impl eframe::App for DemoLensApp {
             egui::Window::new("About CopperForge")
                 .collapsible(false)
                 .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .default_pos(egui::pos2(
+                    ctx.screen_rect().center().x - 200.0,
+                    ctx.screen_rect().center().y - 200.0
+                ))
                 .show(ctx, |ui| {
                     ui::AboutPanel::render(ui);
-                    
+
                     ui.add_space(20.0);
                     ui.horizontal(|ui| {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.button("Close").clicked() {
                                 self.show_about_modal = false;
+                            }
+                        });
+                    });
+                });
+        }
+
+        // Show KiCad Version modal if requested
+        if self.show_kicad_version_modal {
+            egui::Window::new("KiCad Information")
+                .collapsible(false)
+                .resizable(false)
+                .default_pos(egui::pos2(
+                    ctx.screen_rect().center().x - 200.0,
+                    ctx.screen_rect().center().y - 150.0
+                ))
+                .show(ctx, |ui| {
+                    self.render_kicad_info_modal(ui);
+
+                    ui.add_space(20.0);
+                    ui.horizontal(|ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Close").clicked() {
+                                self.show_kicad_version_modal = false;
                             }
                         });
                     });

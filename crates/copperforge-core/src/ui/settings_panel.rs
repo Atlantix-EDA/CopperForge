@@ -206,7 +206,7 @@ pub fn show_settings_panel<'a>(
 
         // Initialize project manager state if needed to access library settings
         if app.project_manager_state.is_none() {
-            let mut state = crate::project_manager::ProjectManagerState::default();
+            let mut state = crate::project_manager::ProjectManagerState::with_config(&app.project_manager.config);
             let db_path = app.config_path.join("projects.db");
             let _ = state.initialize_database(&db_path);
             app.project_manager_state = Some(state);

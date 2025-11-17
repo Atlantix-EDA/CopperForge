@@ -99,6 +99,8 @@ impl Tab {
                 self.render_gerber_view(ui, params.app);
             }
             TabKind::EventLog => {
+                // Enable text selection for the event log
+                ui.style_mut().interaction.selectable_labels = true;
                 let logger = ReactiveEventLogger::with_colors(&params.app.logger_state, &params.app.log_colors);
                 logger.show(ui);
             }

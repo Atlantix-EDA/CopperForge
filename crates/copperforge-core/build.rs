@@ -13,15 +13,20 @@ fn main() {
     let workspace_cargo_toml = fs::read_to_string(workspace_cargo_toml_path).unwrap_or_default();
     
     // Parse versions from both local and workspace Cargo.toml
+    let mut egui_version = "unknown";
     let mut gerber_viewer_version = "unknown";
     let mut gerber_types_version = "unknown";
     let mut gerber_parser_version = "unknown";
     let mut egui_file_dialog_version = "unknown";
     let mut egui_dock_version = "unknown";
+    let mut egui_lens_version = "unknown";
+    let mut egui_mobius_version = "unknown";
     
     // Check local Cargo.toml first
     for line in cargo_toml.lines() {
-        if line.starts_with("gerber_viewer = ") {
+        if line.starts_with("egui = ") {
+            egui_version = line.split('"').nth(1).unwrap_or("unknown");
+        } else if line.starts_with("gerber_viewer = ") {
             gerber_viewer_version = line.split('"').nth(1).unwrap_or("unknown");
         } else if line.contains("gerber_types = ") && line.contains("version = ") {
             if let Some(version_part) = line.split("version = ").nth(1) {
@@ -35,12 +40,18 @@ fn main() {
             if let Some(version_part) = line.split("version = ").nth(1) {
                 egui_dock_version = version_part.split('"').nth(1).unwrap_or("unknown");
             }
+        } else if line.starts_with("egui_lens = ") {
+            egui_lens_version = line.split('"').nth(1).unwrap_or("unknown");
+        } else if line.starts_with("egui_mobius_reactive = ") {
+            egui_mobius_version = line.split('"').nth(1).unwrap_or("unknown");
         }
     }
     
     // Check workspace Cargo.toml if not found locally
     for line in workspace_cargo_toml.lines() {
-        if gerber_viewer_version == "unknown" && line.starts_with("gerber_viewer = ") {
+        if egui_version == "unknown" && line.starts_with("egui = ") {
+            egui_version = line.split('"').nth(1).unwrap_or("unknown");
+        } else if gerber_viewer_version == "unknown" && line.starts_with("gerber_viewer = ") {
             gerber_viewer_version = line.split('"').nth(1).unwrap_or("unknown");
         } else if gerber_types_version == "unknown" && line.contains("gerber_types = ") && line.contains("version = ") {
             if let Some(version_part) = line.split("version = ").nth(1) {
@@ -54,13 +65,20 @@ fn main() {
             if let Some(version_part) = line.split("version = ").nth(1) {
                 egui_dock_version = version_part.split('"').nth(1).unwrap_or("unknown");
             }
+        } else if egui_lens_version == "unknown" && line.starts_with("egui_lens = ") {
+            egui_lens_version = line.split('"').nth(1).unwrap_or("unknown");
+        } else if egui_mobius_version == "unknown" && line.starts_with("egui_mobius_reactive = ") {
+            egui_mobius_version = line.split('"').nth(1).unwrap_or("unknown");
         }
     }
     
     // These will be available as env!() variables at compile time
+    println!("cargo:rustc-env=EGUI_VERSION={}", egui_version);
     println!("cargo:rustc-env=GERBER_VIEWER_VERSION={}", gerber_viewer_version);
     println!("cargo:rustc-env=GERBER_TYPES_VERSION={}", gerber_types_version);
     println!("cargo:rustc-env=GERBER_PARSER_VERSION={}", gerber_parser_version);
     println!("cargo:rustc-env=EGUI_FILE_DIALOG_VERSION={}", egui_file_dialog_version);
     println!("cargo:rustc-env=EGUI_DOCK_VERSION={}", egui_dock_version);
+    println!("cargo:rustc-env=EGUI_LENS_VERSION={}", egui_lens_version);
+    println!("cargo:rustc-env=EGUI_MOBIUS_VERSION={}", egui_mobius_version);
 }

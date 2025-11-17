@@ -286,7 +286,10 @@ fn try_fetch_components_blocking() -> Result<Vec<BomComponent>, String> {
                 let component = BomComponent {
                     item_number: format!("{:03}", idx + 1),
                     reference: fp.reference.clone(),
-                    description: generate_description(fp),
+                    // Use actual KiCad description field if available, otherwise generate one
+                    description: fp.description.as_ref()
+                        .cloned()
+                        .unwrap_or_else(|| generate_description(fp)),
                     x_location: fp.position.0,
                     y_location: fp.position.1,
                     orientation: fp.rotation,
