@@ -3,6 +3,7 @@ pub mod bom;
 pub mod kicad_project;
 pub mod kicad_global_libs;
 pub mod kicad_metadata;
+pub mod kicad_hierarchy;
 
 use database::{ProjectDatabase, ProjectData, ProjectMetadata, generate_project_id, ProjectDatabaseError};
 use bom::BomComponent;
@@ -40,6 +41,9 @@ pub struct ProjectManagerState {
     pub recent_project_names: Vec<String>,
     // Track last picked file to avoid re-processing
     pub last_picked_pro_path: Option<PathBuf>,
+    // Project hierarchy tree view
+    pub expanded_project_id: Option<String>,
+    pub project_hierarchies: std::collections::HashMap<String, kicad_hierarchy::ProjectHierarchy>,
 }
 
 impl Default for ProjectManagerState {
@@ -78,6 +82,8 @@ impl ProjectManagerState {
             location_dialog: FileDialog::new(),
             recent_project_names: Vec::new(),
             last_picked_pro_path: None,
+            expanded_project_id: None,
+            project_hierarchies: std::collections::HashMap::new(),
         }
     }
 
@@ -142,6 +148,7 @@ impl ProjectManagerState {
                 metadata: metadata.clone(),
                 bom_components,
                 notes: String::new(),
+                hierarchy: None, // Will be loaded on demand
             };
             
             database.save_project(&project_data)?;
@@ -314,6 +321,7 @@ impl ProjectManagerState {
                 metadata: metadata.clone(),
                 bom_components: Vec::new(),
                 notes: String::new(),
+                hierarchy: None, // Will be loaded on demand
             };
 
             database.save_project(&project_data)?;

@@ -86,6 +86,27 @@ pub fn show_projects_panel<'a>(
                 ui.label("💡 Use the Project tab to create new KiCad projects");
             });
         } else {
+            // Load hierarchies for all projects (if not already loaded)
+            for project in &manager_state.project_list {
+                if !manager_state.project_hierarchies.contains_key(&project.id) {
+                    use crate::project_manager::kicad_metadata::get_kicad_pro_path;
+                    use crate::project_manager::kicad_hierarchy::ProjectHierarchy;
+
+                    if let Some(kicad_pro_path) = get_kicad_pro_path(&project.pcb_file_path) {
+                        if kicad_pro_path.exists() {
+                            match ProjectHierarchy::from_kicad_pro(&kicad_pro_path) {
+                                Ok(hierarchy) => {
+                                    manager_state.project_hierarchies.insert(project.id.clone(), hierarchy);
+                                }
+                                Err(_) => {
+                                    // Silently ignore errors - project may not have schematics
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Build tree structure
             let tree_structure = build_tree_structure(&manager_state.project_list);
             let projects_by_id: HashMap<String, &ProjectMetadata> = manager_state.project_list
@@ -96,6 +117,8 @@ pub fn show_projects_panel<'a>(
             let current_project_id = manager_state.current_project
                 .as_ref()
                 .map(|p| p.metadata.id.clone());
+
+            let selected_project_id = manager_state.selected_project_id.clone();
 
             // Two-column layout: tree view on left, details on right
             ui.columns(2, |columns| {
@@ -122,6 +145,8 @@ pub fn show_projects_panel<'a>(
                                             &tree_structure,
                                             &projects_by_id,
                                             &current_project_id,
+                                            &selected_project_id,
+                                            &manager_state.project_hierarchies,
                                         );
                                     }
                                 });
@@ -131,8 +156,14 @@ pub fn show_projects_panel<'a>(
                                 match action {
                                     Action::SetSelected(selected_ids) => {
                                         if let Some(first_id) = selected_ids.first() {
-                                            // Set selected project (don't load yet)
-                                            manager_state.selected_project_id = Some(first_id.clone());
+                                            // Extract the actual project ID (handles file nodes like "proj_123:sheet_0")
+                                            let project_id = if first_id.contains(':') {
+                                                first_id.split(':').next().unwrap_or(first_id).to_string()
+                                            } else {
+                                                first_id.clone()
+                                            };
+                                            // Set selected project
+                                            manager_state.selected_project_id = Some(project_id);
                                         }
                                     }
                                     _ => {}
@@ -601,28 +632,55 @@ fn show_tree_node_builder(
     tree_structure: &HashMap<String, TreeNode>,
     projects_by_id: &HashMap<String, &ProjectMetadata>,
     current_project_id: &Option<String>,
+    selected_project_id: &Option<String>,
+    project_hierarchies: &HashMap<String, crate::project_manager::kicad_hierarchy::ProjectHierarchy>,
 ) {
     let is_current = current_project_id
         .as_ref()
         .map(|id| id == &project.id)
         .unwrap_or(false);
 
-    let label = if is_current {
-        egui::RichText::new(&project.name).strong().color(egui::Color32::LIGHT_BLUE)
+    let is_selected = selected_project_id
+        .as_ref()
+        .map(|id| id == &project.id)
+        .unwrap_or(false);
+
+    // Get directory path
+    let dir_path = project.pcb_file_path
+        .parent()
+        .and_then(|p| p.to_str())
+        .unwrap_or("");
+
+    // Create label with path if selected
+    let label_text = if is_selected && !dir_path.is_empty() {
+        format!("{} ({})", project.name, dir_path)
     } else {
-        egui::RichText::new(&project.name)
+        project.name.clone()
     };
 
-    let has_children = tree_structure
+    let label = if is_current {
+        egui::RichText::new(&label_text).strong().color(egui::Color32::LIGHT_BLUE)
+    } else {
+        egui::RichText::new(&label_text)
+    };
+
+    // Check if this project has child projects
+    let has_child_projects = tree_structure
         .get(&project.id)
         .map(|node| !node.children.is_empty())
         .unwrap_or(false);
 
-    if has_children {
-        // Parent node with children
+    // Check if we have KiCad hierarchy for this project
+    let has_kicad_hierarchy = project_hierarchies
+        .get(&project.id)
+        .map(|h| h.root_schematic.is_some() || h.pcb_file.is_some() || !h.sheets.is_empty())
+        .unwrap_or(false);
+
+    // Show as directory if it has children or KiCad files
+    if has_child_projects || has_kicad_hierarchy {
         builder.dir(project.id.clone(), label);
 
-        // Add children
+        // Show child projects first
         if let Some(node) = tree_structure.get(&project.id) {
             for child_id in &node.children {
                 if let Some(child_project) = projects_by_id.get(child_id) {
@@ -632,14 +690,66 @@ fn show_tree_node_builder(
                         tree_structure,
                         projects_by_id,
                         current_project_id,
+                        selected_project_id,
+                        project_hierarchies,
                     );
                 }
             }
         }
 
+        // Show KiCad hierarchy files
+        if let Some(hierarchy) = project_hierarchies.get(&project.id) {
+            // Show root schematic with sub-sheets as children
+            if let Some(ref root_sch) = hierarchy.root_schematic {
+                let file_name = root_sch.file_name().and_then(|f| f.to_str()).unwrap_or("Unknown");
+
+                // If there are sub-sheets, show root schematic as expandable directory
+                if !hierarchy.sheets.is_empty() {
+                    builder.dir(format!("{}:sch_root", project.id), egui::RichText::new(format!("📄 {}", file_name)));
+
+                    // Show hierarchical sheets as children of root schematic
+                    for (idx, sheet) in hierarchy.sheets.iter().enumerate() {
+                        show_hierarchical_sheet_node(builder, sheet, &format!("{}:sheet_{}", project.id, idx));
+                    }
+
+                    builder.close_dir();
+                } else {
+                    // No sub-sheets, just show as leaf
+                    builder.leaf(format!("{}:sch_root", project.id), egui::RichText::new(format!("📄 {}", file_name)));
+                }
+            }
+
+            // Show PCB file
+            if let Some(ref pcb) = hierarchy.pcb_file {
+                let file_name = pcb.file_name().and_then(|f| f.to_str()).unwrap_or("Unknown");
+                builder.leaf(format!("{}:pcb", project.id), egui::RichText::new(format!("🔧 {}", file_name)));
+            }
+        }
+
         builder.close_dir();
     } else {
-        // Leaf node
+        // Leaf node (no children, no KiCad hierarchy)
         builder.leaf(project.id.clone(), label);
+    }
+}
+
+/// Recursively show hierarchical sheet nodes
+fn show_hierarchical_sheet_node(
+    builder: &mut egui_ltreeview::TreeViewBuilder<String>,
+    sheet: &crate::project_manager::kicad_hierarchy::HierarchicalSheet,
+    node_id: &str,
+) {
+    if sheet.sub_sheets.is_empty() {
+        // Leaf sheet
+        builder.leaf(node_id.to_string(), egui::RichText::new(format!("📋 {}", sheet.name)));
+    } else {
+        // Parent sheet with sub-sheets
+        builder.dir(node_id.to_string(), egui::RichText::new(format!("📋 {}", sheet.name)));
+
+        for (idx, sub_sheet) in sheet.sub_sheets.iter().enumerate() {
+            show_hierarchical_sheet_node(builder, sub_sheet, &format!("{}:sub_{}", node_id, idx));
+        }
+
+        builder.close_dir();
     }
 }

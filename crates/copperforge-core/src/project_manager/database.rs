@@ -2,6 +2,7 @@ use serde::{Serialize, Deserialize};
 use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use crate::project_manager::bom::BomComponent;
+use crate::project_manager::kicad_hierarchy::ProjectHierarchy;
 
 /// Database manager for project storage
 pub struct ProjectDatabase {
@@ -53,6 +54,10 @@ pub struct ProjectData {
     pub metadata: ProjectMetadata,
     pub bom_components: Vec<BomComponent>,
     pub notes: String,
+    /// Hierarchical structure of schematics and PCB files
+    /// Cached for performance, can be regenerated from disk
+    #[serde(skip)]
+    pub hierarchy: Option<ProjectHierarchy>,
 }
 
 impl ProjectDatabase {
@@ -108,6 +113,7 @@ impl ProjectDatabase {
                                 },
                                 bom_components: old_project.bom_components,
                                 notes: old_project.notes,
+                                hierarchy: None, // Will be loaded on demand
                             };
 
                             // Save migrated project back to database
@@ -303,6 +309,23 @@ pub fn generate_project_id() -> String {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis();
-    
+
     format!("proj_{}", timestamp)
+}
+
+impl ProjectData {
+    /// Load the project hierarchy from the KiCad project file
+    /// This parses the .kicad_pro file and associated schematics
+    pub fn load_hierarchy(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        use crate::project_manager::kicad_metadata::get_kicad_pro_path;
+
+        // Get the .kicad_pro path from the PCB path
+        if let Some(kicad_pro_path) = get_kicad_pro_path(&self.metadata.pcb_file_path) {
+            if kicad_pro_path.exists() {
+                self.hierarchy = Some(ProjectHierarchy::from_kicad_pro(&kicad_pro_path)?);
+            }
+        }
+
+        Ok(())
+    }
 }

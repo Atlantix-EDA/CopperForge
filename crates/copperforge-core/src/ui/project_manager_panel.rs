@@ -89,6 +89,8 @@ pub fn show_project_manager_panel(
                 let current_project_id = manager_state.current_project
                     .as_ref()
                     .map(|p| p.metadata.id.clone());
+                let expanded_project_id = manager_state.expanded_project_id.clone();
+                let project_hierarchies = manager_state.project_hierarchies.clone();
                 
                 // Project table
                 egui_extras::TableBuilder::new(ui)
@@ -106,21 +108,26 @@ pub fn show_project_manager_panel(
                     })
                     .body(|mut body| {
                         for project in &project_list {
+                            // Check if this project is expanded
+                            let is_expanded = expanded_project_id.as_ref() == Some(&project.id);
+
                             body.row(18.0, |mut row| {
-                                // Project name
+                                // Project name (with double-click to expand)
                                 row.col(|ui| {
                                     let is_current = current_project_id
                                         .as_ref()
                                         .map(|id| id == &project.id)
                                         .unwrap_or(false);
-                                    
+
+                                    let expand_icon = if is_expanded { "▼" } else { "▶" };
                                     let text = if is_current {
-                                        egui::RichText::new(&project.name).strong().color(egui::Color32::LIGHT_BLUE)
+                                        egui::RichText::new(format!("{} {}", expand_icon, &project.name)).strong().color(egui::Color32::LIGHT_BLUE)
                                     } else {
-                                        egui::RichText::new(&project.name)
+                                        egui::RichText::new(format!("{} {}", expand_icon, &project.name))
                                     };
-                                    
-                                    ui.label(text);
+
+                                    // Use selectable label which is interactive
+                                    let _response = ui.selectable_label(false, text);
                                 });
                                 
                                 // Description
@@ -153,17 +160,38 @@ pub fn show_project_manager_panel(
                                     });
                                 });
                             });
+
+                            // Show tree view if this project is expanded
+                            if is_expanded {
+                                // Display hierarchy tree
+                                if let Some(hierarchy) = project_hierarchies.get(&project.id) {
+                                    body.row(18.0, |mut row| {
+                                        row.col(|ui| {
+                                            ui.indent("tree_indent", |ui| {
+                                                show_hierarchy_tree(ui, hierarchy);
+                                            });
+                                        });
+                                        // Empty columns for alignment
+                                        row.col(|_ui| {});
+                                        row.col(|_ui| {});
+                                        row.col(|_ui| {});
+                                    });
+                                }
+                            }
                         }
                     });
             }
         });
-        
+
         // Handle actions stored in memory
         let load_project_id = ui.ctx().memory(|mem| {
             mem.data.get_temp::<String>(egui::Id::new("load_project"))
         });
         let delete_project_id = ui.ctx().memory(|mem| {
             mem.data.get_temp::<String>(egui::Id::new("delete_project"))
+        });
+        let toggle_expand_id = ui.ctx().memory(|mem| {
+            mem.data.get_temp::<String>(egui::Id::new("toggle_expand"))
         });
         
         if let Some(project_id) = load_project_id {
@@ -190,7 +218,9 @@ pub fn show_project_manager_panel(
             });
             manager_state.show_delete_confirmation = Some(project_id);
         }
-        
+
+        // Note: This code is no longer used - tree view is in projects_panel.rs
+
         let show_create = manager_state.show_create_dialog;
         let show_delete_id = manager_state.show_delete_confirmation.clone();
         
@@ -483,4 +513,43 @@ fn show_delete_confirmation_dialog(
                 });
             });
         });
+}
+
+/// Display the hierarchical tree structure of a KiCad project
+fn show_hierarchy_tree(ui: &mut egui::Ui, hierarchy: &crate::project_manager::kicad_hierarchy::ProjectHierarchy) {
+    ui.vertical(|ui| {
+        // Show root schematic
+        if let Some(ref root_sch) = hierarchy.root_schematic {
+            let file_name = root_sch.file_name().and_then(|f| f.to_str()).unwrap_or("Unknown");
+            ui.label(format!("📄 Top Level Schematic: {}", file_name));
+        }
+
+        // Show hierarchical sheets
+        if !hierarchy.sheets.is_empty() {
+            ui.indent("sheets_indent", |ui| {
+                for sheet in &hierarchy.sheets {
+                    show_sheet_tree(ui, sheet);
+                }
+            });
+        }
+
+        // Show PCB file
+        if let Some(ref pcb) = hierarchy.pcb_file {
+            let file_name = pcb.file_name().and_then(|f| f.to_str()).unwrap_or("Unknown");
+            ui.label(format!("🔧 PCB File: {}", file_name));
+        }
+    });
+}
+
+/// Recursively display a hierarchical sheet and its sub-sheets
+fn show_sheet_tree(ui: &mut egui::Ui, sheet: &crate::project_manager::kicad_hierarchy::HierarchicalSheet) {
+    ui.label(format!("├─ 📋 {}", sheet.name));
+
+    if !sheet.sub_sheets.is_empty() {
+        ui.indent(format!("sub_sheets_{}", sheet.name), |ui| {
+            for sub_sheet in &sheet.sub_sheets {
+                show_sheet_tree(ui, sub_sheet);
+            }
+        });
+    }
 }
