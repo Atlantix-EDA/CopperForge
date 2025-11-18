@@ -14,16 +14,16 @@
 
 > **The Vision:** Altium Designer workflow efficiency with KiCad's open-source freedom.
 
-## Why CopperForge?
+## Features
 
 Traditional KiCad workflows involve tedious manual library management, disconnected tools for BOM generation, and separate gerber viewers. CopperForge eliminates these pain points by providing:
 
-- ✅ **Turnkey Project Creation** - New KiCad projects configured in seconds
-- ✅ **Curated Component Libraries** - E96 resistors (0402-2512) + extensive IC library pre-installed
-- ✅ **One-Command Component Import** - Download from Digi-Key/Mouser → import in 30 seconds
-- ✅ **Real-time BOM** - Live bill of materials while you design
-- ✅ **Integrated Gerber Preview** - Manufacturing output visualization without leaving your workflow
-- ✅ **Professional Project Management** - Version tracking, metadata, and organization
+- **Turnkey Project Creation** - New KiCad projects configured in seconds
+- **Curated Component Libraries** - E96 resistors (0402-2512) + extensive IC library pre-installed
+- **One-Command Component Import** - Download from Digi-Key/Mouser → import in 30 seconds
+- **Real-time BOM** - Live bill of materials while you design
+- **Integrated Gerber Preview** - Manufacturing output visualization without leaving your workflow
+- **Professional Project Management** - Version tracking, metadata, and organization
 
 ## The CopperForge Ecosystem
 
@@ -31,12 +31,12 @@ CopperForge integrates multiple specialized repositories into a cohesive platfor
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                      CopperForge Core                        │
-│         Project Management • KiCad Integration               │
-│              Workflow Automation • UI Framework              │
+│                      CopperForge Core                       │
+│         Project Management • KiCad Integration              │
+│              Workflow Automation • UI Framework             │
 └──────────────┬──────────────────────────────┬───────────────┘
                │                              │
-    ┌──────────▼──────────┐        ┌─────────▼──────────┐
+    ┌──────────▼───────────┐        ┌─────────▼──────────┐
     │  Component Libraries │        │  Analysis & Viz    │
     │  • atlantix-eda      │        │  • gerber_parser   │
     │  • kiverse           │        │  • gerber_viewer   │
@@ -53,90 +53,18 @@ CopperForge integrates multiple specialized repositories into a cohesive platfor
 - **egui_mobius** + **egui_lens**: Reactive state management and modern UI framework
 - **kicad-ecs**: IPC communication for real-time KiCad integration
 
-## Killer Feature: Automated Component Import
+## Killer Feature: 30-Second Component Import
 
-The component import pipeline is a **massive productivity multiplier**. Traditional workflow vs. CopperForge:
+**Traditional way:** 20-40 minutes of manual symbol/footprint editing per component
+**CopperForge:** One command, 30 seconds, works globally across all projects
 
-**Traditional Way (20-40 minutes per component):**
-1. Download component files
-2. Manually extract symbol from library file
-3. Hand-edit footprint
-4. Create library if it doesn't exist
-5. Update library tables
-6. Test and verify
-7. Repeat for every component...
-
-**CopperForge Way (30 seconds):**
 ```bash
-cd ~/kiverse
-python3 import_component.py ADUM360N0BRQZ-RL7.zip
+python3 ~/kiverse/import_component.py ADUM360N0BRQZ-RL7.zip
 ```
 
-Done. The component is now in your global library, available in **all** KiCad projects.
-
-### What Gets Imported Automatically:
-- ✓ Schematic symbol (extracted and merged)
-- ✓ PCB footprint (with proper naming)
-- ✓ Footprint references (automatically linked)
-- ✓ Added to global library tables
-- ✓ Available immediately in all projects
-
-### Supported Sources:
-- SamacSys zip files
-- Digi-Key component downloads
-- Mouser component packages
-- Any KiCad-format component archive
-
-**See it in action:**
+Auto-extracts symbols, footprints, and updates library tables. Supports Digi-Key, Mouser, SamacSys, and any KiCad-format archives.
 
 ![Auto Import](./assets/auto_import.png)
-
-*One command, instant results. The component is extracted, merged into the library, and ready to use.*
-
-## Key Capabilities
-
-### 1. Smart Project Creation
-Create production-ready KiCad projects with:
-- Pre-configured symbol and footprint libraries
-- Global library management (works with **all** your projects)
-- Project metadata and version tracking
-- Git-friendly structure
-- Professional README generation
-
-### 2. Real-time Bill of Materials (BOM)
-
-Live IPC integration with KiCad provides manufacturing-grade BOM data:
-
-- **Live Updates**: Component data syncs as you design
-- **Comprehensive Data**: Reference, value, footprint, description, coordinates
-- **Pick-and-Place Ready**: X/Y position and rotation for assembly
-- **Advanced Filtering**: Search by any field
-- **Export Options**: CSV for procurement and assembly
-- **Unit Flexibility**: Millimeters or mils
-- **Thread-safe Architecture**: Built with signal/slot pattern for responsive UI
-
-**Usage:**
-1. Open your PCB in KiCad
-2. Launch CopperForge → BOM tab
-3. Click "Connect" for live component data
-4. Export for manufacturing or procurement
-
-### 3. Manufacturing Visualization
-
-Multi-layer Gerber rendering with:
-- Interactive zoom and pan
-- Layer toggles and isolation
-- Measurement tools
-- Component coordinate display
-- Manufacturing-ready output verification
-
-### 4. Professional Workflow
-
-- Project database with search and filtering
-- Version tracking and metadata
-- Tag-based organization
-- Recent projects quick access
-- Git integration ready
 
 ## Demo: Complete Workflow
 
@@ -153,42 +81,40 @@ Multi-layer Gerber rendering with:
 - **Rust**: 1.65.0 or higher ([rustup.rs](https://rustup.rs/))
 - **KiCad**: 9.0+ (for PCB integration)
 - **Operating System**: Linux, macOS, or Windows
+- **just**: Command runner ([install](https://github.com/casey/just))
 
-## Getting Started
-
-### Installation
+## Quick Start
 
 ```bash
-# 1. Clone the repository
+# 1. Clone CopperForge
 git clone https://github.com/Atlantix-EDA/CopperForge.git
 cd CopperForge
 
-# 2. Build and run
-cargo run --release
+# 2. Setup component libraries (one-time)
+cargo install just
+just setup-libraries  # Clones kiverse to ~/kiverse
+
+# 3. Launch
+just run
 ```
 
-### Quick Start Guide
+### Essential Workflows
 
-**Create Your First Project:**
-1. Launch CopperForge
-2. Go to Projects tab → "Create New Project"
-3. Enter project details and choose libraries (atlantix-eda + kiverse recommended)
-4. Click "Create" - your KiCad project is ready with all libraries configured
+**Create a New KiCad Project:**
+1. Projects tab → "➕ New Project" → "🆕 Create New KiCad Project"
+2. Fill in name, location, author - libraries auto-configured with KiVerse + Atlantix resistors
+3. Open in KiCad: `kicad ~/your-project/your-project.kicad_pro`
 
-**Import a Component:**
-1. Download component zip from Digi-Key or SamacSys
-2. Run: `python3 ~/kiverse/import_component.py component.zip`
-3. Component is now available in all your KiCad projects
+**Import a Component (30 seconds vs. 30 minutes manual):**
+```bash
+# Download component zip from Digi-Key/Mouser/SamacSys
+python3 ~/kiverse/import_component.py ADUM360N0BRQZ-RL7.zip
+# Done. Available in all KiCad projects immediately.
+```
 
-**View Real-time BOM:**
-1. Open your PCB in KiCad
-2. CopperForge → BOM tab → "Connect"
-3. See live component data as you design
+**Live BOM:** KiCad PCB open → CopperForge BOM tab → "Connect"
 
-**Preview Manufacturing Output:**
-1. Export gerbers from KiCad
-2. CopperForge → Open gerber files
-3. Verify layers and manufacturing data
+**Gerber Preview:** CopperForge → Open gerber files → verify layers
 
 ## Architecture
 
@@ -202,40 +128,11 @@ CopperForge is built with modern Rust best practices:
 
 ## Roadmap
 
-CopperForge is actively developed with exciting features planned:
+**Current:** Project management, global libraries, component import, live BOM, gerber viewer
+**Next:** Enhanced DRC, LibrePCB support, P&P export, cost tracking
+**Future:** Collaboration, cloud sync, AI component recommendations, panelization
 
-**Current (v0.1.x):**
-- ✅ Project creation and management
-- ✅ Global library configuration
-- ✅ Component import pipeline
-- ✅ Real-time BOM
-- ✅ Gerber visualization
-
-**Near-term (v0.2.x):**
-- 🚧 Enhanced DRC (Design Rule Check)
-- 🚧 LibrePCB integration
-- 🚧 Advanced pick-and-place export
-- 🚧 Component cost tracking
-
-**Future:**
-- 📋 Multi-user collaboration features
-- 📋 Cloud library sync
-- 📋 AI-powered component recommendations
-- 📋 Automated panelization
-
-See [ROADMAP.md](./ROADMAP.md) for detailed planning.
-
-## Who Is CopperForge For?
-
-**Hobbyists** who want professional tools without the enterprise price tag
-
-**Freelance Designers** who need efficient workflows for client projects
-
-**Small Hardware Teams** requiring collaboration and library management
-
-**Educators** teaching PCB design with modern, safe tooling
-
-**Anyone** frustrated with traditional EDA library management
+See [ROADMAP.md](./ROADMAP.md) for details.
 
 ## Contributing
 
@@ -262,8 +159,6 @@ MIT License - See LICENSE file for details.
 ---
 
 <div align="center">
-
-**Built with ❤️ using Rust and egui**
 
 [⭐ Star on GitHub](https://github.com/Atlantix-EDA/CopperForge) • [📖 Documentation](./docs) • [🐛 Report Bug](https://github.com/Atlantix-EDA/CopperForge/issues)
 
