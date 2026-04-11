@@ -1,5 +1,5 @@
 use crate::platform::{banner, details};
-use egui_lens::ReactiveEventLogger;
+use crate::event_logger::ReactiveEventLogger;
 
 /// Initialize and display application banner and system information
 pub fn initialize_and_show_banner(

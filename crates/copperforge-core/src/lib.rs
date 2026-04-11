@@ -4,6 +4,7 @@
 pub mod display;
 pub mod drc_operations;
 pub mod ecs;
+pub mod event_logger;
 pub mod export;
 // layer_operations module removed - all functionality moved to ECS
 pub mod navigation;

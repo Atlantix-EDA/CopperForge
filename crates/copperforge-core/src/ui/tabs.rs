@@ -8,7 +8,7 @@ use egui::{Painter, Pos2, Stroke};
 use egui_dock::{SurfaceIndex, NodeIndex};
 use serde::{Serialize, Deserialize};
 
-use egui_lens::ReactiveEventLogger;
+use crate::event_logger::ReactiveEventLogger;
 use gerber_viewer::{
     draw_crosshair,
     draw_marker, ViewState

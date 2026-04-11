@@ -1,7 +1,7 @@
 use crate::DemoLensApp;
 use crate::project_manager::ProjectManagerState;
 use crate::project_manager::database::ProjectMetadata;
-use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
+use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
 use std::collections::HashMap;
 use egui_ltreeview::{TreeView, Action};

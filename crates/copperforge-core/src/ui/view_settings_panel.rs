@@ -1,6 +1,6 @@
 use egui;
 use egui_mobius_reactive::Dynamic;
-use egui_lens::{ReactiveEventLoggerState, LogColors};
+use crate::event_logger::{ReactiveEventLoggerState, LogColors};
 
 use crate::DemoLensApp;
 use crate::ui;

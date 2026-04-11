@@ -1,6 +1,6 @@
 use crate::DemoLensApp;
 use crate::ecs::UnitsResource;
-use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
+use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
 use chrono_tz::Tz;
 use chrono::Local;

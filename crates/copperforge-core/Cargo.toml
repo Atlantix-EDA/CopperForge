@@ -20,9 +20,11 @@ gerber_parser = { workspace = true }
 nalgebra = { workspace = true }
 
 # Egui Mobius framework
-egui_lens = { workspace = true }
 egui_mobius_reactive = { workspace = true }
 egui_mobius = { workspace = true }
+
+# Citizen panel lifecycle
+egui_citizen = { workspace = true }
 
 # Logging and configuration
 env_logger = { workspace = true }

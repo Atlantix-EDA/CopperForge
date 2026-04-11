@@ -1,6 +1,6 @@
 use crate::DemoLensApp;
 use crate::project::ProjectState;
-use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
+use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
 use std::path::{Path, PathBuf};
 use std::process::Command;

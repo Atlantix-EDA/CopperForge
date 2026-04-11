@@ -1,6 +1,6 @@
 use crate::{DemoLensApp, project::constants::LOG_TYPE_DRC, ecs::LayerType};
 use crate::drc_operations::TraceQualityType;
-use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
+use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
 
 pub fn show_drc_panel<'a>(

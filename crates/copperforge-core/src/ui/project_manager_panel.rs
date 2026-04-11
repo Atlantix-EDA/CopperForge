@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use crate::DemoLensApp;
 use crate::project_manager::ProjectManagerState;
-use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
+use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
 
 /// Show the project manager panel

@@ -384,6 +384,7 @@ impl PngExporter {
             scale,
             base_scale: scale,
             translation: Vec2::new(translation_x, translation_y),
+            previous_viewport_pos: None,
         }
     }
     
@@ -551,6 +552,7 @@ impl PngExporter {
                 viewport.center().x - (center_x as f32 * scale),
                 viewport.center().y + (center_y as f32 * scale), // Y is flipped
             ),
+            previous_viewport_pos: None,
         }
     }
     

@@ -1,6 +1,6 @@
 use crate::DemoLensApp;
-use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState};
-use egui_lens::LogColors;
+use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState};
+use crate::event_logger::LogColors;
 use egui_mobius_reactive::Dynamic;
 use egui_extras::TableBuilder;
 use kicad_ecs::prelude::*;

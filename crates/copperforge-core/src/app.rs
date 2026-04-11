@@ -9,7 +9,7 @@ use crate::display::DisplayManager;
 use crate::drc_operations::DrcManager;
 
 /// egui_lens imports
-use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
+use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::*; 
 use gerber_viewer::{
    BoundingBox, GerberLayer, 

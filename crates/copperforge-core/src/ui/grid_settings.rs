@@ -1,6 +1,6 @@
 use crate::{DemoLensApp, project::constants::LOG_TYPE_GRID, display::grid::{get_grid_status, GridStatus}};
 use crate::ecs::{UnitsResource, mm_to_nm, nm_to_mm, mils_to_nm, nm_to_mils};
-use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
+use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
 
 pub fn show_grid_panel<'a>(

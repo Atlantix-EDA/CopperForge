@@ -1,8 +1,8 @@
 #![allow(dead_code)]
 use crate::DemoLensApp;
 use crate::ecs::{UnitsResource, mm_to_nm, nm_to_mils};
-use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState};
-use egui_lens::LogColors;
+use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState};
+use crate::event_logger::LogColors;
 use egui_mobius_reactive::*;
 use egui_mobius::factory;
 use egui_mobius::signals::Signal;

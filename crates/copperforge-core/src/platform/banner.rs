@@ -25,7 +25,7 @@ impl Banner {
         self.message += &format!("\ngerber_parser    : {}", env!("GERBER_PARSER_VERSION"));
         self.message += &format!("\negui-file-dialog : {}", env!("EGUI_FILE_DIALOG_VERSION"));
         self.message += &format!("\negui_dock        : {}", env!("EGUI_DOCK_VERSION"));
-        self.message += &format!("\negui_lens        : {}", env!("EGUI_LENS_VERSION"));
+        self.message += &format!("\negui_citizen     : {}", env!("EGUI_CITIZEN_VERSION"));
         self.message += &format!("\negui_mobius      : {}\n", env!("EGUI_MOBIUS_VERSION"));
     }
 

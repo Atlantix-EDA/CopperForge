@@ -15,36 +15,29 @@ pub fn render_layers_system(
     display_manager: &DisplayManager,
 ) {
     let config = RenderConfiguration::default();
-    let renderer = GerberRenderer::default();
-    
+
     // Query all layer entities including ImageTransform
     let mut layer_query = world.query::<(&GerberData, &Transform, &ImageTransform, &Visibility, &RenderProperties, &LayerInfo)>();
     let mut layers: Vec<_> = layer_query.iter(world).collect();
-    
+
     // Sort layers by z-order for proper rendering depth
     layers.sort_by_key(|(_, _, _, _, props, _)| props.z_order);
-    
+
     // Render each visible layer
     for (gerber_data, transform, image_transform, visibility, render_props, _layer_info) in layers {
         if !visibility.visible {
             continue;
         }
-        
+
         // Note: We rely solely on visibility.visible to determine if a layer should be shown
         // This allows manual layer control overrides regardless of top/bottom view
-        
+
         // Create GerberTransform from ECS Transform and ImageTransform
         let gerber_transform = create_gerber_transform_composed(transform, image_transform, display_manager);
-        
-        // Render the layer
-        renderer.paint_layer(
-            painter,
-            view_state,
-            &gerber_data.0,
-            render_props.color,
-            &config,
-            &gerber_transform,
-        );
+
+        // Render the layer (gerber_viewer 0.5: renderer constructed per-layer)
+        let renderer = GerberRenderer::new(&config, view_state, &gerber_transform, &gerber_data.0);
+        renderer.paint_layer(painter, render_props.color);
     }
 }
 
@@ -57,80 +50,62 @@ pub fn render_layers_system_enhanced(
     display_manager: &DisplayManager,
 ) {
     let config = RenderConfiguration::default();
-    let renderer = GerberRenderer::default();
-    
+
     // Get mechanical outline for quadrant view (do this first to avoid borrow issues)
     let mechanical_outline = if display_manager.quadrant_view_enabled {
         get_mechanical_outline_layer(world)
     } else {
         None
     };
-    
+
     // Query all layer entities including ImageTransform
     let mut layer_query = world.query::<(&GerberData, &Transform, &ImageTransform, &Visibility, &RenderProperties, &LayerInfo)>();
     let mut layers: Vec<_> = layer_query.iter(world).collect();
-    
+
     // Sort layers by z-order for proper rendering depth
     layers.sort_by_key(|(_, _, _, _, props, _)| props.z_order);
-    
+
     // Render each visible layer
     for (gerber_data, transform, image_transform, visibility, render_props, layer_info) in layers {
         if !visibility.visible {
             continue;
         }
-        
-        // Note: We rely solely on visibility.visible to determine if a layer should be shown
-        // This allows manual layer control overrides regardless of top/bottom view
-        
+
         // Skip mechanical outline in quadrant view (it will be rendered with each layer)
         if display_manager.quadrant_view_enabled && layer_info.layer_type == LayerType::MechanicalOutline {
             continue;
         }
-        
-        // Skip paste layers in quadrant view (user doesn't want to see them)
+
+        // Skip paste layers in quadrant view
         if display_manager.quadrant_view_enabled && matches!(layer_info.layer_type, LayerType::Paste(_)) {
             continue;
         }
-        
+
         // Calculate quadrant offset if needed
         let quadrant_offset = if display_manager.quadrant_view_enabled {
             display_manager.get_quadrant_offset(&layer_info.layer_type)
         } else {
             crate::display::VectorOffset { x: 0.0, y: 0.0 }
         };
-        
+
         // Create GerberTransform with quadrant offset and image transform
         let gerber_transform = create_gerber_transform_with_offset_composed(transform, image_transform, display_manager, quadrant_offset.clone());
-        
-        // Render main layer
-        renderer.paint_layer(
-            painter,
-            view_state,
-            &gerber_data.0,
-            render_props.color,
-            &config,
-            &gerber_transform,
-        );
-        
+
+        // Render main layer (gerber_viewer 0.5: renderer constructed per-layer)
+        let renderer = GerberRenderer::new(&config, view_state, &gerber_transform, &gerber_data.0);
+        renderer.paint_layer(painter, render_props.color);
+
         // Render mechanical outline in quadrant view
         if display_manager.quadrant_view_enabled {
             if let Some((mechanical_gerber, mechanical_color)) = &mechanical_outline {
-                // Use the same transform as the layer for proper alignment
                 let mechanical_transform = create_gerber_transform_with_offset_composed(
                     transform,
                     image_transform,
                     display_manager,
                     quadrant_offset,
                 );
-                
-                renderer.paint_layer(
-                    painter,
-                    view_state,
-                    mechanical_gerber,
-                    *mechanical_color,
-                    &config,
-                    &mechanical_transform,
-                );
+                let mech_renderer = GerberRenderer::new(&config, view_state, &mechanical_transform, mechanical_gerber);
+                mech_renderer.paint_layer(painter, *mechanical_color);
             }
         }
     }
