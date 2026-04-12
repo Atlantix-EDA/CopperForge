@@ -453,42 +453,53 @@ impl CopperForgeApp {
         ui.label(egui::RichText::new(clock_text).color(egui::Color32::from_rgb(220, 220, 220)));
     }
 
-    /// Detect KiCad version by running kicad-cli (PATH, Flatpak, or Snap)
+    /// Detect KiCad version using the discovered kicad-cli
     fn detect_kicad_version() -> Option<String> {
+        let (method, mut cmd) = Self::find_kicad_cli()?;
+        let output = cmd.arg("--version").output().ok()?;
+        if !output.status.success() { return None; }
+        let mut v = Self::parse_kicad_version(&output.stdout, false)?;
+        if method != "path" {
+            v = format!("{} ({})", v, method);
+        }
+        Some(v)
+    }
+
+    /// Find kicad-cli across PATH, Flatpak, and Snap.
+    /// Returns (install_method, Command) ready for appending args.
+    pub fn find_kicad_cli() -> Option<(String, std::process::Command)> {
         use std::process::Command;
 
-        // 1. Try kicad-cli in PATH (native install)
-        for cmd in ["kicad-cli", "kicad-cli-nightly"] {
-            if let Ok(output) = Command::new(cmd).arg("--version").output() {
+        // 1. Native PATH
+        for bin in ["kicad-cli", "kicad-cli-nightly"] {
+            if let Ok(output) = Command::new(bin).arg("--version").output() {
                 if output.status.success() {
-                    if let Some(v) = Self::parse_kicad_version(&output.stdout, cmd.contains("nightly")) {
-                        return Some(v);
-                    }
+                    return Some(("path".into(), Command::new(bin)));
                 }
             }
         }
 
-        // 2. Try Flatpak (KiCad 10+ on Linux)
+        // 2. Flatpak
         if let Ok(output) = Command::new("flatpak")
             .args(["run", "--command=kicad-cli", "org.kicad.KiCad", "--version"])
             .output()
         {
             if output.status.success() {
-                if let Some(v) = Self::parse_kicad_version(&output.stdout, false) {
-                    return Some(format!("{} (flatpak)", v));
-                }
+                let mut cmd = Command::new("flatpak");
+                cmd.args(["run", "--command=kicad-cli", "org.kicad.KiCad"]);
+                return Some(("flatpak".into(), cmd));
             }
         }
 
-        // 3. Try Snap (KiCad 10+ on Linux)
+        // 3. Snap
         if let Ok(output) = Command::new("snap")
             .args(["run", "kicad.kicad-cli", "--version"])
             .output()
         {
             if output.status.success() {
-                if let Some(v) = Self::parse_kicad_version(&output.stdout, false) {
-                    return Some(format!("{} (snap)", v));
-                }
+                let mut cmd = Command::new("snap");
+                cmd.args(["run", "kicad.kicad-cli"]);
+                return Some(("snap".into(), cmd));
             }
         }
 
