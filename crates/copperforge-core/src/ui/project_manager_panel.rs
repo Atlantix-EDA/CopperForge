@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use crate::DemoLensApp;
+use crate::CopperForgeApp;
 use crate::project_manager::ProjectManagerState;
 use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
@@ -7,7 +7,7 @@ use egui_mobius_reactive::Dynamic;
 /// Show the project manager panel
 pub fn show_project_manager_panel(
     ui: &mut egui::Ui,
-    app: &mut DemoLensApp,
+    app: &mut CopperForgeApp,
     logger_state: &Dynamic<ReactiveEventLoggerState>,
     log_colors: &Dynamic<LogColors>,
 ) {

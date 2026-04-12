@@ -3,7 +3,7 @@ use image::{ImageBuffer, Rgba, RgbaImage};
 use eframe::emath::{Rect, Vec2};
 use egui::Pos2;
 use gerber_viewer::{ViewState, BoundingBox, GerberTransform};
-use crate::{DemoLensApp, ecs::LayerType};
+use crate::{CopperForgeApp, ecs::LayerType};
 use crate::display::VectorOffset;
 use nalgebra::{Vector2, Point2};
 
@@ -13,7 +13,7 @@ pub struct PngExporter;
 #[allow(dead_code)]
 impl PngExporter {
     /// Export each layer in quadrant view as a separate PNG file
-    pub fn export_quadrant_layers(app: &mut DemoLensApp, output_dir: &PathBuf, width: u32, height: u32) -> Result<Vec<PathBuf>, String> {
+    pub fn export_quadrant_layers(app: &mut CopperForgeApp, output_dir: &PathBuf, width: u32, height: u32) -> Result<Vec<PathBuf>, String> {
         if !app.display_manager.quadrant_view_enabled {
             return Err("Quadrant view must be enabled for layer export".to_string());
         }
@@ -68,7 +68,7 @@ impl PngExporter {
     
     /// Calculate the master bounding box from mechanical outline layer (defines size for all exports)
     fn calculate_master_bounding_box(
-        app: &DemoLensApp,
+        app: &CopperForgeApp,
         mechanical_outline: &gerber_viewer::GerberLayer,
     ) -> Result<BoundingBox, String> {
         // The mechanical outline defines the board boundary and should be used as the 
@@ -98,7 +98,7 @@ impl PngExporter {
     
     /// Export a single layer to PNG using the consistent master bounding box
     fn export_single_layer_with_bbox(
-        app: &DemoLensApp,
+        app: &CopperForgeApp,
         gerber_layer: &gerber_viewer::GerberLayer,
         layer_type: &LayerType,
         mechanical_outline: Option<&gerber_viewer::GerberLayer>,
@@ -154,7 +154,7 @@ impl PngExporter {
     
     /// Render gerber layer to image buffer using a simplified approach
     fn render_gerber_to_image(
-        app: &DemoLensApp,
+        app: &CopperForgeApp,
         _gerber_layer: &gerber_viewer::GerberLayer,
         layer_type: &LayerType,
         mechanical_outline: Option<&gerber_viewer::GerberLayer>,
@@ -303,7 +303,7 @@ impl PngExporter {
     
     /// Calculate the transformed bounding box for a layer including all transformations
     fn calculate_transformed_bounding_box(
-        app: &DemoLensApp,
+        app: &CopperForgeApp,
         gerber_layer: &gerber_viewer::GerberLayer,
         layer_type: &LayerType,
     ) -> Result<BoundingBox, String> {
@@ -525,7 +525,7 @@ impl PngExporter {
     
     /// Calculate the appropriate view state for a single layer
     fn calculate_layer_view_state(
-        app: &DemoLensApp,
+        app: &CopperForgeApp,
         gerber_layer: &gerber_viewer::GerberLayer,
         viewport: &Rect,
         layer_type: &LayerType,
@@ -557,7 +557,7 @@ impl PngExporter {
     }
     
     /// Alternative approach: Export visible viewport area as PNG
-    pub fn export_current_view(_app: &DemoLensApp, _output_path: &PathBuf, _viewport: &Rect) -> Result<(), String> {
+    pub fn export_current_view(_app: &CopperForgeApp, _output_path: &PathBuf, _viewport: &Rect) -> Result<(), String> {
         // This would require integration with egui's rendering system
         // For now, we'll suggest using the built-in screenshot functionality
         Err("Use your OS screenshot tool to capture the current view. Full PNG export will be implemented in a future version.".to_string())

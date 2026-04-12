@@ -18,6 +18,6 @@ pub mod project_manager;
 pub mod ui;
 pub mod app;
 
-// Re-export DemoLensApp from app module
-pub use app::DemoLensApp;
+// Re-export CopperForgeApp from app module
+pub use app::CopperForgeApp;
 

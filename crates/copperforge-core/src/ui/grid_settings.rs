@@ -1,11 +1,11 @@
-use crate::{DemoLensApp, project::constants::LOG_TYPE_GRID, display::grid::{get_grid_status, GridStatus}};
+use crate::{CopperForgeApp, project::constants::LOG_TYPE_GRID, display::grid::{get_grid_status, GridStatus}};
 use crate::ecs::{UnitsResource, mm_to_nm, nm_to_mm, mils_to_nm, nm_to_mils};
 use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
 
 pub fn show_grid_panel<'a>(
     ui: &mut egui::Ui, 
-    app: &'a mut DemoLensApp,
+    app: &'a mut CopperForgeApp,
     logger_state: &'a Dynamic<ReactiveEventLoggerState>,
     log_colors: &'a Dynamic<LogColors>
 ) {

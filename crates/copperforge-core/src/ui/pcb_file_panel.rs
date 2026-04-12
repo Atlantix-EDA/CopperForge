@@ -1,4 +1,4 @@
-use crate::DemoLensApp;
+use crate::CopperForgeApp;
 use crate::project::ProjectState;
 use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
@@ -8,7 +8,7 @@ use std::process::Command;
 /// Show the PCB file management panel
 pub fn show_pcb_file_panel<'a>(
     ui: &mut egui::Ui,
-    app: &'a mut DemoLensApp,
+    app: &'a mut CopperForgeApp,
     logger_state: &'a Dynamic<ReactiveEventLoggerState>,
     log_colors: &'a Dynamic<LogColors>,
 ) {
@@ -40,7 +40,7 @@ pub fn show_pcb_file_panel<'a>(
 /// Show PCB file management section
 fn show_pcb_file_section(
     ui: &mut egui::Ui,
-    app: &mut DemoLensApp,
+    app: &mut CopperForgeApp,
     logger: &ReactiveEventLogger,
 ) {
     // Auto-generation settings
@@ -331,7 +331,7 @@ fn generate_gerbers_from_pcb(pcb_path: &Path, logger: &ReactiveEventLogger) -> O
     None
 }
 
-fn load_gerbers_into_viewer(app: &mut DemoLensApp, gerber_dir: &Path, logger: &ReactiveEventLogger) {
+fn load_gerbers_into_viewer(app: &mut CopperForgeApp, gerber_dir: &Path, logger: &ReactiveEventLogger) {
     logger.log_info("Clearing existing gerber layers...");
     crate::ecs::clear_all_layers_system(&mut app.ecs_world);
 

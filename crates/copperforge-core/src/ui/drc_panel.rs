@@ -1,11 +1,11 @@
-use crate::{DemoLensApp, project::constants::LOG_TYPE_DRC, ecs::LayerType};
+use crate::{CopperForgeApp, project::constants::LOG_TYPE_DRC, ecs::LayerType};
 use crate::drc_operations::TraceQualityType;
 use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
 
 pub fn show_drc_panel<'a>(
     ui: &mut egui::Ui, 
-    app: &'a mut DemoLensApp,
+    app: &'a mut CopperForgeApp,
     logger_state: &'a Dynamic<ReactiveEventLoggerState>,
     log_colors: &'a Dynamic<LogColors>
 ) {

@@ -1,4 +1,4 @@
-use crate::DemoLensApp;
+use crate::CopperForgeApp;
 use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState};
 use crate::event_logger::LogColors;
 use egui_mobius_reactive::Dynamic;
@@ -209,7 +209,7 @@ impl BomPanelState {
 /// Show the BOM panel
 pub fn show_bom_panel(
     ui: &mut egui::Ui,
-    app: &mut DemoLensApp,
+    app: &mut CopperForgeApp,
     logger_state: &Dynamic<ReactiveEventLoggerState>,
     log_colors: &Dynamic<LogColors>,
 ) {

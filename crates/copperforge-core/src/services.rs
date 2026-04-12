@@ -1,8 +1,8 @@
 //! Shared domain services accessible by all citizen panels.
 //!
-//! This struct will replace the flat fields on `DemoLensApp` once the
+//! This struct will replace the flat fields on `CopperForgeApp` once the
 //! migration to citizen panels is complete. Panels receive `&SharedServices`
-//! (read) or `&mut SharedServices` (write) instead of `&mut DemoLensApp`.
+//! (read) or `&mut SharedServices` (write) instead of `&mut CopperForgeApp`.
 
 use std::path::PathBuf;
 

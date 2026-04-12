@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use crate::DemoLensApp;
+use crate::CopperForgeApp;
 use crate::ecs::{UnitsResource, mm_to_nm, nm_to_mils};
 use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState};
 use crate::event_logger::LogColors;
@@ -346,14 +346,14 @@ fn generate_description(footprint: &FootprintData) -> String {
 
 /// Show the BOM panel
 /// Helper to get units resource from app
-fn get_units(app: &DemoLensApp) -> &UnitsResource {
+fn get_units(app: &CopperForgeApp) -> &UnitsResource {
     app.ecs_world.get_resource::<UnitsResource>()
         .expect("UnitsResource should exist")
 }
 
 pub fn show_bom_panel(
     ui: &mut egui::Ui,
-    app: &mut DemoLensApp,
+    app: &mut CopperForgeApp,
     logger_state: &Dynamic<ReactiveEventLoggerState>,
     log_colors: &Dynamic<LogColors>,
 ) {

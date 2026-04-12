@@ -1,4 +1,4 @@
-use crate::DemoLensApp;
+use crate::CopperForgeApp;
 use crate::ecs::UnitsResource;
 use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
@@ -7,7 +7,7 @@ use chrono::Local;
 
 pub fn show_settings_panel<'a>(
     ui: &mut egui::Ui,
-    app: &'a mut DemoLensApp,
+    app: &'a mut CopperForgeApp,
     logger_state: &'a Dynamic<ReactiveEventLoggerState>,
     log_colors: &'a Dynamic<LogColors>,
 ) {

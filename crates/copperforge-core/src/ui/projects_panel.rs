@@ -1,4 +1,4 @@
-use crate::DemoLensApp;
+use crate::CopperForgeApp;
 use crate::project_manager::ProjectManagerState;
 use crate::project_manager::database::ProjectMetadata;
 use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
@@ -9,7 +9,7 @@ use egui_ltreeview::{TreeView, Action};
 /// Show the projects database panel with tree view layout
 pub fn show_projects_panel<'a>(
     ui: &mut egui::Ui,
-    app: &'a mut DemoLensApp,
+    app: &'a mut CopperForgeApp,
     logger_state: &'a Dynamic<ReactiveEventLoggerState>,
     log_colors: &'a Dynamic<LogColors>,
 ) {

@@ -1,10 +1,10 @@
-use crate::{DemoLensApp, ecs::{LayerType, Side}};
+use crate::{CopperForgeApp, ecs::{LayerType, Side}};
 use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use eframe::emath::Vec2;
 use egui_mobius_reactive::*; 
 
 pub fn show_layers_panel<'a>(    ui: &mut egui::Ui, 
-    app: &'a mut DemoLensApp,
+    app: &'a mut CopperForgeApp,
     logger_state: &'a Dynamic<ReactiveEventLoggerState>,
     log_colors: &'a Dynamic<LogColors>) {
     let logger = ReactiveEventLogger::with_colors(logger_state, log_colors);

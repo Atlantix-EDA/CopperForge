@@ -1,6 +1,7 @@
-use crate::DemoLensApp;
+use crate::CopperForgeApp;
 use crate::ui;
 use crate::ecs::{UnitsResource, mm_to_nm, nm_to_mm, mils_to_nm, nm_to_mils};
+use egui_citizen::message::CitizenId;
 
 use eframe::emath::{Rect, Vec2};
 use eframe::epaint::Color32;
@@ -33,8 +34,25 @@ pub enum TabKind {
     BOM,
 }
 
+impl TabKind {
+    /// Map each tab to its citizen ID.
+    pub fn citizen_id(&self) -> CitizenId {
+        match self {
+            TabKind::ViewSettings => CitizenId::new("view_settings"),
+            TabKind::DRC => CitizenId::new("drc"),
+            TabKind::GerberView => CitizenId::new("gerber_view"),
+            TabKind::EventLog => CitizenId::new("event_log"),
+            TabKind::Project => CitizenId::new("project"),
+            TabKind::Projects => CitizenId::new("projects"),
+            TabKind::PCBFile => CitizenId::new("pcb_file"),
+            TabKind::Settings => CitizenId::new("settings"),
+            TabKind::BOM => CitizenId::new("bom"),
+        }
+    }
+}
+
 pub struct TabParams<'a> {
-    pub app: &'a mut DemoLensApp,
+    pub app: &'a mut CopperForgeApp,
 }
 
 /// Tab container struct for DockArea
@@ -51,7 +69,7 @@ pub struct Tab {
 
 impl Tab {
     /// Helper to get units resource from app
-    fn get_units(app: &DemoLensApp) -> &UnitsResource {
+    fn get_units(app: &CopperForgeApp) -> &UnitsResource {
         app.ecs_world.get_resource::<UnitsResource>()
             .expect("UnitsResource should exist")
     }
@@ -132,7 +150,7 @@ impl Tab {
         }
     }
 
-    fn render_gerber_view(&self, ui: &mut egui::Ui, app: &mut DemoLensApp) {
+    fn render_gerber_view(&self, ui: &mut egui::Ui, app: &mut CopperForgeApp) {
         // Render top controls
         render_controls(ui, app);
         ui.separator();
@@ -146,7 +164,7 @@ impl Tab {
     }
 }
 
-fn render_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
+fn render_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
     ui.vertical(|ui| {
         // First row: Main view controls
         ui.horizontal(|ui| {
@@ -170,7 +188,7 @@ fn render_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
     });
 }
 
-fn render_quadrant_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
+fn render_quadrant_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
     if ui.checkbox(&mut app.display_manager.quadrant_view_enabled, "Quadrant View").clicked() {
         crate::ecs::mark_coordinates_dirty_ecs(&mut app.ecs_world);
         app.needs_initial_view = true;
@@ -215,7 +233,7 @@ fn render_quadrant_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
     }
 }
 
-fn render_layer_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
+fn render_layer_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
     let flip_text = if app.display_manager.showing_top { "🔄 Flip to Bottom (F)" } else { "🔄 Flip to Top (F)" };
     if ui.button(flip_text).clicked() {
         app.display_manager.showing_top = !app.display_manager.showing_top;
@@ -249,7 +267,7 @@ fn render_layer_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
     }
 }
 
-fn render_transform_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
+fn render_transform_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
     // Rotate button
     if ui.button("🔄 Rotate (R)").clicked() {
         app.rotation_degrees = (app.rotation_degrees + 90.0) % 360.0;
@@ -333,7 +351,7 @@ fn render_transform_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
     }
 }
 
-fn render_grid_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
+fn render_grid_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
     ui.label("Grid:");
     let grid_spacings_mils = [100.0, 50.0, 25.0, 10.0, 5.0, 2.0, 1.0];
     let grid_spacings_mm = [2.54, 1.27, 0.635, 0.254, 0.127, 0.0508, 0.0254];
@@ -399,7 +417,7 @@ fn render_grid_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
     ui.checkbox(&mut app.grid_settings.snap_enabled, "🧲 Snap to Grid");
 }
 
-fn render_ruler_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
+fn render_ruler_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
     ui.label("📏 Ruler Tool:");
     
     let ruler_button_text = if app.ruler_active { "📏 Ruler ✓" } else { "📏 Ruler" };
@@ -462,7 +480,7 @@ fn render_ruler_controls(ui: &mut egui::Ui, app: &mut DemoLensApp) {
     }
 }
 
-fn setup_viewport(ui: &mut egui::Ui, app: &mut DemoLensApp) -> (Rect, egui::Response) {
+fn setup_viewport(ui: &mut egui::Ui, app: &mut CopperForgeApp) -> (Rect, egui::Response) {
     ui.ctx().request_repaint();
     
     let available_size = ui.available_size();
@@ -488,7 +506,7 @@ fn setup_viewport(ui: &mut egui::Ui, app: &mut DemoLensApp) -> (Rect, egui::Resp
     (viewport, response)
 }
 
-fn handle_viewport_interactions(ui: &mut egui::Ui, app: &mut DemoLensApp, viewport: &Rect, response: &egui::Response) {
+fn handle_viewport_interactions(ui: &mut egui::Ui, app: &mut CopperForgeApp, viewport: &Rect, response: &egui::Response) {
     let mouse_pos_screen = ui.input(|i| i.pointer.hover_pos());
     
     // Handle zoom window
@@ -604,7 +622,7 @@ fn handle_viewport_interactions(ui: &mut egui::Ui, app: &mut DemoLensApp, viewpo
     }
 }
 
-fn handle_zoom_window(ui: &mut egui::Ui, app: &mut DemoLensApp, viewport: &Rect, mouse_pos_screen: Option<Pos2>, response: &egui::Response) {
+fn handle_zoom_window(ui: &mut egui::Ui, app: &mut CopperForgeApp, viewport: &Rect, mouse_pos_screen: Option<Pos2>, response: &egui::Response) {
     let right_button = egui::PointerButton::Secondary;
     
     // Start zoom window
@@ -659,7 +677,7 @@ fn handle_zoom_window(ui: &mut egui::Ui, app: &mut DemoLensApp, viewport: &Rect,
     }
 }
 
-fn handle_mouse_wheel_zoom(ui: &mut egui::Ui, app: &mut DemoLensApp, _viewport: &Rect, response: &egui::Response) {
+fn handle_mouse_wheel_zoom(ui: &mut egui::Ui, app: &mut CopperForgeApp, _viewport: &Rect, response: &egui::Response) {
     if !response.contains_pointer() {
         return;
     }
@@ -701,7 +719,7 @@ fn handle_mouse_wheel_zoom(ui: &mut egui::Ui, app: &mut DemoLensApp, _viewport: 
     }
 }
 
-fn render_gerber_content(ui: &mut egui::Ui, app: &mut DemoLensApp, viewport: &Rect) {
+fn render_gerber_content(ui: &mut egui::Ui, app: &mut CopperForgeApp, viewport: &Rect) {
     let painter = ui.painter_at(*viewport);
     painter.rect_filled(*viewport, 0.0, ui.visuals().extreme_bg_color);
     
@@ -733,7 +751,7 @@ fn render_gerber_content(ui: &mut egui::Ui, app: &mut DemoLensApp, viewport: &Re
 }
 
 
-fn render_overlays(app: &mut DemoLensApp, painter: &Painter, viewport: &Rect) {
+fn render_overlays(app: &mut CopperForgeApp, painter: &Painter, viewport: &Rect) {
     let screen_radius = MARKER_RADIUS * app.view_state.scale;
     
     // Origin marker - show only the active origin point
@@ -773,7 +791,7 @@ fn render_overlays(app: &mut DemoLensApp, painter: &Painter, viewport: &Rect) {
     render_zoom_window(app, painter);
 }
 
-fn render_corner_overlays(app: &mut DemoLensApp, painter: &Painter) {
+fn render_corner_overlays(app: &mut CopperForgeApp, painter: &Painter) {
     if !app.drc_manager.corner_overlay_shapes.is_empty() {
         let overlay_color = Color32::from_rgb(0, 255, 0);
         
@@ -820,7 +838,7 @@ fn render_corner_overlays(app: &mut DemoLensApp, painter: &Painter) {
     }
 }
 
-fn render_drc_violations(app: &mut DemoLensApp, painter: &Painter) {
+fn render_drc_violations(app: &mut CopperForgeApp, painter: &Painter) {
     for violation in &app.drc_manager.violations {
         let violation_pos = Position::new(violation.x as f64, violation.y as f64);
         let mut transformed_pos = violation_pos;
@@ -856,7 +874,7 @@ fn render_drc_violations(app: &mut DemoLensApp, painter: &Painter) {
     }
 }
 
-fn render_board_dimensions(app: &mut DemoLensApp, painter: &Painter, viewport: &Rect) {
+fn render_board_dimensions(app: &mut CopperForgeApp, painter: &Painter, viewport: &Rect) {
     if let Some((_entity, _layer_info, gerber_data, _visibility)) = crate::ecs::get_layer_data(&mut app.ecs_world, crate::ecs::LayerType::MechanicalOutline) {
         let bbox = gerber_data.0.bounding_box();
         let width_mm = bbox.width();
@@ -884,7 +902,7 @@ fn render_board_dimensions(app: &mut DemoLensApp, painter: &Painter, viewport: &
     }
 }
 
-fn render_zoom_window(app: &mut DemoLensApp, painter: &Painter) {
+fn render_zoom_window(app: &mut CopperForgeApp, painter: &Painter) {
     if app.zoom_window_dragging {
         if let (Some(start), Some(current)) = (app.zoom_window_start, painter.ctx().input(|i| i.pointer.hover_pos())) {
             let zoom_rect = Rect::from_two_pos(start, current);
@@ -917,7 +935,7 @@ fn render_zoom_window(app: &mut DemoLensApp, painter: &Painter) {
     }
 }
 
-fn render_ruler(app: &mut DemoLensApp, painter: &Painter) {
+fn render_ruler(app: &mut CopperForgeApp, painter: &Painter) {
     // Render active ruler if active
     if app.ruler_active {
         render_ruler_measurement(app, painter, app.ruler_start, app.ruler_end, true);
@@ -928,7 +946,7 @@ fn render_ruler(app: &mut DemoLensApp, painter: &Painter) {
     }
 }
 
-fn render_ruler_measurement(app: &mut DemoLensApp, painter: &Painter, start_opt: Option<nalgebra::Point2<f64>>, end_opt: Option<nalgebra::Point2<f64>>, is_active: bool) {
+fn render_ruler_measurement(app: &mut CopperForgeApp, painter: &Painter, start_opt: Option<nalgebra::Point2<f64>>, end_opt: Option<nalgebra::Point2<f64>>, is_active: bool) {
     // Draw ruler points and line
     if let Some(start) = start_opt {
         let start_screen = app.view_state.gerber_to_screen_coords(start);
@@ -1015,7 +1033,7 @@ fn render_ruler_measurement(app: &mut DemoLensApp, painter: &Painter, start_opt:
     }
 }
 
-fn handle_ruler_interaction(ui: &mut egui::Ui, app: &mut DemoLensApp, response: &egui::Response) {
+fn handle_ruler_interaction(ui: &mut egui::Ui, app: &mut CopperForgeApp, response: &egui::Response) {
     if !app.ruler_active {
         return;
     }
@@ -1071,7 +1089,7 @@ fn handle_ruler_interaction(ui: &mut egui::Ui, app: &mut DemoLensApp, response: 
     }
 }
 
-fn render_cursor_info(ui: &mut egui::Ui, app: &mut DemoLensApp, painter: &Painter, viewport: &Rect) {
+fn render_cursor_info(ui: &mut egui::Ui, app: &mut CopperForgeApp, painter: &Painter, viewport: &Rect) {
     // Hide cursor coordinates when ruler mode is active
     if app.ruler_active {
         return;
@@ -1166,7 +1184,7 @@ fn render_cursor_info(ui: &mut egui::Ui, app: &mut DemoLensApp, painter: &Painte
     );
 }
 
-fn render_measurement_crosshair(app: &mut DemoLensApp, painter: &Painter) {
+fn render_measurement_crosshair(app: &mut CopperForgeApp, painter: &Painter) {
     // Skip if in origin setting mode
     if app.setting_origin_mode {
         return;
@@ -1222,7 +1240,8 @@ fn draw_measurement_crosshair(painter: &Painter, center: Pos2, color: Color32) {
 }
 
 pub struct TabViewer<'a> {
-    pub app: &'a mut DemoLensApp,
+    pub app: &'a mut CopperForgeApp,
+    pub dispatcher: &'a mut egui_citizen::Dispatcher,
 }
 
 impl<'a> egui_dock::TabViewer for TabViewer<'a> {
@@ -1230,6 +1249,13 @@ impl<'a> egui_dock::TabViewer for TabViewer<'a> {
 
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
         tab.title().into()
+    }
+
+    fn on_tab_button(&mut self, tab: &mut Self::Tab, response: &egui::Response) {
+        if response.clicked() {
+            let id = tab.kind.citizen_id();
+            self.dispatcher.activate(&id);
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
@@ -1240,7 +1266,7 @@ impl<'a> egui_dock::TabViewer for TabViewer<'a> {
     }
 }
 
-fn render_zoom_display(ui: &mut egui::Ui, app: &mut DemoLensApp) {
+fn render_zoom_display(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
     // Get zoom info from ECS, fallback to legacy ViewState
     let (zoom_percentage, scale_factor) = if let Some(zoom_resource) = app.ecs_world.get_resource::<crate::ecs::ZoomResource>() {
         (zoom_resource.get_zoom_percentage(), zoom_resource.scale)

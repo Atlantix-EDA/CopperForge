@@ -29,7 +29,11 @@ use crate::project::{load_demo_gerber, ProjectManager, ProjectState, manager::Pr
 use crate::display::GridSettings;
 
 /// The main application struct
-pub struct DemoLensApp {
+pub struct CopperForgeApp {
+    // ── Citizen infrastructure ────────────────────────────────
+    pub dispatcher: egui_citizen::Dispatcher,
+    pub app_messages: Vec<crate::messages::AppMessage>,
+
     // Legacy single layer support (for compatibility)
     pub gerber_layer: GerberLayer,
     pub view_state: ViewState,
@@ -117,7 +121,7 @@ pub struct DemoLensApp {
     pub last_picked_projects_directory: Option<PathBuf>,
 }
 
-impl Drop for DemoLensApp {
+impl Drop for CopperForgeApp {
     fn drop(&mut self) {
         // Save dock state when application closes
         self.save_dock_state();
@@ -126,7 +130,7 @@ impl Drop for DemoLensApp {
     }
 }
 
-impl DemoLensApp {
+impl CopperForgeApp {
     /// Sync units between legacy global_units_mils and ECS UnitsResource
     pub fn sync_units_to_ecs(&mut self) {
         if let Some(mut units_resource) = self.ecs_world.get_resource_mut::<ecs::UnitsResource>() {
@@ -200,8 +204,25 @@ impl DemoLensApp {
         
         // Setup ECS world without default gerbers (pure ECS now)
         let ecs_world = ecs::setup_ecs_world();
-        
+
+        // Register all citizen panels with the dispatcher
+        let mut dispatcher = egui_citizen::Dispatcher::new();
+        use egui_citizen::message::CitizenId;
+        for id in [
+            "gerber_view", "view_settings", "drc", "project", "projects",
+            "pcb_file", "settings", "bom", "event_log",
+            "shell", "terminal", "logger",
+        ] {
+            dispatcher.register(CitizenId::new(id));
+        }
+        // Activate gerber_view by default
+        dispatcher.activate(&CitizenId::new("gerber_view"));
+        // Drain initialization messages
+        let _ = dispatcher.drain_messages();
+
         let mut app = Self {
+            dispatcher,
+            app_messages: Vec::new(),
             gerber_layer,
             view_state: ViewState::default(),
             ui_state: UiState::default(),
@@ -534,26 +555,30 @@ impl DemoLensApp {
         let mut dock_state = self.dock_state.clone();
         
         // Create the dock layout and tab viewer
-        let mut tab_viewer = TabViewer { app: self };
-        
-        // Create custom style to match panel colors
-        let mut style = Style::from_egui(ui.ctx().style().as_ref());
-        style.dock_area_padding = None;
-        style.tab_bar.fill_tab_bar = true;
-        
-        // Show the dock area but filtered to exclude Project tab
-        DockArea::new(&mut dock_state)
-            .style(style)
-            .show_add_buttons(false)
-            .show_close_buttons(true)
-            .show(ui.ctx(), &mut tab_viewer);
-            
+        let mut dispatcher = std::mem::take(&mut self.dispatcher);
+        {
+            let mut tab_viewer = TabViewer { app: self, dispatcher: &mut dispatcher };
+
+            // Create custom style to match panel colors
+            let mut style = Style::from_egui(ui.ctx().style().as_ref());
+            style.dock_area_padding = None;
+            style.tab_bar.fill_tab_bar = true;
+
+            // Show the dock area but filtered to exclude Project tab
+            DockArea::new(&mut dock_state)
+                .style(style)
+                .show_add_buttons(false)
+                .show_close_buttons(true)
+                .show(ui.ctx(), &mut tab_viewer);
+        }
+        self.dispatcher = dispatcher;
+
         // Save the updated dock state back to the app
         self.dock_state = dock_state;
     }
 }
 
-impl DemoLensApp {
+impl CopperForgeApp {
     fn save_dock_state(&self) {
         if let Some(config_dir) = dirs::config_dir() {
             let copperforge_dir = config_dir.join("copperforge");
@@ -654,7 +679,7 @@ impl DemoLensApp {
     }
 }
 
-/// Implement the eframe::App trait for DemoLensApp
+/// Implement the eframe::App trait for CopperForgeApp
 ///
 /// This implementation contains the main event loop for the application, including
 /// handling user input, updating the UI, and rendering the Gerber layer. It also contains
@@ -663,7 +688,7 @@ impl DemoLensApp {
 /// and rendering the Gerber layer. It also handles user input and updates the logger
 /// state. The `update` method is where most of the application logic resides.
 /// 
-impl eframe::App for DemoLensApp {
+impl eframe::App for CopperForgeApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Handle system info button clicked
         let show_system_info_clicked = ctx.memory(|mem| {
@@ -992,17 +1017,28 @@ impl eframe::App for DemoLensApp {
         
         // Main dock area below the ribbon
         let mut dock_state = self.dock_state.clone();
-        let mut tab_viewer = TabViewer { app: self };
-        let mut style = Style::from_egui(ctx.style().as_ref());
-        style.dock_area_padding = None;
-        style.tab_bar.fill_tab_bar = true;
-        
-        DockArea::new(&mut dock_state)
-            .style(style)
-            .show_add_buttons(true)
-            .show_close_buttons(true)
-            .show(ctx, &mut tab_viewer);
-            
+        let mut dispatcher = std::mem::take(&mut self.dispatcher);
+        {
+            let mut tab_viewer = TabViewer {
+                app: self,
+                dispatcher: &mut dispatcher,
+            };
+            let mut style = Style::from_egui(ctx.style().as_ref());
+            style.dock_area_padding = None;
+            style.tab_bar.fill_tab_bar = true;
+
+            DockArea::new(&mut dock_state)
+                .style(style)
+                .show_add_buttons(true)
+                .show_close_buttons(true)
+                .show(ctx, &mut tab_viewer);
+        }
+
+        // Drain citizen lifecycle messages
+        for msg in dispatcher.drain_messages() {
+            self.app_messages.push(crate::messages::AppMessage::Citizen(msg));
+        }
+        self.dispatcher = dispatcher;
         self.dock_state = dock_state;
         
         // Show About modal if requested
