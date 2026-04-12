@@ -14,13 +14,15 @@
 
 Model on Stencil implementation (stencil-ide/backend/src/bom.rs).
 
-### BOM Table Panel
+### BOM Table Panel (ref: GitHub issue #6)
 - [ ] Group by part type (same value+footprint = one row with quantity)
 - [ ] Proper headers: Item, Ref Des, Part, Description, Library, X, Y, Layer
 - [ ] Column toggle checkboxes (show/hide each column)
 - [ ] Natural sort on reference designators
 - [ ] CSV export
 - [ ] Filter by text, component type
+- [ ] Click-to-sort columns (reference, value, footprint, x, y)
+- [ ] Evaluate: sort on egui_extras::TableBuilder vs egui_deferred_table dependency
 
 ### BOM Analysis Panel (separate citizen tab with egui_plot)
 - [ ] Component type distribution (bar chart: R, C, U, J counts)
