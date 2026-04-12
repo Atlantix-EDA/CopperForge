@@ -48,6 +48,7 @@ Model on Stencil implementation (stencil-ide/backend/src/bom.rs).
 - [ ] Right-click context menu on project rows: Create / Open / Update / Delete
 - [ ] Modal dialog for project details (name, description, PCB path, author, etc.)
 - [ ] Description and metadata changes must persist on save (currently lost)
+- [ ] Fix created_at / last_modified timestamps (created date shows later than revised date)
 - [ ] Remove the separate Project tab — all project management in one place
 
 ### New Panels
