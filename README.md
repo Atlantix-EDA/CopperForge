@@ -25,7 +25,7 @@ real projects.
 ![alt text](assets/media/KiForge_usage.gif)
 - **Project management** -- create or reference KiCad Projects.
 - **Gerber processing** -- generate, load and inspect gerber files.
-- **BOM extraction** -- connect to a running KiCad instance via IPC, pull the bill of materials live
+- **BOM extraction** -- parse .kicad_pcb files directly for bill of materials via kiparse
 - **DRC visualization** -- basic design rule check results on gerber layers
 
 Built with Rust and [egui](https://github.com/emilk/egui). Uses the [egui-citizen](https://github.com/saturn77/egui-citizen) framework
@@ -45,13 +45,6 @@ CopperForgeApp
   +-- Panels (citizen structs: GerberView, BOM, DRC, Projects, ...)
 ```
 
-### Crate structure
-
-| Crate | Purpose |
-|-------|---------|
-| `copperforge-core` | App logic, panels, layer store, domain modules |
-| `kicad-ecs` | KiCad IPC client (protobuf API, BOM extraction) |
-
 ### Dependencies
 
 | Category | Crates |
@@ -59,7 +52,7 @@ CopperForgeApp
 | UI | egui 0.33, eframe 0.33, egui_dock 0.18 |
 | Citizen pattern | egui_citizen, egui_mobius_reactive |
 | Gerber handling | gerber_viewer 0.5, gerber_parser 0.4, gerber-types 0.7 |
-| KiCad IPC | kicad-ecs (protobuf, nng sockets) |
+| BOM parsing | kiparse (from Atlantix-EDA/atlantix-eda) |
 | Storage | sled (project database) |
 
 
@@ -69,7 +62,7 @@ CopperForge detects KiCad installed via PATH, Flatpak, or Snap. Gerber filename 
 
 ## Building
 
-Requires Rust 1.85+ and cmake (for kicad-ecs nng dependency).
+Requires Rust 1.85+.
 
 ```bash
 git clone https://github.com/Atlantix-EDA/CopperForge.git
