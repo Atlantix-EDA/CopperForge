@@ -8,6 +8,7 @@ pub mod event_logger;
 pub mod export;
 pub mod layer_store;
 pub mod messages;
+pub mod panels;
 pub mod services;
 // layer_operations module removed - all functionality moved to ECS
 pub mod navigation;
