@@ -88,6 +88,13 @@ impl UnitsState {
             _ => DisplayUnit::Mils,
         };
     }
+    pub fn unit_suffix(&self) -> &str {
+        match self.display_unit {
+            DisplayUnit::Millimeters => "mm",
+            DisplayUnit::Mils => "mils",
+            _ => "mm",
+        }
+    }
 }
 
 // ── Construction ─────────────────────────────────────────────────────────

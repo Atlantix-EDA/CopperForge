@@ -44,8 +44,6 @@ notify = { workspace = true }
 regex = { workspace = true }
 once_cell = { workspace = true }
 
-# ECS framework
-bevy_ecs = { workspace = true }
 
 # KiCad IPC protocol for BOM tab
 kicad-ecs = { path = "../kicad-ecs" }

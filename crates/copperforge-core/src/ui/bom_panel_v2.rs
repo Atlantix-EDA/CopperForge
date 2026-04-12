@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 use crate::CopperForgeApp;
-use crate::ecs::{UnitsResource, mm_to_nm, nm_to_mils};
+use crate::layer_store::{mm_to_nm, nm_to_mils};
 use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState};
 use crate::event_logger::LogColors;
 use egui_mobius_reactive::*;
@@ -345,10 +345,9 @@ fn generate_description(footprint: &FootprintData) -> String {
 // This follows the pattern from the real_kicad_ecs example
 
 /// Show the BOM panel
-/// Helper to get units resource from app
-fn get_units(app: &CopperForgeApp) -> &UnitsResource {
-    app.ecs_world.get_resource::<UnitsResource>()
-        .expect("UnitsResource should exist")
+/// Helper to get units from app
+fn get_units(app: &CopperForgeApp) -> &crate::layer_store::UnitsState {
+    &app.layer_store.units
 }
 
 pub fn show_bom_panel(
@@ -643,7 +642,7 @@ fn render_component_row(mut row: egui_extras::TableRow, component: &BomComponent
     });
     row.col(|ui| {
         let x_text = if is_mils {
-            let x_nm = mm_to_nm(component.x_location as f32);
+            let x_nm = mm_to_nm(component.x_location);
             format!("{:.0}", nm_to_mils(x_nm))
         } else {
             format!("{:.2}", component.x_location)
@@ -652,7 +651,7 @@ fn render_component_row(mut row: egui_extras::TableRow, component: &BomComponent
     });
     row.col(|ui| {
         let y_text = if is_mils {
-            let y_nm = mm_to_nm(component.y_location as f32);
+            let y_nm = mm_to_nm(component.y_location);
             format!("{:.0}", nm_to_mils(y_nm))
         } else {
             format!("{:.2}", component.y_location)
@@ -687,7 +686,7 @@ fn render_component_row_clickable(mut row: egui_extras::TableRow, component: &Bo
     });
     row.col(|ui| {
         let x_text = if is_mils {
-            let x_nm = mm_to_nm(component.x_location as f32);
+            let x_nm = mm_to_nm(component.x_location);
             format!("{:.0}", nm_to_mils(x_nm))
         } else {
             format!("{:.2}", component.x_location)
@@ -697,7 +696,7 @@ fn render_component_row_clickable(mut row: egui_extras::TableRow, component: &Bo
     });
     row.col(|ui| {
         let y_text = if is_mils {
-            let y_nm = mm_to_nm(component.y_location as f32);
+            let y_nm = mm_to_nm(component.y_location);
             format!("{:.0}", nm_to_mils(y_nm))
         } else {
             format!("{:.2}", component.y_location)
@@ -783,7 +782,7 @@ fn show_bom_table(ui: &mut egui::Ui, components: &[BomComponent], is_mils: bool)
                     });
                     row.col(|ui| {
                         let x_text = if is_mils {
-                            let x_nm = mm_to_nm(component.x_location as f32);
+                            let x_nm = mm_to_nm(component.x_location);
                             format!("{:.0}", nm_to_mils(x_nm))
                         } else {
                             format!("{:.2}", component.x_location)
@@ -792,7 +791,7 @@ fn show_bom_table(ui: &mut egui::Ui, components: &[BomComponent], is_mils: bool)
                     });
                     row.col(|ui| {
                         let y_text = if is_mils {
-                            let y_nm = mm_to_nm(component.y_location as f32);
+                            let y_nm = mm_to_nm(component.y_location);
                             format!("{:.0}", nm_to_mils(y_nm))
                         } else {
                             format!("{:.2}", component.y_location)
@@ -813,49 +812,4 @@ fn show_bom_table(ui: &mut egui::Ui, components: &[BomComponent], is_mils: bool)
         });
 }
 
-/// ECS Component for PCB components (to integrate with KiForge's ECS)
-#[derive(Component, Debug, Clone)]
-pub struct PcbComponent {
-    pub reference: String,
-    pub value: String,
-    pub footprint: String,
-    pub description: String,
-}
-
-#[derive(Component, Debug, Clone)]
-pub struct PcbPosition {
-    pub x: f64,
-    pub y: f64,
-    pub rotation: f64,
-}
-
-/// Update ECS world with BOM components
-pub fn update_ecs_with_bom_components(world: &mut World, components: &[BomComponent]) {
-    // Clear existing PCB components
-    let mut entities_to_remove = Vec::new();
-    let mut query = world.query::<(Entity, &PcbComponent)>();
-    for (entity, _) in query.iter(world) {
-        entities_to_remove.push(entity);
-    }
-    
-    for entity in entities_to_remove {
-        world.despawn(entity);
-    }
-    
-    // Add new components
-    for component in components {
-        world.spawn((
-            PcbComponent {
-                reference: component.reference.clone(),
-                value: component.value.clone(),
-                footprint: component.footprint.clone(),
-                description: component.description.clone(),
-            },
-            PcbPosition {
-                x: component.x_location,
-                y: component.y_location,
-                rotation: component.orientation,
-            },
-        ));
-    }
-}
+// BOM ECS integration removed — layer_store replaces bevy_ecs in copperforge-core.

@@ -333,9 +333,9 @@ fn generate_gerbers_from_pcb(pcb_path: &Path, logger: &ReactiveEventLogger) -> O
 
 fn load_gerbers_into_viewer(app: &mut CopperForgeApp, gerber_dir: &Path, logger: &ReactiveEventLogger) {
     logger.log_info("Clearing existing gerber layers...");
-    crate::ecs::clear_all_layers_system(&mut app.ecs_world);
+    app.layer_store.clear_all();
 
-    match crate::ecs::load_gerbers_from_directory_system(&mut app.ecs_world, gerber_dir) {
+    match app.layer_store.load_from_directory(gerber_dir) {
         Ok((loaded_count, unassigned_count)) => {
             if loaded_count > 0 {
                 logger.log_info(&format!("Successfully loaded {} gerber layers", loaded_count));

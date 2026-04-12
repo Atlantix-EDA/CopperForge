@@ -976,7 +976,6 @@ dependencies = [
 name = "copperforge-core"
 version = "0.2.1"
 dependencies = [
- "bevy_ecs",
  "bincode",
  "chrono",
  "chrono-tz",

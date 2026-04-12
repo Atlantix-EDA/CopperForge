@@ -19,7 +19,6 @@ use crate::platform::parameters::gui::VERSION;
 // Import new modules
 use crate::project;
 use crate::ui;
-use crate::ecs;
 use crate::project_manager;
 
 use crate::ui::{Tab, TabKind, TabViewer, initialize_and_show_banner, show_system_info};
@@ -60,8 +59,8 @@ pub struct CopperForgeApp {
     // Project management
     pub project_manager: ProjectManager,
     
-    // ECS World
-    pub ecs_world: bevy_ecs::world::World,
+    // Layer management (replaces ECS)
+    pub layer_store: crate::layer_store::LayerStore,
 
     // Dock state
     dock_state: DockState<Tab>,
@@ -130,60 +129,39 @@ impl Drop for CopperForgeApp {
 }
 
 impl CopperForgeApp {
-    /// Sync units between legacy global_units_mils and ECS UnitsResource
+    /// Sync units between legacy global_units_mils and layer_store
     pub fn sync_units_to_ecs(&mut self) {
-        if let Some(mut units_resource) = self.ecs_world.get_resource_mut::<ecs::UnitsResource>() {
-            if self.global_units_mils {
-                units_resource.set_mils();
-            } else {
-                units_resource.set_mm();
-            }
+        if self.global_units_mils {
+            self.layer_store.units.display_unit = crate::layer_store::DisplayUnit::Mils;
+        } else {
+            self.layer_store.units.display_unit = crate::layer_store::DisplayUnit::Millimeters;
         }
     }
-    
-    /// Sync units from ECS UnitsResource to legacy global_units_mils
+
+    /// Sync units from layer_store to legacy global_units_mils
     pub fn sync_units_from_ecs(&mut self) {
-        if let Some(units_resource) = self.ecs_world.get_resource::<ecs::UnitsResource>() {
-            self.global_units_mils = units_resource.is_mils();
-        }
+        self.global_units_mils = self.layer_store.units.is_mils();
     }
-    
-    /// Sync zoom from legacy view_state to ECS ZoomResource
+
+    /// Sync zoom from legacy view_state to layer_store
     pub fn sync_zoom_to_ecs(&mut self) {
-        if let Some(mut zoom_resource) = self.ecs_world.get_resource_mut::<ecs::ZoomResource>() {
-            zoom_resource.set_scale(self.view_state.scale);
-            zoom_resource.set_center(self.view_state.translation.x, self.view_state.translation.y);
-        }
+        self.layer_store.zoom.set_scale(self.view_state.scale);
+        self.layer_store.zoom.center_x = self.view_state.translation.x;
+        self.layer_store.zoom.center_y = self.view_state.translation.y;
     }
-    
-    /// Sync zoom from ECS ZoomResource to legacy view_state
+
+    /// Sync zoom from layer_store to legacy view_state
     pub fn sync_zoom_from_ecs(&mut self) {
-        if let Some(zoom_resource) = self.ecs_world.get_resource::<ecs::ZoomResource>() {
-            self.view_state.scale = zoom_resource.scale;
-            self.view_state.translation.x = zoom_resource.center_x;
-            self.view_state.translation.y = zoom_resource.center_y;
-        }
+        self.view_state.scale = self.layer_store.zoom.scale;
+        self.view_state.translation.x = self.layer_store.zoom.center_x;
+        self.view_state.translation.y = self.layer_store.zoom.center_y;
     }
-    
-    /// Render layers using ECS system
+
+    /// Render layers using layer_store
     pub fn render_layers_ecs(&mut self, painter: &egui::Painter) {
-        // Update view state resource
-        self.ecs_world.insert_resource(ecs::ViewStateResource {
-            view_state: self.view_state.clone(),
-            view_mode: ecs::ViewMode::Normal, // Will be updated based on display manager
-        });
-        
-        // Run ECS systems to update entity states
-        ecs::run_ecs_systems(&mut self.ecs_world, &self.display_manager, self.rotation_degrees);
-        
-        // Use the new ECS render system
-        ecs::execute_render_system(
-            &mut self.ecs_world,
-            painter,
-            self.view_state,
-            &self.display_manager,
-            true, // Use enhanced rendering with quadrant support
-        );
+        let view_state = self.view_state;
+        let rotation = self.rotation_degrees;
+        self.layer_store.render(painter, view_state, &self.display_manager, rotation);
     }
 
     pub fn new() -> Self {
@@ -201,8 +179,8 @@ impl CopperForgeApp {
         let log_colors = Dynamic::new(LogColors::default());
         let dock_state = Self::create_default_dock_state();
         
-        // Setup ECS world without default gerbers (pure ECS now)
-        let ecs_world = ecs::setup_ecs_world();
+        // Setup layer store (replaces ECS world)
+        let layer_store = crate::layer_store::LayerStore::default();
 
         // Register all citizen panels with the dispatcher
         let mut dispatcher = egui_citizen::Dispatcher::new();
@@ -234,7 +212,7 @@ impl CopperForgeApp {
             global_units_mils: false, // Default to mm
             grid_settings: GridSettings::default(),
             project_manager: ProjectManager::new(),
-            ecs_world,
+            layer_store,
             dock_state,
             config_path: dirs::config_dir()
                 .map(|d| d.join("copperforge"))
@@ -271,13 +249,11 @@ impl CopperForgeApp {
             app.use_24_hour_clock = project_config.use_24_hour_clock;
             app.global_units_mils = project_config.global_units_mils;
             
-            // Sync units with ECS resource
-            if let Some(mut units_resource) = app.ecs_world.get_resource_mut::<ecs::UnitsResource>() {
-                if app.global_units_mils {
-                    units_resource.set_mils();
-                } else {
-                    units_resource.set_mm();
-                }
+            // Sync units with layer store
+            if app.global_units_mils {
+                app.layer_store.units.display_unit = crate::layer_store::DisplayUnit::Mils;
+            } else {
+                app.layer_store.units.display_unit = crate::layer_store::DisplayUnit::Millimeters;
             }
             
             app.project_manager = ProjectManager::from_config(project_config);
@@ -308,8 +284,8 @@ impl CopperForgeApp {
     }
 
     pub fn reset_view(&mut self, viewport: Rect) {
-        // Find bounding box from all loaded layers using ECS
-        let combined_bbox = crate::ecs::get_combined_bounding_box(&mut self.ecs_world);
+        // Find bounding box from all loaded layers
+        let combined_bbox = self.layer_store.combined_bounding_box();
         
         // Fall back to demo gerber if no layers loaded
         let bbox = combined_bbox.unwrap_or_else(|| self.gerber_layer.bounding_box().clone());
@@ -385,12 +361,11 @@ impl CopperForgeApp {
 
         self.view_state.scale = scale;
         
-        // Update ECS zoom resource and set fit-to-view reference
-        if let Some(mut zoom_resource) = self.ecs_world.get_resource_mut::<ecs::ZoomResource>() {
-            zoom_resource.set_scale(scale);
-            zoom_resource.set_fit_to_view_scale(scale); // This scale becomes the 100% reference
-            zoom_resource.set_center(self.view_state.translation.x, self.view_state.translation.y);
-        }
+        // Update zoom state and set fit-to-view reference
+        self.layer_store.zoom.set_scale(scale);
+        self.layer_store.zoom.set_fit_to_view_scale(scale); // This scale becomes the 100% reference
+        self.layer_store.zoom.center_x = self.view_state.translation.x;
+        self.layer_store.zoom.center_y = self.view_state.translation.y;
         
         self.needs_initial_view = false;
     }
@@ -415,10 +390,9 @@ impl CopperForgeApp {
             viewport_center.y + (comp_y as f32 * self.view_state.scale),
         );
         
-        // Update ECS view state
-        if let Some(mut view_state_resource) = self.ecs_world.get_resource_mut::<ecs::ViewStateResource>() {
-            view_state_resource.view_state = self.view_state.clone();
-        }
+        // Sync zoom state
+        self.layer_store.zoom.center_x = self.view_state.translation.x;
+        self.layer_store.zoom.center_y = self.view_state.translation.y;
         
         // Log the action
         let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
@@ -706,9 +680,8 @@ impl eframe::App for CopperForgeApp {
         }
         
         // Only update coordinates when explicitly marked as dirty (not time-based)
-        if crate::ecs::are_coordinates_dirty(&self.ecs_world) {
-            // Use ECS-based coordinate updates for better sync
-            crate::ecs::update_coordinates_from_display(&mut self.ecs_world, &self.display_manager);
+        if self.layer_store.is_dirty() {
+            self.layer_store.mark_clean();
         }
         
         // Process cross-probe signals from BOM component selection
@@ -758,36 +731,37 @@ impl eframe::App for CopperForgeApp {
                 if i.key_pressed(egui::Key::F) {
                 self.display_manager.showing_top = !self.display_manager.showing_top;
                 
-                // Auto-toggle layer visibility based on flip state using ECS
-                for layer_type in crate::ecs::LayerType::all() {
+                // Auto-toggle layer visibility based on flip state
+                use crate::layer_store::{LayerType, Side};
+                for layer_type in LayerType::all() {
                     let visible = match layer_type {
-                        crate::ecs::LayerType::Copper(1) |
-                        crate::ecs::LayerType::Silkscreen(crate::ecs::Side::Top) |
-                        crate::ecs::LayerType::Soldermask(crate::ecs::Side::Top) |
-                        crate::ecs::LayerType::Paste(crate::ecs::Side::Top) => {
+                        LayerType::Copper(1) |
+                        LayerType::Silkscreen(Side::Top) |
+                        LayerType::Soldermask(Side::Top) |
+                        LayerType::Paste(Side::Top) => {
                             self.display_manager.showing_top
                         },
-                        crate::ecs::LayerType::Copper(_) => {
+                        LayerType::Copper(_) => {
                             !self.display_manager.showing_top
                         },
-                        crate::ecs::LayerType::Silkscreen(crate::ecs::Side::Bottom) |
-                        crate::ecs::LayerType::Soldermask(crate::ecs::Side::Bottom) |
-                        crate::ecs::LayerType::Paste(crate::ecs::Side::Bottom) => {
+                        LayerType::Silkscreen(Side::Bottom) |
+                        LayerType::Soldermask(Side::Bottom) |
+                        LayerType::Paste(Side::Bottom) => {
                             !self.display_manager.showing_top
                         },
-                        crate::ecs::LayerType::MechanicalOutline => {
-                            // Leave outline visibility unchanged, get current state from ECS
-                            crate::ecs::get_layer_visibility(&mut self.ecs_world, layer_type)
+                        LayerType::MechanicalOutline => {
+                            // Leave outline visibility unchanged
+                            self.layer_store.get_visibility(layer_type)
                         }
                     };
-                    crate::ecs::set_layer_visibility(&mut self.ecs_world, layer_type, visible);
+                    self.layer_store.set_visibility(layer_type, visible);
                 }
-                
+
                 let view_name = if self.display_manager.showing_top { "top" } else { "bottom" };
                 let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
                 logger.log_info(&format!("Flipped to {} view (F key)", view_name));
                 // Mark coordinates as dirty since view changed
-                crate::ecs::mark_coordinates_dirty_ecs(&mut self.ecs_world);
+                self.layer_store.mark_dirty();
             }
             
             // U key - toggle units (mm/mils)
@@ -806,7 +780,7 @@ impl eframe::App for CopperForgeApp {
                 
                 // Don't reset view - just mark coordinates as dirty to update rotation
                 // This keeps the view centered on the current origin
-                crate::ecs::mark_coordinates_dirty_ecs(&mut self.ecs_world);
+                self.layer_store.mark_dirty();
                 
                 let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
                 logger.log_custom(

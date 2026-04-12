@@ -3,7 +3,7 @@ use image::{ImageBuffer, Rgba, RgbaImage};
 use eframe::emath::{Rect, Vec2};
 use egui::Pos2;
 use gerber_viewer::{ViewState, BoundingBox, GerberTransform};
-use crate::{CopperForgeApp, ecs::LayerType};
+use crate::{CopperForgeApp, layer_store::LayerType};
 use crate::display::VectorOffset;
 use nalgebra::{Vector2, Point2};
 
@@ -20,26 +20,23 @@ impl PngExporter {
 
         std::fs::create_dir_all(output_dir).map_err(|e| format!("Failed to create output directory: {}", e))?;
         
-        // Get mechanical outline layer using ECS - this defines the consistent bounding box for all exports
+        // Get mechanical outline layer - this defines the consistent bounding box for all exports
         let (mechanical_outline_gerber, master_bbox) = {
-            let mechanical_outline_data = crate::ecs::get_layer_data(&mut app.ecs_world, LayerType::MechanicalOutline)
+            let mech_layer = app.layer_store.find(LayerType::MechanicalOutline)
                 .ok_or("Mechanical outline layer is required for consistent PNG export boundaries")?;
-            let gerber_layer = mechanical_outline_data.2.0.clone();
+            let gerber_layer = mech_layer.gerber.clone();
             let bbox = Self::calculate_master_bounding_box(app, &gerber_layer)?;
             (gerber_layer, bbox)
         };
-        
+
         let mut exported_files = Vec::new();
-        
+
         // Collect visible layers data first to avoid borrowing conflicts
         let mut layers_to_export = Vec::new();
-        for layer_type in LayerType::all() {
-            if let Some((_entity, _layer_info, gerber_data, visibility)) = crate::ecs::get_layer_data(&mut app.ecs_world, layer_type) {
-                if visibility.visible && layer_type != LayerType::MechanicalOutline {
-                    // Skip if layer shouldn't render for current view
-                    if layer_type.should_render(app.display_manager.showing_top) {
-                        layers_to_export.push((layer_type, gerber_data.0.clone()));
-                    }
+        for layer in app.layer_store.layers.iter() {
+            if layer.visible && layer.layer_type != LayerType::MechanicalOutline {
+                if layer.layer_type.should_render(app.display_manager.showing_top) {
+                    layers_to_export.push((layer.layer_type, layer.gerber.clone()));
                 }
             }
         }

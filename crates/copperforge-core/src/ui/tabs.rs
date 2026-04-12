@@ -1,6 +1,6 @@
 use crate::CopperForgeApp;
 use crate::ui;
-use crate::ecs::{UnitsResource, mm_to_nm, nm_to_mm, mils_to_nm, nm_to_mils};
+use crate::layer_store::{mm_to_nm, nm_to_mm, mils_to_nm, nm_to_mils};
 use egui_citizen::message::CitizenId;
 
 use eframe::emath::{Rect, Vec2};
@@ -68,10 +68,9 @@ pub struct Tab {
 }
 
 impl Tab {
-    /// Helper to get units resource from app
-    fn get_units(app: &CopperForgeApp) -> &UnitsResource {
-        app.ecs_world.get_resource::<UnitsResource>()
-            .expect("UnitsResource should exist")
+    /// Helper to get units from app
+    fn get_units(app: &CopperForgeApp) -> &crate::layer_store::UnitsState {
+        &app.layer_store.units
     }
     
     pub fn new(kind: TabKind, surface: SurfaceIndex, node: NodeIndex) -> Self {
@@ -190,7 +189,7 @@ fn render_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
 
 fn render_quadrant_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
     if ui.checkbox(&mut app.display_manager.quadrant_view_enabled, "Quadrant View").clicked() {
-        crate::ecs::mark_coordinates_dirty_ecs(&mut app.ecs_world);
+        app.layer_store.mark_dirty();
         app.needs_initial_view = true;
     }
     
@@ -202,12 +201,12 @@ fn render_quadrant_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
         let units_resource = Tab::get_units(app);
         
         let (mut spacing_value, units_suffix, conversion_factor) = if units_resource.is_mils() {
-            let spacing_nm = mm_to_nm(app.display_manager.quadrant_offset_magnitude as f32);
-            (nm_to_mils(spacing_nm), "mils", 0.0254)
+            let spacing_nm = mm_to_nm(app.display_manager.quadrant_offset_magnitude);
+            (nm_to_mils(spacing_nm) as f32, "mils", 0.0254)
         } else {
             (app.display_manager.quadrant_offset_magnitude as f32, "mm", 1.0)
         };
-        
+
         let speed = if units_resource.is_mils() { 10.0 } else { 1.0 };
         let max_range = if units_resource.is_mils() { 20000.0 } else { 500.0 };
         
@@ -219,7 +218,7 @@ fn render_quadrant_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
         {
             let spacing_mm = spacing_value * conversion_factor;
             app.display_manager.set_quadrant_offset_magnitude(spacing_mm as f64);
-            crate::ecs::mark_coordinates_dirty_ecs(&mut app.ecs_world);
+            app.layer_store.mark_dirty();
         }
         
         ui.separator();
@@ -238,32 +237,33 @@ fn render_layer_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
     if ui.button(flip_text).clicked() {
         app.display_manager.showing_top = !app.display_manager.showing_top;
         
-        // Auto-toggle layer visibility based on flip state (using ECS)
-        for layer_type in crate::ecs::LayerType::all() {
+        // Auto-toggle layer visibility based on flip state
+        use crate::layer_store::{LayerType, Side};
+        for layer_type in LayerType::all() {
             let visible = match layer_type {
-                crate::ecs::LayerType::Copper(1) |
-                crate::ecs::LayerType::Silkscreen(crate::ecs::Side::Top) |
-                crate::ecs::LayerType::Soldermask(crate::ecs::Side::Top) |
-                crate::ecs::LayerType::Paste(crate::ecs::Side::Top) => {
+                LayerType::Copper(1) |
+                LayerType::Silkscreen(Side::Top) |
+                LayerType::Soldermask(Side::Top) |
+                LayerType::Paste(Side::Top) => {
                     app.display_manager.showing_top
                 },
-                crate::ecs::LayerType::Copper(_) => {
+                LayerType::Copper(_) => {
                     !app.display_manager.showing_top
                 },
-                crate::ecs::LayerType::Silkscreen(crate::ecs::Side::Bottom) |
-                crate::ecs::LayerType::Soldermask(crate::ecs::Side::Bottom) |
-                crate::ecs::LayerType::Paste(crate::ecs::Side::Bottom) => {
+                LayerType::Silkscreen(Side::Bottom) |
+                LayerType::Soldermask(Side::Bottom) |
+                LayerType::Paste(Side::Bottom) => {
                     !app.display_manager.showing_top
                 },
-                crate::ecs::LayerType::MechanicalOutline => {
-                    // Leave outline visibility unchanged, get current state from ECS
-                    crate::ecs::get_layer_visibility(&mut app.ecs_world, layer_type)
+                LayerType::MechanicalOutline => {
+                    // Leave outline visibility unchanged
+                    app.layer_store.get_visibility(layer_type)
                 }
             };
-            crate::ecs::set_layer_visibility(&mut app.ecs_world, layer_type, visible);
+            app.layer_store.set_visibility(layer_type, visible);
         }
         
-        crate::ecs::mark_coordinates_dirty_ecs(&mut app.ecs_world);
+        app.layer_store.mark_dirty();
     }
 }
 
@@ -274,7 +274,7 @@ fn render_transform_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
         
         // Don't reset view - just mark coordinates as dirty to update rotation
         // This keeps the view centered on the current origin
-        crate::ecs::mark_coordinates_dirty_ecs(&mut app.ecs_world);
+        app.layer_store.mark_dirty();
         
         let logger_state = app.logger_state.clone();
         let log_colors = app.log_colors.clone();
@@ -285,15 +285,15 @@ fn render_transform_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
         );
     }
     
-    // ECS Rendering is now the default and only mode (gerber-viewer 0.2.0 compatible)
-    ui.label("🔥 ECS Rendering (v0.2.0)");
+    // Layer store rendering (gerber-viewer 0.2.0 compatible)
+    ui.label("🔥 Rendering (v0.2.0)");
     
     // Mirror buttons
     let x_mirror_text = if app.display_manager.mirroring.x { "↔️ X Mirror ✓" } else { "↔️ X Mirror" };
     if ui.button(x_mirror_text).clicked() {
         app.display_manager.mirroring.x = !app.display_manager.mirroring.x;
         // Don't reset custom origin, just mark coordinates as dirty
-        crate::ecs::mark_coordinates_dirty_ecs(&mut app.ecs_world);
+        app.layer_store.mark_dirty();
         
         let logger_state = app.logger_state.clone();
         let log_colors = app.log_colors.clone();
@@ -308,7 +308,7 @@ fn render_transform_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
     if ui.button(y_mirror_text).clicked() {
         app.display_manager.mirroring.y = !app.display_manager.mirroring.y;
         // Don't reset custom origin, just mark coordinates as dirty
-        crate::ecs::mark_coordinates_dirty_ecs(&mut app.ecs_world);
+        app.layer_store.mark_dirty();
         
         let logger_state = app.logger_state.clone();
         let log_colors = app.log_colors.clone();
@@ -332,7 +332,7 @@ fn render_transform_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
             app.needs_initial_view = true;
             
             // Mark coordinates as dirty to force refresh
-            crate::ecs::mark_coordinates_dirty_ecs(&mut app.ecs_world);
+            app.layer_store.mark_dirty();
             
             let logger_state = app.logger_state.clone();
             let log_colors = app.log_colors.clone();
@@ -370,10 +370,10 @@ fn render_grid_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
     // Find current selection
     let mut current_spacing_display = "Custom".to_string();
     for &spacing in spacings {
-        let spacing_mm = if is_mils { 
-            nm_to_mm(mils_to_nm(spacing)) 
-        } else { 
-            spacing 
+        let spacing_mm = if is_mils {
+            nm_to_mm(mils_to_nm(spacing)) as f32
+        } else {
+            spacing as f32
         };
         if (app.grid_settings.spacing_mm - spacing_mm).abs() < 0.001 {
             current_spacing_display = if is_mils {
@@ -389,10 +389,10 @@ fn render_grid_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
         .selected_text(current_spacing_display)
         .show_ui(ui, |ui| {
             for &spacing in spacings {
-                let spacing_mm = if is_mils { 
-                    nm_to_mm(mils_to_nm(spacing)) 
-                } else { 
-                    spacing 
+                let spacing_mm = if is_mils {
+                    nm_to_mm(mils_to_nm(spacing)) as f32
+                } else {
+                    spacing as f32
                 };
                 let label = if is_mils {
                     format!("{} mils", spacing as i32)
@@ -439,10 +439,10 @@ fn render_ruler_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
             
             let units_resource = Tab::get_units(app);
             if units_resource.is_mils() {
-                let distance_nm = mm_to_nm(distance as f32);
+                let distance_nm = mm_to_nm(distance);
                 let distance_mils = nm_to_mils(distance_nm);
-                let dx_nm = mm_to_nm(dx.abs() as f32);
-                let dy_nm = mm_to_nm(dy.abs() as f32);
+                let dx_nm = mm_to_nm(dx.abs());
+                let dy_nm = mm_to_nm(dy.abs());
                 ui.label(format!("📏 Distance: {:.2} mils", distance_mils));
                 ui.label(format!("📐 ΔX: {:.3} mils, ΔY: {:.3} mils", nm_to_mils(dx_nm), nm_to_mils(dy_nm)));
             } else {
@@ -463,10 +463,10 @@ fn render_ruler_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
         
         let units_resource = Tab::get_units(app);
         if units_resource.is_mils() {
-            let distance_nm = mm_to_nm(distance as f32);
+            let distance_nm = mm_to_nm(distance);
             let distance_mils = nm_to_mils(distance_nm);
-            let dx_nm = mm_to_nm(dx.abs() as f32);
-            let dy_nm = mm_to_nm(dy.abs() as f32);
+            let dx_nm = mm_to_nm(dx.abs());
+            let dy_nm = mm_to_nm(dy.abs());
             let dx_mils = nm_to_mils(dx_nm);
             let dy_mils = nm_to_mils(dy_nm);
             ui.label(egui::RichText::new(format!("📏 Distance: {:.2} mils", distance_mils)).color(egui::Color32::LIGHT_GRAY));
@@ -610,7 +610,7 @@ fn handle_viewport_interactions(ui: &mut egui::Ui, app: &mut CopperForgeApp, vie
                 app.needs_initial_view = true;
                 
                 // Mark coordinates as dirty to force refresh
-                crate::ecs::mark_coordinates_dirty_ecs(&mut app.ecs_world);
+                app.layer_store.mark_dirty();
                 
                 let logger_state = app.logger_state.clone();
                 let log_colors = app.log_colors.clone();
@@ -875,15 +875,15 @@ fn render_drc_violations(app: &mut CopperForgeApp, painter: &Painter) {
 }
 
 fn render_board_dimensions(app: &mut CopperForgeApp, painter: &Painter, viewport: &Rect) {
-    if let Some((_entity, _layer_info, gerber_data, _visibility)) = crate::ecs::get_layer_data(&mut app.ecs_world, crate::ecs::LayerType::MechanicalOutline) {
-        let bbox = gerber_data.0.bounding_box();
+    if let Some(layer) = app.layer_store.find(crate::layer_store::LayerType::MechanicalOutline) {
+        let bbox = layer.gerber.bounding_box();
         let width_mm = bbox.width();
         let height_mm = bbox.height();
         
         let units_resource = Tab::get_units(app);
         let dimension_text = if units_resource.is_mils() {
-            let width_nm = mm_to_nm(width_mm as f32);
-            let height_nm = mm_to_nm(height_mm as f32);
+            let width_nm = mm_to_nm(width_mm);
+            let height_nm = mm_to_nm(height_mm);
             let width_mils = nm_to_mils(width_nm);
             let height_mils = nm_to_mils(height_nm);
             format!("{:.0} x {:.0} mils", width_mils, height_mils)
@@ -982,9 +982,9 @@ fn render_ruler_measurement(app: &mut CopperForgeApp, painter: &Painter, start_o
             // Create measurement text with dx/dy display
             let units_resource = Tab::get_units(app);
             let measurement_text = if units_resource.is_mils() {
-                let distance_nm = mm_to_nm(distance as f32);
-                let dx_nm = mm_to_nm(dx.abs() as f32);
-                let dy_nm = mm_to_nm(dy.abs() as f32);
+                let distance_nm = mm_to_nm(distance);
+                let dx_nm = mm_to_nm(dx.abs());
+                let dy_nm = mm_to_nm(dy.abs());
                 format!(
                     "{:.2} mils\nΔX: {:.2}\nΔY: {:.2}",
                     nm_to_mils(distance_nm),
@@ -1110,8 +1110,8 @@ fn render_cursor_info(ui: &mut egui::Ui, app: &mut CopperForgeApp, painter: &Pai
             
             let units_resource = Tab::get_units(app);
             let cursor_text = if units_resource.is_mils() {
-                let x_nm = mm_to_nm(adjusted_pos.x as f32);
-                let y_nm = mm_to_nm(adjusted_pos.y as f32);
+                let x_nm = mm_to_nm(adjusted_pos.x as f64);
+                let y_nm = mm_to_nm(adjusted_pos.y as f64);
                 let x_mils = nm_to_mils(x_nm);
                 let y_mils = nm_to_mils(y_nm);
                 format!("({:.0}, {:.0}) mils", x_mils, y_mils)
@@ -1268,11 +1268,10 @@ impl<'a> egui_dock::TabViewer for TabViewer<'a> {
 
 fn render_zoom_display(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
     // Get zoom info from ECS, fallback to legacy ViewState
-    let (zoom_percentage, scale_factor) = if let Some(zoom_resource) = app.ecs_world.get_resource::<crate::ecs::ZoomResource>() {
-        (zoom_resource.get_zoom_percentage(), zoom_resource.scale)
-    } else {
-        (app.view_state.scale * 100.0, app.view_state.scale)
-    };
+    let (zoom_percentage, scale_factor) = (
+        app.layer_store.zoom.zoom_percentage(),
+        app.layer_store.zoom.scale,
+    );
     
     // Format zoom display with appropriate precision
     let zoom_text = if zoom_percentage >= 100.0 {
