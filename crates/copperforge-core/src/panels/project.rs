@@ -4,8 +4,7 @@ use super::citizen_panel;
 citizen_panel!(ProjectPanel, "project");
 
 impl ProjectPanel {
-    pub fn show(&mut self, ui: &mut egui::Ui, services: &mut crate::services::SharedServices) {
-        let _ = (ui, services);
-        // TODO: migrate from ui::show_project_panel()
+    pub fn show(&self, ui: &mut egui::Ui, app: &mut crate::CopperForgeApp) {
+        crate::ui::show_project_panel(ui, app, &app.logger_state.clone(), &app.log_colors.clone());
     }
 }

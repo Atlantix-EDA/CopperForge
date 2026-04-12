@@ -1,14 +1,10 @@
 use egui_citizen::{Citizen, CitizenId, CitizenState};
 use super::citizen_panel;
-use crate::project_manager::ProjectManagerState;
 
-citizen_panel!(ProjectsPanel, "projects",
-    manager_state: Option<ProjectManagerState> = None
-);
+citizen_panel!(ProjectsPanel, "projects");
 
 impl ProjectsPanel {
-    pub fn show(&mut self, ui: &mut egui::Ui, services: &mut crate::services::SharedServices) {
-        let _ = (ui, services);
-        // TODO: migrate from ui::show_projects_panel()
+    pub fn show(&self, ui: &mut egui::Ui, app: &mut crate::CopperForgeApp) {
+        crate::ui::show_projects_panel(ui, app, &app.logger_state.clone(), &app.log_colors.clone());
     }
 }

@@ -14,12 +14,9 @@ impl GerberViewPanel {
         }
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui, services: &mut crate::services::SharedServices) {
-        let _ = (ui, services);
-        // TODO: migrate from Tab::render_gerber_view() in ui/tabs.rs
-        // This is ~1300 lines including viewport, controls, ruler, zoom window.
-        // Viewport interaction state (zoom_window_*, ruler_*, setting_origin_mode)
-        // lives on SharedServices for now, moves here when fully wired.
+    pub fn show(&self, ui: &mut egui::Ui, app: &mut crate::CopperForgeApp) {
+        let _ = app;
+        ui.label("Gerber View renders through legacy Tab path");
     }
 }
 
