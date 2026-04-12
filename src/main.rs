@@ -1,5 +1,5 @@
 fn main() -> eframe::Result<()> {
-    use copperforge_core::DemoLensApp;
+    use copperforge_core::CopperForgeApp;
     use copperforge_core::platform::parameters::gui::APPLICATION_NAME;
     
     // Configure env_logger to filter out gerber_parser warnings
@@ -14,6 +14,7 @@ fn main() -> eframe::Result<()> {
         },
         Box::new(|cc|{
             egui_extras::install_image_loaders(&cc.egui_ctx);
-            Ok(Box::new(DemoLensApp::new()))
+            copperforge_core::theme::apply_visuals(&cc.egui_ctx);
+            Ok(Box::new(CopperForgeApp::new()))
         }))
 }

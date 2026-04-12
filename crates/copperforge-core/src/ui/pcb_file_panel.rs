@@ -1,14 +1,13 @@
-use crate::DemoLensApp;
+use crate::CopperForgeApp;
 use crate::project::ProjectState;
-use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
+use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// Show the PCB file management panel
 pub fn show_pcb_file_panel<'a>(
     ui: &mut egui::Ui,
-    app: &'a mut DemoLensApp,
+    app: &'a mut CopperForgeApp,
     logger_state: &'a Dynamic<ReactiveEventLoggerState>,
     log_colors: &'a Dynamic<LogColors>,
 ) {
@@ -40,7 +39,7 @@ pub fn show_pcb_file_panel<'a>(
 /// Show PCB file management section
 fn show_pcb_file_section(
     ui: &mut egui::Ui,
-    app: &mut DemoLensApp,
+    app: &mut CopperForgeApp,
     logger: &ReactiveEventLogger,
 ) {
     // Auto-generation settings
@@ -251,42 +250,17 @@ fn generate_gerbers_from_pcb(pcb_path: &Path, logger: &ReactiveEventLogger) -> O
 
     logger.log_info(&format!("Output directory: {}", output_dir.display()));
 
-    // Run KiCad CLI to generate gerbers
-    let kicad_cli_path = if let Ok(output) = Command::new("which").arg("kicad-cli").output() {
-        if output.status.success() {
-            String::from_utf8_lossy(&output.stdout).trim().to_string()
-        } else {
-            let paths = [
-                "/usr/lib/kicad-nightly/bin/kicad-cli",
-                "/usr/lib/kicad/bin/kicad-cli",
-                "/usr/local/bin/kicad-cli",
-                "/opt/kicad/bin/kicad-cli",
-            ];
-
-            paths.iter()
-                .find(|p| std::path::Path::new(p).exists())
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| "kicad-cli".to_string())
+    // Find kicad-cli (PATH, Flatpak, or Snap)
+    let (method, mut cmd) = match CopperForgeApp::find_kicad_cli() {
+        Some(found) => found,
+        None => {
+            logger.log_error("kicad-cli not found (checked PATH, Flatpak, and Snap)");
+            logger.log_error("Install KiCad or ensure kicad-cli is accessible");
+            return None;
         }
-    } else {
-        "/usr/lib/kicad-nightly/bin/kicad-cli".to_string()
     };
 
-    logger.log_info(&format!("Using KiCad CLI at: {}", kicad_cli_path));
-
-    let mut cmd = Command::new(&kicad_cli_path);
-
-    if kicad_cli_path.contains("kicad-nightly") {
-        let lib_path = "/usr/lib/kicad-nightly/lib/x86_64-linux-gnu";
-        let current_ld_path = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
-        let new_ld_path = if current_ld_path.is_empty() {
-            lib_path.to_string()
-        } else {
-            format!("{}:{}", lib_path, current_ld_path)
-        };
-        cmd.env("LD_LIBRARY_PATH", new_ld_path);
-        logger.log_info(&format!("Set LD_LIBRARY_PATH for KiCad nightly: {}", lib_path));
-    }
+    logger.log_info(&format!("Using kicad-cli via {}", method));
 
     let output = cmd
         .arg("pcb")
@@ -325,17 +299,16 @@ fn generate_gerbers_from_pcb(pcb_path: &Path, logger: &ReactiveEventLogger) -> O
         }
         Err(e) => {
             logger.log_error(&format!("Failed to run kicad-cli: {}", e));
-            logger.log_error("Make sure KiCad is installed and kicad-cli is in your PATH");
         }
     }
     None
 }
 
-fn load_gerbers_into_viewer(app: &mut DemoLensApp, gerber_dir: &Path, logger: &ReactiveEventLogger) {
+fn load_gerbers_into_viewer(app: &mut CopperForgeApp, gerber_dir: &Path, logger: &ReactiveEventLogger) {
     logger.log_info("Clearing existing gerber layers...");
-    crate::ecs::clear_all_layers_system(&mut app.ecs_world);
+    app.layer_store.clear_all();
 
-    match crate::ecs::load_gerbers_from_directory_system(&mut app.ecs_world, gerber_dir) {
+    match app.layer_store.load_from_directory(gerber_dir) {
         Ok((loaded_count, unassigned_count)) => {
             if loaded_count > 0 {
                 logger.log_info(&format!("Successfully loaded {} gerber layers", loaded_count));

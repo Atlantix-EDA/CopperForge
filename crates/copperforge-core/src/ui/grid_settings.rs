@@ -1,11 +1,11 @@
-use crate::{DemoLensApp, project::constants::LOG_TYPE_GRID, display::grid::{get_grid_status, GridStatus}};
-use crate::ecs::{UnitsResource, mm_to_nm, nm_to_mm, mils_to_nm, nm_to_mils};
-use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
+use crate::{CopperForgeApp, project::constants::LOG_TYPE_GRID, display::grid::{get_grid_status, GridStatus}};
+use crate::layer_store::{mm_to_nm, nm_to_mm, mils_to_nm, nm_to_mils};
+use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
 
 pub fn show_grid_panel<'a>(
     ui: &mut egui::Ui, 
-    app: &'a mut DemoLensApp,
+    app: &'a mut CopperForgeApp,
     logger_state: &'a Dynamic<ReactiveEventLoggerState>,
     log_colors: &'a Dynamic<LogColors>
 ) {
@@ -20,11 +20,10 @@ pub fn show_grid_panel<'a>(
     }
     
     ui.horizontal(|ui| {
-        // Get units from ECS
-        let units_resource = app.ecs_world.get_resource::<UnitsResource>()
-            .expect("UnitsResource should exist");
-        
-        let label = if units_resource.is_mils() {
+        // Get units from layer store
+        let units = &app.layer_store.units;
+
+        let label = if units.is_mils() {
             "Grid Spacing (mils):"
         } else {
             "Grid Spacing (mm):"
@@ -33,10 +32,10 @@ pub fn show_grid_panel<'a>(
         
         let _prev_spacing_mm = app.grid_settings.spacing_mm;
         
-        if units_resource.is_mils() {
+        if units.is_mils() {
             // Convert to mils for display using nanometer precision
-            let spacing_nm = mm_to_nm(app.grid_settings.spacing_mm);
-            let mut spacing_mils = nm_to_mils(spacing_nm);
+            let spacing_nm = mm_to_nm(app.grid_settings.spacing_mm as f64);
+            let mut spacing_mils = nm_to_mils(spacing_nm) as f32;
             let prev_mils = spacing_mils;
             
             // Add slider
@@ -55,8 +54,8 @@ pub fn show_grid_panel<'a>(
             
             if slider_response.changed() || text_response.changed() {
                 // Convert back through nanometers for precision
-                let spacing_nm = mils_to_nm(spacing_mils);
-                app.grid_settings.spacing_mm = nm_to_mm(spacing_nm);
+                let spacing_nm = mils_to_nm(spacing_mils as f64);
+                app.grid_settings.spacing_mm = nm_to_mm(spacing_nm) as f32;
                 logger.log_custom(
                     LOG_TYPE_GRID,
                     &format!("Grid spacing changed from {:.1} to {:.1} mils", prev_mils, spacing_mils)

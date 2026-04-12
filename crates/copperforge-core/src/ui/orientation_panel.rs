@@ -1,11 +1,11 @@
-use crate::DemoLensApp;
-use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
+use crate::CopperForgeApp;
+use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
 
 #[allow(dead_code)]
 pub fn show_orientation_panel<'a>(    
     _ui: &mut egui::Ui,
-    _app: &'a mut DemoLensApp,
+    _app: &'a mut CopperForgeApp,
     _logger_state: &'a Dynamic<ReactiveEventLoggerState>,
     _log_colors: &'a Dynamic<LogColors>,
 ) {
@@ -14,7 +14,7 @@ pub fn show_orientation_panel<'a>(
 
 #[allow(dead_code)]
 /// Export layers from quadrant view to PNG files
-pub fn export_quadrant_layers_to_png(app: &mut DemoLensApp, logger: &ReactiveEventLogger) {
+pub fn export_quadrant_layers_to_png(app: &mut CopperForgeApp, logger: &ReactiveEventLogger) {
     if !app.display_manager.quadrant_view_enabled {
         logger.log_error("Quadrant view must be enabled to export layers as PNG");
         return;

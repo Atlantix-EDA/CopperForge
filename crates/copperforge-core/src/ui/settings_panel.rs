@@ -1,13 +1,12 @@
-use crate::DemoLensApp;
-use crate::ecs::UnitsResource;
-use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
+use crate::CopperForgeApp;
+use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
 use chrono_tz::Tz;
 use chrono::Local;
 
 pub fn show_settings_panel<'a>(
     ui: &mut egui::Ui,
-    app: &'a mut DemoLensApp,
+    app: &'a mut CopperForgeApp,
     logger_state: &'a Dynamic<ReactiveEventLoggerState>,
     log_colors: &'a Dynamic<LogColors>,
 ) {
@@ -22,12 +21,8 @@ pub fn show_settings_panel<'a>(
         ui.horizontal(|ui| {
             ui.label("Global Units:");
             
-            // Get current units from ECS
-            let _current_unit = if let Some(units_resource) = app.ecs_world.get_resource::<UnitsResource>() {
-                units_resource.display_unit
-            } else {
-                crate::ecs::DisplayUnit::Millimeters
-            };
+            // Get current units from layer store
+            let _current_unit = app.layer_store.units.display_unit;
             
             // Track if units changed
             let mut units_changed = false;

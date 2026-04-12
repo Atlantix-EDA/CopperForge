@@ -8,8 +8,7 @@ use crate::display;
 use crate::display::DisplayManager;
 use crate::drc_operations::DrcManager;
 
-/// egui_lens imports
-use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
+use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::*; 
 use gerber_viewer::{
    BoundingBox, GerberLayer, 
@@ -20,7 +19,6 @@ use crate::platform::parameters::gui::VERSION;
 // Import new modules
 use crate::project;
 use crate::ui;
-use crate::ecs;
 use crate::project_manager;
 
 use crate::ui::{Tab, TabKind, TabViewer, initialize_and_show_banner, show_system_info};
@@ -29,7 +27,11 @@ use crate::project::{load_demo_gerber, ProjectManager, ProjectState, manager::Pr
 use crate::display::GridSettings;
 
 /// The main application struct
-pub struct DemoLensApp {
+pub struct CopperForgeApp {
+    // ── Citizen infrastructure ────────────────────────────────
+    pub dispatcher: egui_citizen::Dispatcher,
+    pub app_messages: Vec<crate::messages::AppMessage>,
+
     // Legacy single layer support (for compatibility)
     pub gerber_layer: GerberLayer,
     pub view_state: ViewState,
@@ -57,8 +59,8 @@ pub struct DemoLensApp {
     // Project management
     pub project_manager: ProjectManager,
     
-    // ECS World
-    pub ecs_world: bevy_ecs::world::World,
+    // Layer management (replaces ECS)
+    pub layer_store: crate::layer_store::LayerStore,
 
     // Dock state
     dock_state: DockState<Tab>,
@@ -99,14 +101,6 @@ pub struct DemoLensApp {
     // BOM panel state
     pub bom_state: Option<ui::BomPanelState>,
     
-    // Pending BOM components (loaded from project before BOM tab is opened)
-    pub pending_bom_components: Option<Vec<project_manager::bom::BomComponent>>,
-    
-    // Cross-probe signal handling
-    pub cross_probe_slot: Option<egui_mobius::slot::Slot<project_manager::bom::BomComponent>>,
-    pub cross_probe_slot_started: bool,
-    pub pending_cross_probe: egui_mobius::types::Value<Option<project_manager::bom::BomComponent>>,
-    
     // Project manager state
     pub project_manager_state: Option<project_manager::ProjectManagerState>,
 
@@ -117,7 +111,7 @@ pub struct DemoLensApp {
     pub last_picked_projects_directory: Option<PathBuf>,
 }
 
-impl Drop for DemoLensApp {
+impl Drop for CopperForgeApp {
     fn drop(&mut self) {
         // Save dock state when application closes
         self.save_dock_state();
@@ -126,61 +120,40 @@ impl Drop for DemoLensApp {
     }
 }
 
-impl DemoLensApp {
-    /// Sync units between legacy global_units_mils and ECS UnitsResource
+impl CopperForgeApp {
+    /// Sync units between legacy global_units_mils and layer_store
     pub fn sync_units_to_ecs(&mut self) {
-        if let Some(mut units_resource) = self.ecs_world.get_resource_mut::<ecs::UnitsResource>() {
-            if self.global_units_mils {
-                units_resource.set_mils();
-            } else {
-                units_resource.set_mm();
-            }
+        if self.global_units_mils {
+            self.layer_store.units.display_unit = crate::layer_store::DisplayUnit::Mils;
+        } else {
+            self.layer_store.units.display_unit = crate::layer_store::DisplayUnit::Millimeters;
         }
     }
-    
-    /// Sync units from ECS UnitsResource to legacy global_units_mils
+
+    /// Sync units from layer_store to legacy global_units_mils
     pub fn sync_units_from_ecs(&mut self) {
-        if let Some(units_resource) = self.ecs_world.get_resource::<ecs::UnitsResource>() {
-            self.global_units_mils = units_resource.is_mils();
-        }
+        self.global_units_mils = self.layer_store.units.is_mils();
     }
-    
-    /// Sync zoom from legacy view_state to ECS ZoomResource
+
+    /// Sync zoom from legacy view_state to layer_store
     pub fn sync_zoom_to_ecs(&mut self) {
-        if let Some(mut zoom_resource) = self.ecs_world.get_resource_mut::<ecs::ZoomResource>() {
-            zoom_resource.set_scale(self.view_state.scale);
-            zoom_resource.set_center(self.view_state.translation.x, self.view_state.translation.y);
-        }
+        self.layer_store.zoom.set_scale(self.view_state.scale);
+        self.layer_store.zoom.center_x = self.view_state.translation.x;
+        self.layer_store.zoom.center_y = self.view_state.translation.y;
     }
-    
-    /// Sync zoom from ECS ZoomResource to legacy view_state
+
+    /// Sync zoom from layer_store to legacy view_state
     pub fn sync_zoom_from_ecs(&mut self) {
-        if let Some(zoom_resource) = self.ecs_world.get_resource::<ecs::ZoomResource>() {
-            self.view_state.scale = zoom_resource.scale;
-            self.view_state.translation.x = zoom_resource.center_x;
-            self.view_state.translation.y = zoom_resource.center_y;
-        }
+        self.view_state.scale = self.layer_store.zoom.scale;
+        self.view_state.translation.x = self.layer_store.zoom.center_x;
+        self.view_state.translation.y = self.layer_store.zoom.center_y;
     }
-    
-    /// Render layers using ECS system
+
+    /// Render layers using layer_store
     pub fn render_layers_ecs(&mut self, painter: &egui::Painter) {
-        // Update view state resource
-        self.ecs_world.insert_resource(ecs::ViewStateResource {
-            view_state: self.view_state.clone(),
-            view_mode: ecs::ViewMode::Normal, // Will be updated based on display manager
-        });
-        
-        // Run ECS systems to update entity states
-        ecs::run_ecs_systems(&mut self.ecs_world, &self.display_manager, self.rotation_degrees);
-        
-        // Use the new ECS render system
-        ecs::execute_render_system(
-            &mut self.ecs_world,
-            painter,
-            self.view_state,
-            &self.display_manager,
-            true, // Use enhanced rendering with quadrant support
-        );
+        let view_state = self.view_state;
+        let rotation = self.rotation_degrees;
+        self.layer_store.render(painter, view_state, &self.display_manager, rotation);
     }
 
     pub fn new() -> Self {
@@ -198,10 +171,27 @@ impl DemoLensApp {
         let log_colors = Dynamic::new(LogColors::default());
         let dock_state = Self::create_default_dock_state();
         
-        // Setup ECS world without default gerbers (pure ECS now)
-        let ecs_world = ecs::setup_ecs_world();
-        
+        // Setup layer store (replaces ECS world)
+        let layer_store = crate::layer_store::LayerStore::default();
+
+        // Register all citizen panels with the dispatcher
+        let mut dispatcher = egui_citizen::Dispatcher::new();
+        use egui_citizen::message::CitizenId;
+        for id in [
+            "gerber_view", "view_settings", "drc", "project", "projects",
+            "pcb_file", "settings", "bom", "event_log",
+            "shell", "terminal", "logger",
+        ] {
+            dispatcher.register(CitizenId::new(id));
+        }
+        // Activate gerber_view by default
+        dispatcher.activate(&CitizenId::new("gerber_view"));
+        // Drain initialization messages
+        let _ = dispatcher.drain_messages();
+
         let mut app = Self {
+            dispatcher,
+            app_messages: Vec::new(),
             gerber_layer,
             view_state: ViewState::default(),
             ui_state: UiState::default(),
@@ -214,7 +204,7 @@ impl DemoLensApp {
             global_units_mils: false, // Default to mm
             grid_settings: GridSettings::default(),
             project_manager: ProjectManager::new(),
-            ecs_world,
+            layer_store,
             dock_state,
             config_path: dirs::config_dir()
                 .map(|d| d.join("copperforge"))
@@ -236,10 +226,6 @@ impl DemoLensApp {
             latched_measurement_start: None,
             latched_measurement_end: None,
             bom_state: None,
-            pending_bom_components: None,
-            cross_probe_slot: None,
-            cross_probe_slot_started: false,
-            pending_cross_probe: egui_mobius::types::Value::new(None),
             project_manager_state: None,
             projects_directory_dialog: egui_file_dialog::FileDialog::new(),
             last_picked_projects_directory: None,
@@ -251,13 +237,11 @@ impl DemoLensApp {
             app.use_24_hour_clock = project_config.use_24_hour_clock;
             app.global_units_mils = project_config.global_units_mils;
             
-            // Sync units with ECS resource
-            if let Some(mut units_resource) = app.ecs_world.get_resource_mut::<ecs::UnitsResource>() {
-                if app.global_units_mils {
-                    units_resource.set_mils();
-                } else {
-                    units_resource.set_mm();
-                }
+            // Sync units with layer store
+            if app.global_units_mils {
+                app.layer_store.units.display_unit = crate::layer_store::DisplayUnit::Mils;
+            } else {
+                app.layer_store.units.display_unit = crate::layer_store::DisplayUnit::Millimeters;
             }
             
             app.project_manager = ProjectManager::from_config(project_config);
@@ -288,8 +272,8 @@ impl DemoLensApp {
     }
 
     pub fn reset_view(&mut self, viewport: Rect) {
-        // Find bounding box from all loaded layers using ECS
-        let combined_bbox = crate::ecs::get_combined_bounding_box(&mut self.ecs_world);
+        // Find bounding box from all loaded layers
+        let combined_bbox = self.layer_store.combined_bounding_box();
         
         // Fall back to demo gerber if no layers loaded
         let bbox = combined_bbox.unwrap_or_else(|| self.gerber_layer.bounding_box().clone());
@@ -365,12 +349,11 @@ impl DemoLensApp {
 
         self.view_state.scale = scale;
         
-        // Update ECS zoom resource and set fit-to-view reference
-        if let Some(mut zoom_resource) = self.ecs_world.get_resource_mut::<ecs::ZoomResource>() {
-            zoom_resource.set_scale(scale);
-            zoom_resource.set_fit_to_view_scale(scale); // This scale becomes the 100% reference
-            zoom_resource.set_center(self.view_state.translation.x, self.view_state.translation.y);
-        }
+        // Update zoom state and set fit-to-view reference
+        self.layer_store.zoom.set_scale(scale);
+        self.layer_store.zoom.set_fit_to_view_scale(scale); // This scale becomes the 100% reference
+        self.layer_store.zoom.center_x = self.view_state.translation.x;
+        self.layer_store.zoom.center_y = self.view_state.translation.y;
         
         self.needs_initial_view = false;
     }
@@ -395,10 +378,9 @@ impl DemoLensApp {
             viewport_center.y + (comp_y as f32 * self.view_state.scale),
         );
         
-        // Update ECS view state
-        if let Some(mut view_state_resource) = self.ecs_world.get_resource_mut::<ecs::ViewStateResource>() {
-            view_state_resource.view_state = self.view_state.clone();
-        }
+        // Sync zoom state
+        self.layer_store.zoom.center_x = self.view_state.translation.x;
+        self.layer_store.zoom.center_y = self.view_state.translation.y;
         
         // Log the action
         let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
@@ -459,40 +441,71 @@ impl DemoLensApp {
         ui.label(egui::RichText::new(clock_text).color(egui::Color32::from_rgb(220, 220, 220)));
     }
 
-    /// Detect KiCad version by running kicad-cli
+    /// Detect KiCad version using the discovered kicad-cli
     fn detect_kicad_version() -> Option<String> {
+        let (method, mut cmd) = Self::find_kicad_cli()?;
+        let output = cmd.arg("--version").output().ok()?;
+        if !output.status.success() { return None; }
+        let mut v = Self::parse_kicad_version(&output.stdout, false)?;
+        if method != "path" {
+            v = format!("{} ({})", v, method);
+        }
+        Some(v)
+    }
+
+    /// Find kicad-cli across PATH, Flatpak, and Snap.
+    /// Returns (install_method, Command) ready for appending args.
+    pub fn find_kicad_cli() -> Option<(String, std::process::Command)> {
         use std::process::Command;
 
-        // Try kicad-cli commands in PATH only
-        let commands = ["kicad-cli", "kicad-cli-nightly"];
-
-        for cmd in &commands {
-            if let Ok(output) = Command::new(cmd).arg("--version").output() {
+        // 1. Native PATH
+        for bin in ["kicad-cli", "kicad-cli-nightly"] {
+            if let Ok(output) = Command::new(bin).arg("--version").output() {
                 if output.status.success() {
-                    let version_str = String::from_utf8_lossy(&output.stdout);
-                    // Parse version from output (format: "kicad-cli 9.0.0-rc1" or just "9.99.0")
-                    if let Some(line) = version_str.lines().next() {
-                        let version = if line.contains("kicad-cli") {
-                            // Format: "kicad-cli 9.0.0"
-                            line.split_whitespace().nth(1).map(|s| s.to_string())
-                        } else {
-                            // Format: just "9.99.0"
-                            Some(line.trim().to_string())
-                        };
-
-                        if let Some(mut version_string) = version {
-                            // Add "nightly" tag if using nightly build
-                            if cmd.contains("nightly") {
-                                version_string.push_str(" (nightly)");
-                            }
-                            return Some(version_string);
-                        }
-                    }
+                    return Some(("path".into(), Command::new(bin)));
                 }
             }
         }
 
+        // 2. Flatpak
+        if let Ok(output) = Command::new("flatpak")
+            .args(["run", "--command=kicad-cli", "org.kicad.KiCad", "--version"])
+            .output()
+        {
+            if output.status.success() {
+                let mut cmd = Command::new("flatpak");
+                cmd.args(["run", "--command=kicad-cli", "org.kicad.KiCad"]);
+                return Some(("flatpak".into(), cmd));
+            }
+        }
+
+        // 3. Snap
+        if let Ok(output) = Command::new("snap")
+            .args(["run", "kicad.kicad-cli", "--version"])
+            .output()
+        {
+            if output.status.success() {
+                let mut cmd = Command::new("snap");
+                cmd.args(["run", "kicad.kicad-cli"]);
+                return Some(("snap".into(), cmd));
+            }
+        }
+
         None
+    }
+
+    fn parse_kicad_version(stdout: &[u8], nightly: bool) -> Option<String> {
+        let version_str = String::from_utf8_lossy(stdout);
+        let line = version_str.lines().next()?;
+        let mut version = if line.contains("kicad-cli") {
+            line.split_whitespace().nth(1)?.to_string()
+        } else {
+            line.trim().to_string()
+        };
+        if nightly {
+            version.push_str(" (nightly)");
+        }
+        Some(version)
     }
 
     /// Render the KiCad information modal
@@ -534,26 +547,30 @@ impl DemoLensApp {
         let mut dock_state = self.dock_state.clone();
         
         // Create the dock layout and tab viewer
-        let mut tab_viewer = TabViewer { app: self };
-        
-        // Create custom style to match panel colors
-        let mut style = Style::from_egui(ui.ctx().style().as_ref());
-        style.dock_area_padding = None;
-        style.tab_bar.fill_tab_bar = true;
-        
-        // Show the dock area but filtered to exclude Project tab
-        DockArea::new(&mut dock_state)
-            .style(style)
-            .show_add_buttons(false)
-            .show_close_buttons(true)
-            .show(ui.ctx(), &mut tab_viewer);
-            
+        let mut dispatcher = std::mem::take(&mut self.dispatcher);
+        {
+            let mut tab_viewer = TabViewer { app: self, dispatcher: &mut dispatcher };
+
+            // Create custom style to match panel colors
+            let mut style = Style::from_egui(ui.ctx().style().as_ref());
+            style.dock_area_padding = None;
+            style.tab_bar.fill_tab_bar = true;
+
+            // Show the dock area but filtered to exclude Project tab
+            DockArea::new(&mut dock_state)
+                .style(style)
+                .show_add_buttons(false)
+                .show_close_buttons(true)
+                .show(ui.ctx(), &mut tab_viewer);
+        }
+        self.dispatcher = dispatcher;
+
         // Save the updated dock state back to the app
         self.dock_state = dock_state;
     }
 }
 
-impl DemoLensApp {
+impl CopperForgeApp {
     fn save_dock_state(&self) {
         if let Some(config_dir) = dirs::config_dir() {
             let copperforge_dir = config_dir.join("copperforge");
@@ -654,7 +671,7 @@ impl DemoLensApp {
     }
 }
 
-/// Implement the eframe::App trait for DemoLensApp
+/// Implement the eframe::App trait for CopperForgeApp
 ///
 /// This implementation contains the main event loop for the application, including
 /// handling user input, updating the UI, and rendering the Gerber layer. It also contains
@@ -663,7 +680,7 @@ impl DemoLensApp {
 /// and rendering the Gerber layer. It also handles user input and updates the logger
 /// state. The `update` method is where most of the application logic resides.
 /// 
-impl eframe::App for DemoLensApp {
+impl eframe::App for CopperForgeApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Handle system info button clicked
         let show_system_info_clicked = ctx.memory(|mem| {
@@ -682,48 +699,10 @@ impl eframe::App for DemoLensApp {
         }
         
         // Only update coordinates when explicitly marked as dirty (not time-based)
-        if crate::ecs::are_coordinates_dirty(&self.ecs_world) {
-            // Use ECS-based coordinate updates for better sync
-            crate::ecs::update_coordinates_from_display(&mut self.ecs_world, &self.display_manager);
+        if self.layer_store.is_dirty() {
+            self.layer_store.mark_clean();
         }
         
-        // Process cross-probe signals from BOM component selection
-        if let Some(ref mut cross_probe_slot) = self.cross_probe_slot {
-            // Check if slot is not started yet
-            if !self.cross_probe_slot_started {
-                let pending_cross_probe = self.pending_cross_probe.clone();
-                
-                cross_probe_slot.start(move |component: project_manager::bom::BomComponent| {
-                    // Store the component for the UI thread to process
-                    *pending_cross_probe.lock().unwrap() = Some(component);
-                });
-                
-                self.cross_probe_slot_started = true;
-            }
-        }
-        
-        // Check if there's a pending cross-probe to process
-        let pending_component = {
-            self.pending_cross_probe.lock().unwrap().take()
-        };
-        
-        if let Some(component) = pending_component {
-            // Get the current viewport
-            let viewport = ctx.available_rect();
-            
-            // Zoom to the selected component
-            self.zoom_to_component(&component, viewport);
-            
-            // Log the cross-probe action
-            let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
-            logger.log_info(&format!("Cross-probed to component: {} at ({:.2}, {:.2})", 
-                                    component.reference, component.x_location, component.y_location));
-            
-            // Request repaint to show the zoomed view
-            ctx.request_repaint();
-        }
-        
-        // No longer need legacy sync - UI uses ECS directly
         
         // Handle hotkeys first (but only if no text field has focus)
         let text_input_active = ctx.memory(|mem| mem.focused().is_some());
@@ -734,36 +713,37 @@ impl eframe::App for DemoLensApp {
                 if i.key_pressed(egui::Key::F) {
                 self.display_manager.showing_top = !self.display_manager.showing_top;
                 
-                // Auto-toggle layer visibility based on flip state using ECS
-                for layer_type in crate::ecs::LayerType::all() {
+                // Auto-toggle layer visibility based on flip state
+                use crate::layer_store::{LayerType, Side};
+                for layer_type in LayerType::all() {
                     let visible = match layer_type {
-                        crate::ecs::LayerType::Copper(1) |
-                        crate::ecs::LayerType::Silkscreen(crate::ecs::Side::Top) |
-                        crate::ecs::LayerType::Soldermask(crate::ecs::Side::Top) |
-                        crate::ecs::LayerType::Paste(crate::ecs::Side::Top) => {
+                        LayerType::Copper(1) |
+                        LayerType::Silkscreen(Side::Top) |
+                        LayerType::Soldermask(Side::Top) |
+                        LayerType::Paste(Side::Top) => {
                             self.display_manager.showing_top
                         },
-                        crate::ecs::LayerType::Copper(_) => {
+                        LayerType::Copper(_) => {
                             !self.display_manager.showing_top
                         },
-                        crate::ecs::LayerType::Silkscreen(crate::ecs::Side::Bottom) |
-                        crate::ecs::LayerType::Soldermask(crate::ecs::Side::Bottom) |
-                        crate::ecs::LayerType::Paste(crate::ecs::Side::Bottom) => {
+                        LayerType::Silkscreen(Side::Bottom) |
+                        LayerType::Soldermask(Side::Bottom) |
+                        LayerType::Paste(Side::Bottom) => {
                             !self.display_manager.showing_top
                         },
-                        crate::ecs::LayerType::MechanicalOutline => {
-                            // Leave outline visibility unchanged, get current state from ECS
-                            crate::ecs::get_layer_visibility(&mut self.ecs_world, layer_type)
+                        LayerType::MechanicalOutline => {
+                            // Leave outline visibility unchanged
+                            self.layer_store.get_visibility(layer_type)
                         }
                     };
-                    crate::ecs::set_layer_visibility(&mut self.ecs_world, layer_type, visible);
+                    self.layer_store.set_visibility(layer_type, visible);
                 }
-                
+
                 let view_name = if self.display_manager.showing_top { "top" } else { "bottom" };
                 let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
                 logger.log_info(&format!("Flipped to {} view (F key)", view_name));
                 // Mark coordinates as dirty since view changed
-                crate::ecs::mark_coordinates_dirty_ecs(&mut self.ecs_world);
+                self.layer_store.mark_dirty();
             }
             
             // U key - toggle units (mm/mils)
@@ -782,7 +762,7 @@ impl eframe::App for DemoLensApp {
                 
                 // Don't reset view - just mark coordinates as dirty to update rotation
                 // This keeps the view centered on the current origin
-                crate::ecs::mark_coordinates_dirty_ecs(&mut self.ecs_world);
+                self.layer_store.mark_dirty();
                 
                 let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
                 logger.log_custom(
@@ -992,27 +972,39 @@ impl eframe::App for DemoLensApp {
         
         // Main dock area below the ribbon
         let mut dock_state = self.dock_state.clone();
-        let mut tab_viewer = TabViewer { app: self };
-        let mut style = Style::from_egui(ctx.style().as_ref());
-        style.dock_area_padding = None;
-        style.tab_bar.fill_tab_bar = true;
-        
-        DockArea::new(&mut dock_state)
-            .style(style)
-            .show_add_buttons(true)
-            .show_close_buttons(true)
-            .show(ctx, &mut tab_viewer);
-            
+        let mut dispatcher = std::mem::take(&mut self.dispatcher);
+        {
+            let mut tab_viewer = TabViewer {
+                app: self,
+                dispatcher: &mut dispatcher,
+            };
+            let mut style = Style::from_egui(ctx.style().as_ref());
+            style.dock_area_padding = None;
+            style.tab_bar.fill_tab_bar = true;
+
+            DockArea::new(&mut dock_state)
+                .style(style)
+                .show_add_buttons(true)
+                .show_close_buttons(true)
+                .show(ctx, &mut tab_viewer);
+        }
+
+        // Drain citizen lifecycle messages
+        for msg in dispatcher.drain_messages() {
+            self.app_messages.push(crate::messages::AppMessage::Citizen(msg));
+        }
+        self.dispatcher = dispatcher;
         self.dock_state = dock_state;
         
         // Show About modal if requested
         if self.show_about_modal {
             egui::Window::new("About CopperForge")
                 .collapsible(false)
-                .resizable(false)
+                .resizable(true)
+                .default_size(egui::vec2(400.0, 550.0))
                 .default_pos(egui::pos2(
-                    ctx.screen_rect().center().x - 200.0,
-                    ctx.screen_rect().center().y - 200.0
+                    ctx.content_rect().center().x - 200.0,
+                    ctx.content_rect().center().y - 275.0
                 ))
                 .show(ctx, |ui| {
                     ui::AboutPanel::render(ui);
@@ -1034,8 +1026,8 @@ impl eframe::App for DemoLensApp {
                 .collapsible(false)
                 .resizable(false)
                 .default_pos(egui::pos2(
-                    ctx.screen_rect().center().x - 200.0,
-                    ctx.screen_rect().center().y - 150.0
+                    ctx.content_rect().center().x - 200.0,
+                    ctx.content_rect().center().y - 150.0
                 ))
                 .show(ctx, |ui| {
                     self.render_kicad_info_modal(ui);

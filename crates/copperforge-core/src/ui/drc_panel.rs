@@ -1,11 +1,11 @@
-use crate::{DemoLensApp, project::constants::LOG_TYPE_DRC, ecs::LayerType};
+use crate::{CopperForgeApp, project::constants::LOG_TYPE_DRC, layer_store::LayerType};
 use crate::drc_operations::TraceQualityType;
-use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
+use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
 
 pub fn show_drc_panel<'a>(
     ui: &mut egui::Ui, 
-    app: &'a mut DemoLensApp,
+    app: &'a mut CopperForgeApp,
     logger_state: &'a Dynamic<ReactiveEventLoggerState>,
     log_colors: &'a Dynamic<LogColors>
 ) {
@@ -26,7 +26,7 @@ pub fn show_drc_panel<'a>(
                     
                     // Run the actual DRC check (now includes OpenCV)
                     // Convert ECS layers to legacy format for DRC compatibility
-                    let legacy_layers = convert_ecs_to_legacy_layers(&mut app.ecs_world);
+                    let legacy_layers = convert_layer_store_to_legacy_layers(&app.layer_store);
                     let violations = crate::drc_operations::run_simple_drc_check(
                         &legacy_layers,
                         &app.drc_manager.rules,
@@ -204,7 +204,7 @@ pub fn show_drc_panel<'a>(
                     
                     // Run the actual DRC check (now includes OpenCV)
                     // Convert ECS layers to legacy format for DRC compatibility
-                    let legacy_layers = convert_ecs_to_legacy_layers(&mut app.ecs_world);
+                    let legacy_layers = convert_layer_store_to_legacy_layers(&app.layer_store);
                     let violations = crate::drc_operations::run_simple_drc_check(
                         &legacy_layers,
                         &app.drc_manager.rules,
@@ -342,7 +342,7 @@ pub fn show_drc_panel<'a>(
                     
                     // Run the DRC check which includes quality analysis
                     // Convert ECS layers to legacy format for DRC compatibility
-                    let legacy_layers = convert_ecs_to_legacy_layers(&mut app.ecs_world);
+                    let legacy_layers = convert_layer_store_to_legacy_layers(&app.layer_store);
                     let _violations = crate::drc_operations::run_simple_drc_check(
                         &legacy_layers,
                         &app.drc_manager.rules,
@@ -391,29 +391,29 @@ pub fn show_drc_panel<'a>(
                         let scaling_factor = 0.1; // 0.1mm scaling factor (like KiCad's default)
                         let mut total_fixed = 0;
                         
-                        // Generate overlay for top copper (using ECS)
-                        if let Some((_entity, _layer_info, gerber_data, _visibility)) = crate::ecs::get_layer_data(&mut app.ecs_world, LayerType::Copper(1)) {
+                        // Generate overlay for top copper
+                        if let Some(layer) = app.layer_store.find(LayerType::Copper(1)) {
                             logger.log_info("Processing top copper layer for corner rounding...");
-                            let (overlay_shapes, fixed_count) = drc.generate_corner_overlay_data(&gerber_data.0, scaling_factor);
+                            let (overlay_shapes, fixed_count) = drc.generate_corner_overlay_data(&layer.gerber, scaling_factor);
                             logger.log_info(&format!("Generated overlay for {} corners on top copper", fixed_count));
-                            
+
                             // Add overlay shapes to app state for rendering
                             app.drc_manager.corner_overlay_shapes.extend(overlay_shapes);
                             total_fixed += fixed_count;
-                            
+
                             logger.log_info("✅ Corner overlay generated for top copper");
                         }
-                        
-                        // Generate overlay for bottom copper (using ECS)
-                        if let Some((_entity, _layer_info, gerber_data, _visibility)) = crate::ecs::get_layer_data(&mut app.ecs_world, LayerType::Copper(2)) {
+
+                        // Generate overlay for bottom copper
+                        if let Some(layer) = app.layer_store.find(LayerType::Copper(2)) {
                             logger.log_info("Processing bottom copper layer for corner rounding...");
-                            let (overlay_shapes, fixed_count) = drc.generate_corner_overlay_data(&gerber_data.0, scaling_factor);
+                            let (overlay_shapes, fixed_count) = drc.generate_corner_overlay_data(&layer.gerber, scaling_factor);
                             logger.log_info(&format!("Generated overlay for {} corners on bottom copper", fixed_count));
-                            
+
                             // Add overlay shapes to app state for rendering
                             app.drc_manager.corner_overlay_shapes.extend(overlay_shapes);
                             total_fixed += fixed_count;
-                            
+
                             logger.log_info("✅ Corner overlay generated for bottom copper");
                         }
                         
@@ -521,27 +521,19 @@ impl LayerInfo {
     }
 }
 
-fn convert_ecs_to_legacy_layers(world: &mut bevy_ecs::world::World) -> HashMap<LayerType, LayerInfo> {
+fn convert_layer_store_to_legacy_layers(store: &crate::layer_store::LayerStore) -> HashMap<LayerType, LayerInfo> {
     let mut legacy_layers = HashMap::new();
-    
-    for layer_type in LayerType::all() {
-        if let Some((_entity, layer_info, gerber_data, visibility)) = crate::ecs::get_layer_data(world, layer_type) {
-            // Create legacy LayerInfo from ECS data
-            let mut legacy_layer_info = LayerInfo::new(
-                layer_info.layer_type,
-                Some(gerber_data.0.clone()),
-                None, // Raw gerber data not needed for DRC
-                visibility.visible,
-            );
-            
-            // Get color from ECS render properties
-            if let Some(render_props) = crate::ecs::get_layer_render_properties(world, layer_type) {
-                legacy_layer_info.color = render_props.color;
-            }
-            
-            legacy_layers.insert(layer_type, legacy_layer_info);
-        }
+
+    for layer in &store.layers {
+        let legacy_layer_info = LayerInfo {
+            layer_type: layer.layer_type,
+            gerber_layer: Some(layer.gerber.clone()),
+            raw_gerber_data: None,
+            visible: layer.visible,
+            color: layer.color,
+        };
+        legacy_layers.insert(layer.layer_type, legacy_layer_info);
     }
-    
+
     legacy_layers
 }

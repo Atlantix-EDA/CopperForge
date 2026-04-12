@@ -20,6 +20,21 @@ pub struct BomComponent {
     pub footprint: String,
 }
 
+impl From<crate::bom::BomEntry> for BomComponent {
+    fn from(e: crate::bom::BomEntry) -> Self {
+        Self {
+            item_number: e.item.to_string(),
+            reference: e.reference,
+            description: e.description,
+            x_location: e.x,
+            y_location: e.y,
+            orientation: e.rotation,
+            value: e.value,
+            footprint: e.footprint,
+        }
+    }
+}
+
 /// Events sent from UI to BOM backend
 #[derive(Debug, Clone)]
 pub enum BomEvent {

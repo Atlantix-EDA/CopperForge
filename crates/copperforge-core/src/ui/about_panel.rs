@@ -1,135 +1,92 @@
 use eframe::egui;
 use once_cell::sync::Lazy;
 use crate::platform::parameters::gui::VERSION;
+use crate::theme::TokyoNight;
 
 static LOGO: Lazy<egui::Image<'static>> = Lazy::new(|| {
-    egui::Image::new(egui::include_image!("../../../../assets/media/ForgeCopper.png"))
+    egui::Image::new(egui::include_image!("../../../../assets/media/saturn-logo.png"))
         .fit_to_original_size(0.75)
-        .max_size(egui::vec2(281.25, 225.0))
+        .max_size(egui::vec2(320.0, 320.0))
         .clone()
 });
 
 pub struct AboutPanel;
 
 impl AboutPanel {
-    /// Render a dependency link with optional author credit
-    fn render_dependency(ui: &mut egui::Ui, name: &str, url: &str, author: Option<&str>) {
-        ui.vertical_centered(|ui| {
-            ui.horizontal(|ui| {
-                ui.hyperlink_to(
-                    egui::RichText::new(name)
-                        .size(12.0)
-                        .color(egui::Color32::from_rgb(100, 150, 255)),
-                    url
-                );
-                if let Some(author_name) = author {
-                    ui.label(
-                        egui::RichText::new(format!(" ({})", author_name))
-                            .size(12.0)
-                            .color(egui::Color32::from_rgb(150, 150, 150))
-                    );
-                }
-            });
-        });
-    }
-
     pub fn render(ui: &mut egui::Ui) {
         ui.vertical_centered(|ui| {
-            ui.add_space(20.0);
-            
-            // Create a container with fixed width matching the image size
-            let image_width = 150.0; 
-            egui::Frame::new()
-                .show(ui, |ui| {
-                    ui.set_width(image_width);
-                    ui.vertical_centered(|ui| {
-                        // Display CopperForge logo
-                        ui.add(Lazy::force(&LOGO).clone());
-                        
-                        ui.add_space(10.0);
-                        
-                        ui.label(
-                            egui::RichText::new(format!("version {}", VERSION))
-                            .color(egui::Color32::from_rgb(150, 150, 150))
-                            .size(16.0)
-                            .strong()
-                        );
-                        ui.add_space(10.0);
-                        
-                        // Description
-                        ui.label(
-                            egui::RichText::new(
-                                "A Modern PCB Design Tool"
-                            )
-                            .size(16.0)
-                            .strong()
-                            .italics()
-                        );
-                        
-                        ui.add_space(10.0);
-                        
-                        // Dependencies section
-                        ui.label(
-                            egui::RichText::new("Built with:")
-                            .size(12.0)
-                            .color(egui::Color32::from_rgb(150, 150, 150))
-                        );
+            ui.add_space(10.0);
 
-                        ui.add_space(5.0);
+            ui.add(Lazy::force(&LOGO).clone());
 
-                        // Atlantix-EDA / saturn77
-                        ui.label(
-                            egui::RichText::new("Atlantix-EDA (@saturn77)")
-                            .size(11.0)
-                            .color(egui::Color32::from_rgb(200, 200, 200))
-                        );
-                        Self::render_dependency(ui, "egui_mobius", "https://github.com/saturn77/egui_mobius", None);
-                        Self::render_dependency(ui, "egui_lens", "https://github.com/saturn77/egui_lens", None);
+            ui.add_space(12.0);
 
-                        ui.add_space(5.0);
+            ui.label(
+                egui::RichText::new("CopperForge")
+                    .size(22.0)
+                    .color(TokyoNight::BLUE)
+                    .strong()
+            );
 
-                        // MakerPnP / hydra
-                        ui.label(
-                            egui::RichText::new("MakerPnP (@hydra)")
-                            .size(11.0)
-                            .color(egui::Color32::from_rgb(200, 200, 200))
-                        );
-                        Self::render_dependency(ui, "gerber-viewer", "https://github.com/MakerPnP/gerber-viewer", None);
-                        Self::render_dependency(ui, "gerber_types", "https://github.com/MakerPnP/gerber-types", None);
-                        Self::render_dependency(ui, "gerber_parser", "https://github.com/MakerPnP/gerber-parser", None);
+            ui.label(
+                egui::RichText::new(format!("v{}", VERSION))
+                    .size(14.0)
+                    .color(TokyoNight::COMMENT)
+            );
 
-                        ui.add_space(5.0);
+            ui.add_space(8.0);
 
-                        // emilk
-                        ui.label(
-                            egui::RichText::new("@emilk")
-                            .size(11.0)
-                            .color(egui::Color32::from_rgb(200, 200, 200))
-                        );
-                        Self::render_dependency(ui, "egui", "https://github.com/emilk/egui", None);
+            ui.label(
+                egui::RichText::new("KiCad companion for gerber processing and project management")
+                    .size(13.0)
+                    .color(TokyoNight::FG_DIM)
+            );
 
-                        ui.add_space(5.0);
+            ui.add_space(12.0);
 
-                        // jannistpl
-                        ui.label(
-                            egui::RichText::new("@jannistpl")
-                            .size(11.0)
-                            .color(egui::Color32::from_rgb(200, 200, 200))
-                        );
-                        Self::render_dependency(ui, "egui-file-dialog", "https://github.com/jannistpl/egui-file-dialog", None);
+            ui.label(
+                egui::RichText::new("James Bonanno — Atlantix EDA")
+                    .size(14.0)
+                    .color(TokyoNight::CYAN)
+                    .strong()
+            );
 
-                        ui.add_space(5.0);
+            ui.hyperlink_to(
+                egui::RichText::new("github.com/saturn77")
+                    .size(12.0)
+                    .color(TokyoNight::BLUE),
+                "https://github.com/saturn77"
+            );
 
-                        // Adanos020
-                        ui.label(
-                            egui::RichText::new("@Adanos020")
-                            .size(11.0)
-                            .color(egui::Color32::from_rgb(200, 200, 200))
-                        );
-                        Self::render_dependency(ui, "egui_dock", "https://github.com/Adanos020/egui_dock", None);
-                        
-                    });
-                });
+            ui.add_space(16.0);
+
+            // Compact dependency credits
+            ui.label(
+                egui::RichText::new("Built with egui-citizen + Tokyo Night Storm")
+                    .size(11.0)
+                    .color(TokyoNight::COMMENT)
+            );
+
+            ui.horizontal(|ui| {
+                let total_width = ui.available_width();
+                let approx_content = 250.0; // approximate width of the links
+                let pad = ((total_width - approx_content) / 2.0).max(0.0);
+                ui.add_space(pad);
+                ui.hyperlink_to(
+                    egui::RichText::new("egui-citizen").size(11.0).color(TokyoNight::BLUE),
+                    "https://github.com/saturn77/egui-citizen"
+                );
+                ui.label(egui::RichText::new("·").color(TokyoNight::COMMENT));
+                ui.hyperlink_to(
+                    egui::RichText::new("egui").size(11.0).color(TokyoNight::BLUE),
+                    "https://github.com/emilk/egui"
+                );
+                ui.label(egui::RichText::new("·").color(TokyoNight::COMMENT));
+                ui.hyperlink_to(
+                    egui::RichText::new("gerber-viewer").size(11.0).color(TokyoNight::BLUE),
+                    "https://github.com/MakerPnP/gerber-viewer"
+                );
+            });
         });
     }
 }

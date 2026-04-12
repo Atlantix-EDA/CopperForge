@@ -1,12 +1,12 @@
-use crate::DemoLensApp;
+use crate::CopperForgeApp;
 use crate::project_manager::ProjectManagerState;
-use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
+use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
 use egui_file_dialog::FileDialog;
 
 pub fn show_project_panel<'a>(
     ui: &mut egui::Ui,
-    app: &'a mut DemoLensApp,
+    app: &'a mut CopperForgeApp,
     logger_state: &'a Dynamic<ReactiveEventLoggerState>,
     log_colors: &'a Dynamic<LogColors>,
 ) {
@@ -26,7 +26,7 @@ pub fn show_project_panel<'a>(
 /// Show create project form (static, not modal)
 fn show_create_project_form(
     ui: &mut egui::Ui,
-    app: &mut DemoLensApp,
+    app: &mut CopperForgeApp,
     logger: &ReactiveEventLogger,
 ) {
     // Initialize project manager state if not already done
@@ -283,8 +283,8 @@ fn show_create_project_form(
                             .collect();
 
                         // Get BOM components
-                        let bom_components = if let Some(ref bom_state) = app.bom_state {
-                            bom_state.components.lock().unwrap().clone()
+                        let bom_components: Vec<crate::project_manager::bom::BomComponent> = if let Some(ref bom_state) = app.bom_state {
+                            bom_state.entries.iter().cloned().map(Into::into).collect()
                         } else {
                             Vec::new()
                         };

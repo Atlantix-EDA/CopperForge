@@ -1,14 +1,14 @@
 use egui;
 use egui_mobius_reactive::Dynamic;
-use egui_lens::{ReactiveEventLoggerState, LogColors};
+use crate::event_logger::{ReactiveEventLoggerState, LogColors};
 
-use crate::DemoLensApp;
+use crate::CopperForgeApp;
 use crate::ui;
 
 /// View Settings Panel following the diskforge pattern with explicit lifetimes
 #[allow(dead_code)]
 pub struct ViewSettingsPanel<'a> {
-    app: &'a mut DemoLensApp,
+    app: &'a mut CopperForgeApp,
     logger_state: &'a Dynamic<ReactiveEventLoggerState>,
     log_colors: &'a Dynamic<LogColors>,
 }
@@ -17,7 +17,7 @@ impl<'a> ViewSettingsPanel<'a> {
     /// Create a new ViewSettingsPanel instance
     #[allow(dead_code)]
     pub fn render(
-        app: &'a mut DemoLensApp,
+        app: &'a mut CopperForgeApp,
         logger_state: &'a Dynamic<ReactiveEventLoggerState>,
         log_colors: &'a Dynamic<LogColors>,
     ) -> Self {

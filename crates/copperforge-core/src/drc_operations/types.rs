@@ -171,12 +171,12 @@ impl Default for DrcRules {
 impl DrcRules {
     /// Convert mm to mils using nanometer precision
     pub fn mm_to_mils(mm: f32) -> f32 {
-        crate::ecs::nm_to_mils(crate::ecs::mm_to_nm(mm))
+        crate::layer_store::nm_to_mils(crate::layer_store::mm_to_nm(mm as f64)) as f32
     }
     
     /// Convert mils to mm using nanometer precision
     pub fn mils_to_mm(mils: f32) -> f32 {
-        crate::ecs::nm_to_mm(crate::ecs::mils_to_nm(mils))
+        crate::layer_store::nm_to_mm(crate::layer_store::mils_to_nm(mils as f64)) as f32
     }
     
     /// Get display value (convert to mils if use_mils is true)
@@ -1108,11 +1108,11 @@ pub fn check_trace_width_in_gerber_data(
 
 /// Main DRC check function - runs all configured DRC checks
 pub fn run_simple_drc_check(
-    layers: &HashMap<crate::ecs::LayerType, crate::ui::drc_panel::LayerInfo>,
+    layers: &HashMap<crate::layer_store::LayerType, crate::ui::drc_panel::LayerInfo>,
     drc_rules: &DrcRules,
     trace_quality_issues: &mut Vec<TraceQualityIssue>
 ) -> Vec<DrcViolation> {
-    use crate::ecs::LayerType;
+    use crate::layer_store::LayerType;
     
     let mut violations = Vec::new();
     

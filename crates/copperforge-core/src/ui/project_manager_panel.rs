@@ -1,21 +1,21 @@
 #![allow(dead_code)]
-use crate::DemoLensApp;
+use crate::CopperForgeApp;
 use crate::project_manager::ProjectManagerState;
-use egui_lens::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
+use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
 
 /// Show the project manager panel
 pub fn show_project_manager_panel(
     ui: &mut egui::Ui,
-    app: &mut DemoLensApp,
+    app: &mut CopperForgeApp,
     logger_state: &Dynamic<ReactiveEventLoggerState>,
     log_colors: &Dynamic<LogColors>,
 ) {
     let logger = ReactiveEventLogger::with_colors(logger_state, log_colors);
     
     // Split app borrow to avoid conflicts
-    let bom_components = if let Some(ref bom_state) = app.bom_state {
-        Some(bom_state.components.lock().unwrap().clone())
+    let bom_components: Option<Vec<crate::project_manager::bom::BomComponent>> = if let Some(ref bom_state) = app.bom_state {
+        Some(bom_state.entries.iter().cloned().map(Into::into).collect())
     } else {
         None
     };
@@ -190,7 +190,7 @@ pub fn show_project_manager_panel(
         let delete_project_id = ui.ctx().memory(|mem| {
             mem.data.get_temp::<String>(egui::Id::new("delete_project"))
         });
-        let toggle_expand_id = ui.ctx().memory(|mem| {
+        let _toggle_expand_id = ui.ctx().memory(|mem| {
             mem.data.get_temp::<String>(egui::Id::new("toggle_expand"))
         });
         

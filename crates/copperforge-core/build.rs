@@ -19,7 +19,7 @@ fn main() {
     let mut gerber_parser_version = "unknown";
     let mut egui_file_dialog_version = "unknown";
     let mut egui_dock_version = "unknown";
-    let mut egui_lens_version = "unknown";
+    let mut egui_citizen_version = "unknown";
     let mut egui_mobius_version = "unknown";
     
     // Check local Cargo.toml first
@@ -40,8 +40,8 @@ fn main() {
             if let Some(version_part) = line.split("version = ").nth(1) {
                 egui_dock_version = version_part.split('"').nth(1).unwrap_or("unknown");
             }
-        } else if line.starts_with("egui_lens = ") {
-            egui_lens_version = line.split('"').nth(1).unwrap_or("unknown");
+        } else if line.contains("egui_citizen = ") {
+            egui_citizen_version = line.split('"').nth(1).unwrap_or("unknown");
         } else if line.starts_with("egui_mobius_reactive = ") {
             egui_mobius_version = line.split('"').nth(1).unwrap_or("unknown");
         }
@@ -65,8 +65,8 @@ fn main() {
             if let Some(version_part) = line.split("version = ").nth(1) {
                 egui_dock_version = version_part.split('"').nth(1).unwrap_or("unknown");
             }
-        } else if egui_lens_version == "unknown" && line.starts_with("egui_lens = ") {
-            egui_lens_version = line.split('"').nth(1).unwrap_or("unknown");
+        } else if egui_citizen_version == "unknown" && line.contains("egui_citizen = ") {
+            egui_citizen_version = line.split('"').nth(1).unwrap_or("unknown");
         } else if egui_mobius_version == "unknown" && line.starts_with("egui_mobius_reactive = ") {
             egui_mobius_version = line.split('"').nth(1).unwrap_or("unknown");
         }
@@ -79,6 +79,6 @@ fn main() {
     println!("cargo:rustc-env=GERBER_PARSER_VERSION={}", gerber_parser_version);
     println!("cargo:rustc-env=EGUI_FILE_DIALOG_VERSION={}", egui_file_dialog_version);
     println!("cargo:rustc-env=EGUI_DOCK_VERSION={}", egui_dock_version);
-    println!("cargo:rustc-env=EGUI_LENS_VERSION={}", egui_lens_version);
+    println!("cargo:rustc-env=EGUI_CITIZEN_VERSION={}", egui_citizen_version);
     println!("cargo:rustc-env=EGUI_MOBIUS_VERSION={}", egui_mobius_version);
 }

@@ -150,7 +150,7 @@ impl DisplayManager {
     /// Get the quadrant offset for a specific layer type
     /// Returns (x_offset, y_offset) in mm
     /// Now implements linear horizontal layout instead of quadrant view
-    pub fn get_quadrant_offset(&self, layer_type: &crate::ecs::LayerType) -> VectorOffset {
+    pub fn get_quadrant_offset(&self, layer_type: &crate::layer_store::LayerType) -> VectorOffset {
         // Use the quadrant_offset_magnitude directly as the spacing value
         let spacing = self.quadrant_offset_magnitude.max(1.0); // Minimum 1mm spacing
         self.get_quadrant_offset_with_spacing(layer_type, spacing)
@@ -159,7 +159,7 @@ impl DisplayManager {
     /// Get the quadrant offset with explicit spacing
     /// Returns (x_offset, y_offset) in mm
     /// Now implements linear horizontal layout instead of quadrant view
-    pub fn get_quadrant_offset_with_spacing(&self, layer_type: &crate::ecs::LayerType, spacing: f64) -> VectorOffset {
+    pub fn get_quadrant_offset_with_spacing(&self, layer_type: &crate::layer_store::LayerType, spacing: f64) -> VectorOffset {
         if !self.quadrant_view_enabled {
             return VectorOffset { x: 0.0, y: 0.0 };
         }
@@ -170,7 +170,7 @@ impl DisplayManager {
         // - Soldermask at spacing * 2
         // - Paste layers hidden (not shown)
         
-        use crate::ecs::LayerType;
+        use crate::layer_store::LayerType;
         
         let x_offset = match layer_type {
             // Copper layers - Stay at origin (0,0)
