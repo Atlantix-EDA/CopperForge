@@ -2784,19 +2784,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "librepcb-ecs"
-version = "0.1.0"
-dependencies = [
- "bevy_ecs",
- "eyre",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "linux-raw-sys"
 version = "0.4.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"

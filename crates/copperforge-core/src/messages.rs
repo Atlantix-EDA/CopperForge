@@ -39,9 +39,9 @@ pub enum AppMessage {
     // ── Hotkeys ───────────────────────────────────────────────
     HotkeyPressed(Hotkey),
 
-    // ── Future: release management ────────────────────────────
-    // ReleaseTagged { tag: String, gerber_snapshot: PathBuf },
-    // VendorPackageReady { vendor: VendorKind, archive_path: PathBuf },
+    // ── Release management ──────────────────────────────────
+    ReleaseTagged { tag: String, archive_path: PathBuf },
+    VendorPackageReady { vendor: crate::vendor::VendorKind, archive_path: PathBuf },
 }
 
 /// Keyboard hotkey actions routed through the message system.

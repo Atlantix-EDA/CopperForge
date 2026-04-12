@@ -15,7 +15,9 @@ pub mod navigation;
 pub mod platform;
 pub mod project;
 pub mod project_manager;
+pub mod release;
 pub mod ui;
+pub mod vendor;
 pub mod app;
 
 // Re-export CopperForgeApp from app module
