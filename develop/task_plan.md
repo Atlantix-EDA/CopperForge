@@ -53,6 +53,7 @@ Model on Stencil implementation (stencil-ide/backend/src/bom.rs).
 
 ### UI / Theme
 - [ ] Font scale control (like saturn-grid-sim — theme::apply_font_scale with % slider)
+- [ ] Separate font size control for top ribbon bar (independent of global scale)
 
 ### New Panels
 - [ ] Shell panel
