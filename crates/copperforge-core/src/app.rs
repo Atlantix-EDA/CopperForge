@@ -453,11 +453,11 @@ impl CopperForgeApp {
         ui.label(egui::RichText::new(clock_text).color(egui::Color32::from_rgb(220, 220, 220)));
     }
 
-    /// Detect KiCad version by running kicad-cli (PATH or Flatpak)
+    /// Detect KiCad version by running kicad-cli (PATH, Flatpak, or Snap)
     fn detect_kicad_version() -> Option<String> {
         use std::process::Command;
 
-        // Try kicad-cli commands in PATH first
+        // 1. Try kicad-cli in PATH (native install)
         for cmd in ["kicad-cli", "kicad-cli-nightly"] {
             if let Ok(output) = Command::new(cmd).arg("--version").output() {
                 if output.status.success() {
@@ -468,7 +468,7 @@ impl CopperForgeApp {
             }
         }
 
-        // Try Flatpak (KiCad 10+ is commonly installed this way on Linux)
+        // 2. Try Flatpak (KiCad 10+ on Linux)
         if let Ok(output) = Command::new("flatpak")
             .args(["run", "--command=kicad-cli", "org.kicad.KiCad", "--version"])
             .output()
@@ -476,6 +476,18 @@ impl CopperForgeApp {
             if output.status.success() {
                 if let Some(v) = Self::parse_kicad_version(&output.stdout, false) {
                     return Some(format!("{} (flatpak)", v));
+                }
+            }
+        }
+
+        // 3. Try Snap (KiCad 10+ on Linux)
+        if let Ok(output) = Command::new("snap")
+            .args(["run", "kicad.kicad-cli", "--version"])
+            .output()
+        {
+            if output.status.success() {
+                if let Some(v) = Self::parse_kicad_version(&output.stdout, false) {
+                    return Some(format!("{} (snap)", v));
                 }
             }
         }
