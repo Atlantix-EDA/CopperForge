@@ -453,40 +453,48 @@ impl CopperForgeApp {
         ui.label(egui::RichText::new(clock_text).color(egui::Color32::from_rgb(220, 220, 220)));
     }
 
-    /// Detect KiCad version by running kicad-cli
+    /// Detect KiCad version by running kicad-cli (PATH or Flatpak)
     fn detect_kicad_version() -> Option<String> {
         use std::process::Command;
 
-        // Try kicad-cli commands in PATH only
-        let commands = ["kicad-cli", "kicad-cli-nightly"];
-
-        for cmd in &commands {
+        // Try kicad-cli commands in PATH first
+        for cmd in ["kicad-cli", "kicad-cli-nightly"] {
             if let Ok(output) = Command::new(cmd).arg("--version").output() {
                 if output.status.success() {
-                    let version_str = String::from_utf8_lossy(&output.stdout);
-                    // Parse version from output (format: "kicad-cli 9.0.0-rc1" or just "9.99.0")
-                    if let Some(line) = version_str.lines().next() {
-                        let version = if line.contains("kicad-cli") {
-                            // Format: "kicad-cli 9.0.0"
-                            line.split_whitespace().nth(1).map(|s| s.to_string())
-                        } else {
-                            // Format: just "9.99.0"
-                            Some(line.trim().to_string())
-                        };
-
-                        if let Some(mut version_string) = version {
-                            // Add "nightly" tag if using nightly build
-                            if cmd.contains("nightly") {
-                                version_string.push_str(" (nightly)");
-                            }
-                            return Some(version_string);
-                        }
+                    if let Some(v) = Self::parse_kicad_version(&output.stdout, cmd.contains("nightly")) {
+                        return Some(v);
                     }
                 }
             }
         }
 
+        // Try Flatpak (KiCad 10+ is commonly installed this way on Linux)
+        if let Ok(output) = Command::new("flatpak")
+            .args(["run", "--command=kicad-cli", "org.kicad.KiCad", "--version"])
+            .output()
+        {
+            if output.status.success() {
+                if let Some(v) = Self::parse_kicad_version(&output.stdout, false) {
+                    return Some(format!("{} (flatpak)", v));
+                }
+            }
+        }
+
         None
+    }
+
+    fn parse_kicad_version(stdout: &[u8], nightly: bool) -> Option<String> {
+        let version_str = String::from_utf8_lossy(stdout);
+        let line = version_str.lines().next()?;
+        let mut version = if line.contains("kicad-cli") {
+            line.split_whitespace().nth(1)?.to_string()
+        } else {
+            line.trim().to_string()
+        };
+        if nightly {
+            version.push_str(" (nightly)");
+        }
+        Some(version)
     }
 
     /// Render the KiCad information modal

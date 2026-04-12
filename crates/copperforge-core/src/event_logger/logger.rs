@@ -173,8 +173,7 @@ impl<'a> ReactiveEventLogger<'a> {
                 ui.horizontal(|ui| {
                     ui.label(
                         egui::RichText::new(format!("Logs: {}", state.logs.len()))
-                            .color(egui::Color32::from_rgb(180, 180, 180))
-                            .small(),
+                            .color(egui::Color32::from_rgb(180, 180, 180)),
                     );
                     if ui.small_button("Clear").clicked() {
                         self.state.lock().clear_logs();
@@ -192,8 +191,7 @@ impl<'a> ReactiveEventLogger<'a> {
                                     ui.label(
                                         egui::RichText::new(&entry.timestamp)
                                             .color(egui::Color32::from_rgb(120, 120, 120))
-                                            .monospace()
-                                            .small(),
+                                            .monospace(),
                                     );
                                 }
                                 if state.show_log_level {
@@ -201,8 +199,7 @@ impl<'a> ReactiveEventLogger<'a> {
                                     ui.label(
                                         egui::RichText::new(level_text)
                                             .color(level_color)
-                                            .monospace()
-                                            .small(),
+                                            .monospace(),
                                     );
                                 }
                                 if state.show_messages {
@@ -210,8 +207,7 @@ impl<'a> ReactiveEventLogger<'a> {
                                     ui.label(
                                         egui::RichText::new(&entry.message)
                                             .color(msg_color)
-                                            .monospace()
-                                            .small(),
+                                            .monospace(),
                                     );
                                 }
                             });
