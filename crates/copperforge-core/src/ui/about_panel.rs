@@ -67,23 +67,25 @@ impl AboutPanel {
                     .color(TokyoNight::COMMENT)
             );
 
-            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                ui.horizontal(|ui| {
-                    ui.hyperlink_to(
-                        egui::RichText::new("egui-citizen").size(11.0).color(TokyoNight::BLUE),
-                        "https://github.com/saturn77/egui-citizen"
-                    );
-                    ui.label(egui::RichText::new("·").color(TokyoNight::COMMENT));
-                    ui.hyperlink_to(
-                        egui::RichText::new("egui").size(11.0).color(TokyoNight::BLUE),
-                        "https://github.com/emilk/egui"
-                    );
-                    ui.label(egui::RichText::new("·").color(TokyoNight::COMMENT));
-                    ui.hyperlink_to(
-                        egui::RichText::new("gerber-viewer").size(11.0).color(TokyoNight::BLUE),
-                        "https://github.com/MakerPnP/gerber-viewer"
-                    );
-                });
+            ui.horizontal(|ui| {
+                let total_width = ui.available_width();
+                let approx_content = 250.0; // approximate width of the links
+                let pad = ((total_width - approx_content) / 2.0).max(0.0);
+                ui.add_space(pad);
+                ui.hyperlink_to(
+                    egui::RichText::new("egui-citizen").size(11.0).color(TokyoNight::BLUE),
+                    "https://github.com/saturn77/egui-citizen"
+                );
+                ui.label(egui::RichText::new("·").color(TokyoNight::COMMENT));
+                ui.hyperlink_to(
+                    egui::RichText::new("egui").size(11.0).color(TokyoNight::BLUE),
+                    "https://github.com/emilk/egui"
+                );
+                ui.label(egui::RichText::new("·").color(TokyoNight::COMMENT));
+                ui.hyperlink_to(
+                    egui::RichText::new("gerber-viewer").size(11.0).color(TokyoNight::BLUE),
+                    "https://github.com/MakerPnP/gerber-viewer"
+                );
             });
         });
     }
