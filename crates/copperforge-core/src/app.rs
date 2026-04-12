@@ -101,14 +101,6 @@ pub struct CopperForgeApp {
     // BOM panel state
     pub bom_state: Option<ui::BomPanelState>,
     
-    // Pending BOM components (loaded from project before BOM tab is opened)
-    pub pending_bom_components: Option<Vec<project_manager::bom::BomComponent>>,
-    
-    // Cross-probe signal handling
-    pub cross_probe_slot: Option<egui_mobius::slot::Slot<project_manager::bom::BomComponent>>,
-    pub cross_probe_slot_started: bool,
-    pub pending_cross_probe: egui_mobius::types::Value<Option<project_manager::bom::BomComponent>>,
-    
     // Project manager state
     pub project_manager_state: Option<project_manager::ProjectManagerState>,
 
@@ -234,10 +226,6 @@ impl CopperForgeApp {
             latched_measurement_start: None,
             latched_measurement_end: None,
             bom_state: None,
-            pending_bom_components: None,
-            cross_probe_slot: None,
-            cross_probe_slot_started: false,
-            pending_cross_probe: egui_mobius::types::Value::new(None),
             project_manager_state: None,
             projects_directory_dialog: egui_file_dialog::FileDialog::new(),
             last_picked_projects_directory: None,
@@ -715,43 +703,6 @@ impl eframe::App for CopperForgeApp {
             self.layer_store.mark_clean();
         }
         
-        // Process cross-probe signals from BOM component selection
-        if let Some(ref mut cross_probe_slot) = self.cross_probe_slot {
-            // Check if slot is not started yet
-            if !self.cross_probe_slot_started {
-                let pending_cross_probe = self.pending_cross_probe.clone();
-                
-                cross_probe_slot.start(move |component: project_manager::bom::BomComponent| {
-                    // Store the component for the UI thread to process
-                    *pending_cross_probe.lock().unwrap() = Some(component);
-                });
-                
-                self.cross_probe_slot_started = true;
-            }
-        }
-        
-        // Check if there's a pending cross-probe to process
-        let pending_component = {
-            self.pending_cross_probe.lock().unwrap().take()
-        };
-        
-        if let Some(component) = pending_component {
-            // Get the current viewport
-            let viewport = ctx.available_rect();
-            
-            // Zoom to the selected component
-            self.zoom_to_component(&component, viewport);
-            
-            // Log the cross-probe action
-            let logger = ReactiveEventLogger::with_colors(&self.logger_state, &self.log_colors);
-            logger.log_info(&format!("Cross-probed to component: {} at ({:.2}, {:.2})", 
-                                    component.reference, component.x_location, component.y_location));
-            
-            // Request repaint to show the zoomed view
-            ctx.request_repaint();
-        }
-        
-        // No longer need legacy sync - UI uses ECS directly
         
         // Handle hotkeys first (but only if no text field has focus)
         let text_input_active = ctx.memory(|mem| mem.focused().is_some());
@@ -1049,10 +1000,11 @@ impl eframe::App for CopperForgeApp {
         if self.show_about_modal {
             egui::Window::new("About CopperForge")
                 .collapsible(false)
-                .resizable(false)
+                .resizable(true)
+                .default_size(egui::vec2(400.0, 550.0))
                 .default_pos(egui::pos2(
                     ctx.content_rect().center().x - 200.0,
-                    ctx.content_rect().center().y - 200.0
+                    ctx.content_rect().center().y - 275.0
                 ))
                 .show(ctx, |ui| {
                     ui::AboutPanel::render(ui);

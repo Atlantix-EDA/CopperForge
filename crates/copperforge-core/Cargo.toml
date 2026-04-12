@@ -21,7 +21,6 @@ nalgebra = { workspace = true }
 
 # Egui Mobius framework
 egui_mobius_reactive = { workspace = true }
-egui_mobius = { workspace = true }
 
 # Citizen panel lifecycle
 egui_citizen = { workspace = true }
@@ -48,9 +47,6 @@ regex = { workspace = true }
 once_cell = { workspace = true }
 
 
-# KiCad IPC protocol for BOM tab
-kicad-ecs = { path = "../kicad-ecs" }
-futures = { workspace = true }
 
 # Project database
 sled = { workspace = true }

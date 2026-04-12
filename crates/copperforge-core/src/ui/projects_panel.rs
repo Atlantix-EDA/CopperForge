@@ -62,7 +62,7 @@ pub fn show_projects_panel<'a>(
                 // Save BOM to current project
                 if ui.button("💾 Save BOM").clicked() {
                     if let Some(ref bom_state) = app.bom_state {
-                        let components = bom_state.components.lock().unwrap().clone();
+                        let components: Vec<crate::project_manager::bom::BomComponent> = bom_state.entries.iter().cloned().map(Into::into).collect();
                         if let Err(e) = manager_state.update_project_bom(components) {
                             manager_state.last_error = Some(format!("Failed to save BOM: {}", e));
                         } else {
@@ -547,12 +547,22 @@ pub fn show_projects_panel<'a>(
                     // 2. Restore BOM components if available
                     if !project.bom_components.is_empty() {
                         if let Some(ref mut bom_state) = app.bom_state {
-                            let mut components = bom_state.components.lock().unwrap();
-                            *components = project.bom_components.clone();
+                            bom_state.entries = project.bom_components.iter().map(|c| {
+                                crate::bom::BomEntry {
+                                    item: c.item_number.parse().unwrap_or(0),
+                                    reference: c.reference.clone(),
+                                    value: c.value.clone(),
+                                    description: c.description.clone(),
+                                    footprint: c.footprint.clone(),
+                                    x: c.x_location,
+                                    y: c.y_location,
+                                    rotation: c.orientation,
+                                    layer: String::new(),
+                                }
+                            }).collect();
                             logger.log_info(&format!("Restored {} BOM components", project.bom_components.len()));
                         } else {
-                            app.pending_bom_components = Some(project.bom_components.clone());
-                            logger.log_info(&format!("BOM state not initialized yet. {} components stored and will be loaded when BOM tab is opened.", project.bom_components.len()));
+                            logger.log_warning("BOM state not initialized yet. Components will be loaded when BOM tab is opened.");
                         }
                     }
 

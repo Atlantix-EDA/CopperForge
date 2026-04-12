@@ -4,7 +4,6 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/kicad-ecs",
     "crates/copperforge-core",
 ]
 
@@ -48,7 +47,6 @@ nalgebra = "0.34"
 
 # Egui Mobius framework
 egui_mobius_reactive = { version = "0.3.0-alpha.33" }
-egui_mobius = { version = "0.3.0-alpha.33" }
 
 # Citizen panel lifecycle
 egui_citizen = { path = "../egui-citizen/crates/egui_citizen" }
@@ -74,9 +72,6 @@ notify = "8.0.0"
 regex = "1.10"
 once_cell = "1.19"
 
-
-# Async runtime
-futures = "0.3"
 
 # Project database
 sled = "0.34"

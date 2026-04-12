@@ -1,815 +1,185 @@
-#![allow(dead_code)]
+//! BOM panel — extracts and displays bill of materials from .kicad_pcb files.
+//!
+//! Uses kiparse to parse the PCB file directly. No live KiCad connection needed.
+
 use crate::CopperForgeApp;
-use crate::layer_store::{mm_to_nm, nm_to_mils};
-use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState};
-use crate::event_logger::LogColors;
-use egui_mobius_reactive::*;
-use egui_mobius::factory;
-use egui_mobius::signals::Signal;
-use egui_mobius::slot::Slot;
-use egui_mobius::types::Value;
-use egui_extras::TableBuilder;
-use kicad_ecs::prelude::*;
-use kicad_ecs::client::{KiCadClient, FootprintData};
-use std::time::Duration;
-use std::sync::Arc;
+use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
+use crate::project::ProjectState;
+use egui_mobius_reactive::Dynamic;
+use egui_extras::{TableBuilder, Column};
 
-// Re-export BOM structures from project_manager for backward compatibility
-pub use crate::project_manager::bom::{BomComponent, BomEvent, BomBackendEvent, ConnectionStatus};
-
-/// BOM panel state using egui_mobius patterns
+/// Cached BOM state — avoids re-parsing every frame.
 pub struct BomPanelState {
-    // Shared state using Value<T>
-    pub components: Value<Vec<BomComponent>>,
-    pub connection_status: Value<ConnectionStatus>,
-    pub last_update: Value<std::time::Instant>,
-    pub auto_refresh: Value<bool>,
-    pub refresh_interval: Value<Duration>,
-    pub filter_text: Value<String>,
-    
-    // Signal/Slot communication
-    pub signal_to_backend: Signal<BomEvent>,
-    pub slot_from_backend: Slot<BomBackendEvent>,
-    
-    // Update tracking
-    pub update_needed: Value<bool>,
-    
-    // Store last backend events for UI processing
-    pub last_error: Value<Option<String>>,
-    pub last_info: Value<Option<String>>,
-    
-    // Cross-probing
-    pub selected_component: Value<Option<BomComponent>>,
-    pub cross_probe_signal: Signal<BomComponent>,
+    pub entries: Vec<crate::bom::BomEntry>,
+    pub dimensions: Option<crate::bom::BoardDimensions>,
+    pub filter_text: String,
+    pub pcb_path_hash: u64,
+    pub selected_index: Option<usize>,
 }
 
 impl BomPanelState {
-    pub fn new() -> (Self, Slot<BomEvent>, Signal<BomBackendEvent>, Slot<BomComponent>) {
-        // Create signal/slot pairs
-        let (signal_to_backend, slot_to_backend) = factory::create_signal_slot::<BomEvent>();
-        let (signal_from_backend, mut slot_from_backend) = factory::create_signal_slot::<BomBackendEvent>();
-        let (cross_probe_signal, cross_probe_slot) = factory::create_signal_slot::<BomComponent>();
-        
-        // Create shared state values
-        let components = Value::new(Vec::new());
-        let connection_status = Value::new(ConnectionStatus::Disconnected);
-        let last_update = Value::new(std::time::Instant::now());
-        let update_needed = Value::new(false);
-        let last_error = Value::new(None);
-        let last_info = Value::new(None);
-        
-        // Setup slot processing with cloned values
-        let components_clone = components.clone();
-        let connection_status_clone = connection_status.clone();
-        let last_update_clone = last_update.clone();
-        let update_needed_clone = update_needed.clone();
-        let last_error_clone = last_error.clone();
-        let last_info_clone = last_info.clone();
-        
-        // Start the slot processing immediately - it will run in the background
-        slot_from_backend.start(move |event: BomBackendEvent| {
-            match event {
-                BomBackendEvent::ConnectionStatus(status) => {
-                    *connection_status_clone.lock().unwrap() = status;
-                    *update_needed_clone.lock().unwrap() = true;
-                }
-                BomBackendEvent::ComponentsUpdated(new_components) => {
-                    // Update BOM components in shared state
-                    *components_clone.lock().unwrap() = new_components;
-                    *last_update_clone.lock().unwrap() = std::time::Instant::now();
-                    *update_needed_clone.lock().unwrap() = true;
-                }
-                BomBackendEvent::Error(msg) => {
-                    // Store error for UI thread to process
-                    *last_error_clone.lock().unwrap() = Some(msg);
-                    *update_needed_clone.lock().unwrap() = true;
-                }
-                BomBackendEvent::Info(msg) => {
-                    // Store info for UI thread to process
-                    *last_info_clone.lock().unwrap() = Some(msg);
-                    *update_needed_clone.lock().unwrap() = true;
-                }
-            }
-        });
-        
-        let state = Self {
-            components,
-            connection_status,
-            last_update,
-            auto_refresh: Value::new(false),
-            refresh_interval: Value::new(Duration::from_millis(5000)),
-            filter_text: Value::new(String::new()),
-            signal_to_backend,
-            slot_from_backend,
-            update_needed,
-            last_error,
-            last_info,
-            selected_component: Value::new(None),
-            cross_probe_signal,
-        };
-        
-        (state, slot_to_backend, signal_from_backend, cross_probe_slot)
-    }
-    
-    /// Get filtered component count without cloning
-    pub fn get_filtered_count(&self) -> (usize, usize) {
-        let components = self.components.lock().unwrap();
-        let filter_text = self.filter_text.lock().unwrap();
-        
-        let total = components.len();
-        if filter_text.is_empty() {
-            (total, total)
-        } else {
-            let filter_lower = filter_text.to_lowercase();
-            let filtered = components.iter().filter(|comp| {
-                comp.reference.to_lowercase().contains(&filter_lower) ||
-                comp.description.to_lowercase().contains(&filter_lower) ||
-                comp.value.to_lowercase().contains(&filter_lower) ||
-                comp.footprint.to_lowercase().contains(&filter_lower)
-            }).count();
-            (filtered, total)
+    pub fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            dimensions: None,
+            filter_text: String::new(),
+            pcb_path_hash: 0,
+            selected_index: None,
         }
     }
 }
 
-/// Backend thread for KiCad communication
-pub fn bom_backend_thread(
-    mut slot_from_ui: Slot<BomEvent>,
-    signal_to_ui: Signal<BomBackendEvent>,
-    auto_refresh: Value<bool>,
-    refresh_interval: Value<Duration>,
-) {
-    // No runtime needed - we'll handle async operations differently
-    
-    // TODO: Replace with actual KiCad client when sync implementation is ready
-    let connected: Arc<std::sync::Mutex<bool>> = Arc::new(std::sync::Mutex::new(false));
-    let last_refresh: Arc<std::sync::Mutex<std::time::Instant>> = Arc::new(std::sync::Mutex::new(std::time::Instant::now()));
-    
-    let connected_clone = connected.clone();
-    let last_refresh_clone = last_refresh.clone();
-    let auto_refresh_clone = auto_refresh.clone();
-    let refresh_interval_clone = refresh_interval.clone();
-    
-    // Start slot processing - NO runtime needed!
-    slot_from_ui.start({
-        let signal_to_ui = signal_to_ui.clone();
-        
-        move |event| {
-            match event {
-                BomEvent::Connect => {
-                    signal_to_ui.send(BomBackendEvent::ConnectionStatus(ConnectionStatus::Connecting)).ok();
-                    signal_to_ui.send(BomBackendEvent::Info("Attempting to connect to KiCad...".to_string())).ok();
-                    
-                    // Try real KiCad connection
-                    match KiCadClient::connect() {
-                        Ok(_client) => {
-                            *connected_clone.lock().unwrap() = true;
-                            signal_to_ui.send(BomBackendEvent::ConnectionStatus(ConnectionStatus::Connected)).ok();
-                            signal_to_ui.send(BomBackendEvent::Info("Successfully connected to KiCad!".to_string())).ok();
-                            
-                            // Initial refresh with real data
-                            fetch_real_kicad_components(&signal_to_ui);
-                            *last_refresh_clone.lock().unwrap() = std::time::Instant::now();
-                        }
-                        Err(_) => {
-                            let error_msg = format!("Connection failed: Make sure KiCad is running with a PCB open");
-                            signal_to_ui.send(BomBackendEvent::ConnectionStatus(ConnectionStatus::Error(error_msg.clone()))).ok();
-                            signal_to_ui.send(BomBackendEvent::Error(error_msg)).ok();
-                        }
-                    }
-                }
-                
-                BomEvent::Disconnect => {
-                    *connected_clone.lock().unwrap() = false;
-                    signal_to_ui.send(BomBackendEvent::ConnectionStatus(ConnectionStatus::Disconnected)).ok();
-                    signal_to_ui.send(BomBackendEvent::Info("Disconnected from KiCad".to_string())).ok();
-                }
-                
-                BomEvent::Refresh => {
-                    if *connected_clone.lock().unwrap() {
-                        fetch_real_kicad_components(&signal_to_ui);
-                        *last_refresh_clone.lock().unwrap() = std::time::Instant::now();
-                    } else {
-                        signal_to_ui.send(BomBackendEvent::Error("Not connected to KiCad".to_string())).ok();
-                    }
-                }
-                
-                BomEvent::UpdateRefreshInterval(interval) => {
-                    *refresh_interval_clone.lock().unwrap() = interval;
-                }
-                
-                BomEvent::SetAutoRefresh(enabled) => {
-                    *auto_refresh_clone.lock().unwrap() = enabled;
-                }
-            }
-        }
-    });
-    
-    // Auto-refresh loop with adaptive sleep
-    loop {
-        let sleep_duration = {
-            let auto = *auto_refresh.lock().unwrap();
-            if !auto {
-                // If auto-refresh is off, sleep longer to reduce CPU usage
-                Duration::from_millis(1000)
-            } else {
-                let interval = *refresh_interval.lock().unwrap();
-                let last_refresh_time = *last_refresh.lock().unwrap();
-                let elapsed = last_refresh_time.elapsed();
-                
-                if elapsed >= interval {
-                    // Time to refresh, minimal sleep
-                    Duration::from_millis(10)
-                } else {
-                    // Calculate how long until next refresh and sleep for half that time
-                    // This reduces CPU usage while still being responsive
-                    let remaining = interval - elapsed;
-                    remaining.min(Duration::from_millis(500)) / 2
-                }
-            }
-        };
-        
-        std::thread::sleep(sleep_duration);
-        
-        let should_refresh = {
-            let auto = *auto_refresh.lock().unwrap();
-            let interval = *refresh_interval.lock().unwrap();
-            let last_refresh_time = *last_refresh.lock().unwrap();
-            let has_client = *connected.lock().unwrap();
-            auto && last_refresh_time.elapsed() >= interval && has_client
-        };
-        
-        if should_refresh {
-            fetch_real_kicad_components(&signal_to_ui);
-            *last_refresh.lock().unwrap() = std::time::Instant::now();
-        }
-    }
-}
-
-/// Connect to KiCad and fetch real components using BLOCKING operations only
-fn fetch_real_kicad_components(signal_to_ui: &Signal<BomBackendEvent>) {
-    // NO TOKIO! Use blocking operations only
-    match try_fetch_components_blocking() {
-        Ok(components) => {
-            let count = components.len();
-            signal_to_ui.send(BomBackendEvent::ComponentsUpdated(components)).ok();
-            signal_to_ui.send(BomBackendEvent::Info(format!("Loaded {} components from KiCad", count))).ok();
-        }
-        Err(e) => {
-            signal_to_ui.send(BomBackendEvent::Error(format!("Failed to fetch components: {}", e))).ok();
-        }
-    }
-}
-
-/// Blocking function to fetch components using std::sync approach
-fn try_fetch_components_blocking() -> Result<Vec<BomComponent>, String> {
-    use std::sync::mpsc;
-    
-    // Connect to KiCad
-    let mut client = KiCadClient::connect().map_err(|e| format!("Connection failed: {}", e))?;
-    
-    // Use std::thread to handle async operations without tokio
-    let (tx, rx) = mpsc::channel();
-    
-    std::thread::spawn(move || {
-        // Create a simple async executor
-        let rt = futures::executor::block_on(async {
-            // Get board info
-            let _board = client.get_board().await.map_err(|e| format!("Failed to get board: {}", e))?;
-            
-            // Get footprints  
-            let footprints = client.get_footprints().await.map_err(|e| format!("Failed to get footprints: {}", e))?;
-            
-            // Convert to BOM components
-            let mut components = Vec::new();
-            for (idx, fp) in footprints.iter().enumerate() {
-                let component = BomComponent {
-                    item_number: format!("{:03}", idx + 1),
-                    reference: fp.reference.clone(),
-                    // Use actual KiCad description field if available, otherwise generate one
-                    description: fp.description.as_ref()
-                        .cloned()
-                        .unwrap_or_else(|| generate_description(fp)),
-                    x_location: fp.position.0,
-                    y_location: fp.position.1,
-                    orientation: fp.rotation,
-                    value: fp.value.clone(),
-                    footprint: fp.footprint_name.clone(),
-                };
-                components.push(component);
-            }
-            
-            Ok::<Vec<BomComponent>, String>(components)
-        });
-        
-        tx.send(rt).ok();
-    });
-    
-    // Block until we get the result
-    match rx.recv() {
-        Ok(Ok(components)) => Ok(components),
-        Ok(Err(e)) => Err(format!("Failed to fetch: {}", e)),
-        Err(_) => Err("Thread communication failed".to_string()),
-    }
-}
-
-/// Generate description for a component based on its reference
-fn generate_description(footprint: &FootprintData) -> String {
-    let mut description = String::new();
-    
-    // Add component type based on reference
-    match footprint.reference.chars().next() {
-        Some('R') => description.push_str("Resistor"),
-        Some('C') => description.push_str("Capacitor"),
-        Some('U') => description.push_str("Integrated Circuit"),
-        Some('J') => description.push_str("Connector"),
-        Some('L') => description.push_str("Inductor"),
-        Some('D') => description.push_str("Diode"),
-        Some('Q') => description.push_str("Transistor"),
-        Some('Y') => description.push_str("Crystal/Oscillator"),
-        Some('S') if footprint.reference.starts_with("SW") => description.push_str("Switch"),
-        Some('T') if footprint.reference.starts_with("TP") => description.push_str("Test Point"),
-        Some('H') | Some('M') if footprint.reference.starts_with("MH") => description.push_str("Mounting Hole"),
-        _ => description.push_str("Component"),
-    }
-    
-    // Add value if available and meaningful
-    if !footprint.value.is_empty() && footprint.value != footprint.reference {
-        description.push_str(&format!(" - {}", footprint.value));
-    }
-    
-    description
-}
-
-// Real KiCad IPC implementation using kicad-ecs with minimal tokio runtime
-// This follows the pattern from the real_kicad_ecs example
-
-/// Show the BOM panel
-/// Helper to get units from app
-fn get_units(app: &CopperForgeApp) -> &crate::layer_store::UnitsState {
-    &app.layer_store.units
-}
-
-pub fn show_bom_panel(
+/// Show the BOM panel.
+pub fn show_bom_panel<'a>(
     ui: &mut egui::Ui,
     app: &mut CopperForgeApp,
-    logger_state: &Dynamic<ReactiveEventLoggerState>,
-    log_colors: &Dynamic<LogColors>,
+    logger_state: &'a Dynamic<ReactiveEventLoggerState>,
+    log_colors: &'a Dynamic<LogColors>,
 ) {
     let logger = ReactiveEventLogger::with_colors(logger_state, log_colors);
-    
-    // Get units resource information before any mutable borrows
-    let is_mils = {
-        let units_resource = get_units(app);
-        units_resource.is_mils()
-    };
-    
-    // Initialize BOM state if not already done
-    if app.bom_state.is_none() {
-        let (bom_state, slot_to_backend, signal_from_backend, cross_probe_slot) = BomPanelState::new();
-        
-        // Clone values for the backend thread
-        let auto_refresh = bom_state.auto_refresh.clone();
-        let refresh_interval = bom_state.refresh_interval.clone();
-        
-        // Start backend thread
-        std::thread::spawn(move || {
-            bom_backend_thread(slot_to_backend, signal_from_backend, auto_refresh, refresh_interval);
-        });
-        
-        // Don't start the cross-probe slot here - let the main app handle it
-        // The slot needs access to the app's zoom_to_component method
-        
-        app.bom_state = Some(bom_state);
-        app.cross_probe_slot = Some(cross_probe_slot);
-        
-        // Check for pending BOM components loaded from a project
-        if let Some(pending_components) = app.pending_bom_components.take() {
-            if let Some(ref mut bom_state) = app.bom_state {
-                let mut components = bom_state.components.lock().unwrap();
-                *components = pending_components;
-                *bom_state.last_update.lock().unwrap() = std::time::Instant::now();
-                logger.log_info(&format!("Loaded {} pending BOM components from project", components.len()));
-            }
-        }
-    }
-    
-    if let Some(bom_state) = &mut app.bom_state {
-        // Check for and process any pending backend events
-        let logger = ReactiveEventLogger::with_colors(&logger_state, &log_colors);
-        
-        // Process any error messages that need to be logged
-        if let Some(error_msg) = bom_state.last_error.lock().unwrap().take() {
-            logger.log_error(&error_msg);
-        }
-        
-        // Process any info messages that need to be logged
-        if let Some(info_msg) = bom_state.last_info.lock().unwrap().take() {
-            logger.log_info(&info_msg);
-        }
-        
-        // Connection status header
-        ui.horizontal(|ui| {
-            ui.heading("📊 Bill of Materials (BOM)");
-            ui.separator();
-            
-            // Connection status indicator
-            let connection_status = bom_state.connection_status.lock().unwrap().clone();
-            match connection_status {
-                ConnectionStatus::Disconnected => {
-                    ui.colored_label(egui::Color32::GRAY, "🔴 Disconnected");
-                    if ui.button("Connect").clicked() {
-                        bom_state.signal_to_backend.send(BomEvent::Connect).ok();
-                    }
-                }
-                ConnectionStatus::Connecting => {
-                    ui.colored_label(egui::Color32::YELLOW, "🟡 Connecting...");
-                }
-                ConnectionStatus::Connected => {
-                    ui.colored_label(egui::Color32::GREEN, "🟢 Connected");
-                    if ui.button("🔄 Refresh").clicked() {
-                        bom_state.signal_to_backend.send(BomEvent::Refresh).ok();
-                    }
-                }
-                ConnectionStatus::Error(msg) => {
-                    ui.colored_label(egui::Color32::RED, &format!("🔴 Error: {}", msg));
-                    if ui.button("Retry").clicked() {
-                        bom_state.signal_to_backend.send(BomEvent::Connect).ok();
-                    }
-                }
-            }
-        });
-        
-        ui.separator();
-        
-        // Controls
-        ui.horizontal(|ui| {
-            ui.label("Filter:");
-            let mut filter_text = bom_state.filter_text.lock().unwrap();
-            if ui.text_edit_singleline(&mut *filter_text).changed() {
-                *bom_state.update_needed.lock().unwrap() = true;
-            }
-            drop(filter_text);
-            
-            ui.separator();
-            
-            let mut auto_refresh = bom_state.auto_refresh.lock().unwrap();
-            if ui.checkbox(&mut *auto_refresh, "Auto-refresh").changed() {
-                bom_state.signal_to_backend.send(BomEvent::SetAutoRefresh(*auto_refresh)).ok();
-            }
-            
-            if *auto_refresh {
-                ui.label("Interval:");
-                let refresh_interval = bom_state.refresh_interval.lock().unwrap();
-                let mut interval_ms = refresh_interval.as_millis() as u64;
-                drop(refresh_interval);
-                
-                if ui.add(egui::DragValue::new(&mut interval_ms)
-                    .range(100..=10000)
-                    .suffix(" ms")
-                    .speed(100.0)
-                    .min_decimals(0)
-                    .max_decimals(0))
-                    .changed() {
-                    bom_state.signal_to_backend.send(BomEvent::UpdateRefreshInterval(Duration::from_millis(interval_ms))).ok();
-                }
-            }
-            
-            ui.separator();
-            
-            // Component count (optimized - no cloning)
-            let (filtered_count, total_count) = bom_state.get_filtered_count();
-            ui.label(format!("Components: {}/{}", filtered_count, total_count));
-        });
-        
-        // Last update time
-        let connection_status = bom_state.connection_status.lock().unwrap().clone();
-        if matches!(connection_status, ConnectionStatus::Connected) {
-            let last_update = bom_state.last_update.lock().unwrap();
-            let elapsed = last_update.elapsed();
-            ui.label(format!("Last updated: {}s ago", elapsed.as_secs()));
-        }
-        
-        ui.separator();
-        
-        // BOM table - render directly from locked data
-        {
-            let components = bom_state.components.lock().unwrap();
-            let filter_text = bom_state.filter_text.lock().unwrap();
-            let mut selected_component = bom_state.selected_component.lock().unwrap();
-            
-            show_bom_table_optimized(ui, &components, &filter_text, is_mils, &mut selected_component, &bom_state.cross_probe_signal);
-        }
-        
-        // Request repaint if needed
-        if *bom_state.update_needed.lock().unwrap() {
-            ui.ctx().request_repaint();
-            *bom_state.update_needed.lock().unwrap() = false;
-        }
-    }
-}
 
-/// Show the BOM table using TableBuilder with cross-probing support
-fn show_bom_table_optimized(ui: &mut egui::Ui, components: &[BomComponent], filter_text: &str, is_mils: bool, selected_component: &mut Option<BomComponent>, cross_probe_signal: &Signal<BomComponent>) {
-    let filter_lower = filter_text.to_lowercase();
-    let should_filter = !filter_text.is_empty();
-    
-    // Pre-filter components to avoid doing it twice
-    let filtered_components: Vec<&BomComponent> = if should_filter {
-        components.iter().filter(|comp| {
-            comp.reference.to_lowercase().contains(&filter_lower) ||
-            comp.description.to_lowercase().contains(&filter_lower) ||
-            comp.value.to_lowercase().contains(&filter_lower) ||
-            comp.footprint.to_lowercase().contains(&filter_lower)
-        }).collect()
-    } else {
-        components.iter().collect()
+    // Get PCB path from project state
+    let pcb_path = match &app.project_manager.state {
+        ProjectState::Ready { pcb_path, .. } |
+        ProjectState::PcbSelected { pcb_path } |
+        ProjectState::GeneratingGerbers { pcb_path } |
+        ProjectState::GerbersGenerated { pcb_path, .. } |
+        ProjectState::LoadingGerbers { pcb_path, .. } => Some(pcb_path.clone()),
+        ProjectState::NoProject => None,
     };
-    
-    if filtered_components.is_empty() {
-        ui.centered_and_justified(|ui| {
-            if components.is_empty() {
-                ui.label("No components available. Make sure KiCad is running with a PCB open.");
+
+    // Initialize BOM state if needed
+    if app.bom_state.is_none() {
+        app.bom_state = Some(BomPanelState::new());
+    }
+
+    let bom_state = app.bom_state.as_mut().unwrap();
+
+    ui.vertical(|ui| {
+        // Toolbar
+        ui.horizontal(|ui| {
+            if let Some(ref pcb) = pcb_path {
+                let path_hash = {
+                    use std::hash::{Hash, Hasher};
+                    let mut h = std::collections::hash_map::DefaultHasher::new();
+                    pcb.hash(&mut h);
+                    h.finish()
+                };
+
+                if ui.button("Extract BOM").clicked() || bom_state.pcb_path_hash != path_hash {
+                    match crate::bom::extract_bom(pcb) {
+                        Ok(entries) => {
+                            logger.log_info(&format!("Extracted {} components from {}",
+                                entries.len(),
+                                pcb.file_name().and_then(|n| n.to_str()).unwrap_or("?")));
+                            bom_state.entries = entries;
+                            bom_state.pcb_path_hash = path_hash;
+                        }
+                        Err(e) => {
+                            logger.log_error(&format!("BOM extraction failed: {}", e));
+                        }
+                    }
+                    // Also get board dimensions
+                    if let Ok(Some(dims)) = crate::bom::extract_board_dimensions(pcb) {
+                        logger.log_info(&format!("Board: {:.1} x {:.1} mm ({:.1} mm²)",
+                            dims.width_mm, dims.height_mm, dims.area_mm2));
+                        bom_state.dimensions = Some(dims);
+                    }
+                }
+
+                ui.label(
+                    egui::RichText::new(format!("{} components", bom_state.entries.len()))
+                        .color(crate::theme::TokyoNight::CYAN)
+                );
             } else {
-                ui.label("No components match the current filter.");
+                ui.label("No PCB file selected — open a project first");
+                return;
+            }
+
+            ui.separator();
+
+            // Filter
+            ui.label("Filter:");
+            ui.text_edit_singleline(&mut bom_state.filter_text);
+        });
+
+        if bom_state.entries.is_empty() {
+            return;
+        }
+
+        ui.separator();
+
+        // Summary bar
+        let summary = crate::bom::component_summary(&bom_state.entries);
+        ui.horizontal_wrapped(|ui| {
+            for (prefix, count) in &summary {
+                ui.label(
+                    egui::RichText::new(format!("{}:{}", prefix, count))
+                        .color(crate::theme::TokyoNight::FG_DIM)
+                        .monospace()
+                );
+            }
+            if let Some(ref dims) = bom_state.dimensions {
+                ui.separator();
+                ui.label(
+                    egui::RichText::new(format!("{:.1}x{:.1}mm", dims.width_mm, dims.height_mm))
+                        .color(crate::theme::TokyoNight::GREEN)
+                        .monospace()
+                );
             }
         });
-        return;
-    }
-    
-    // Configure column labels with proper units
-    let x_label = if is_mils { "X (mils)" } else { "X (mm)" };
-    let y_label = if is_mils { "Y (mils)" } else { "Y (mm)" };
-    
-    // Use virtual scrolling for large lists to improve performance
-    let use_virtual_scrolling = filtered_components.len() > 100;
-    
-    // Track row selection for cross-probing
-    let mut clicked_row_index: Option<usize> = None;
-    
-    if use_virtual_scrolling {
-        // Virtual scrolling version for large lists
+
+        ui.separator();
+
+        // BOM table
+        let filtered: Vec<&crate::bom::BomEntry> = bom_state.entries.iter()
+            .filter(|e| e.matches_filter(&bom_state.filter_text))
+            .collect();
+
+        let available = ui.available_size();
         TableBuilder::new(ui)
             .striped(true)
-            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(egui_extras::Column::exact(60.0))    // Item
-            .column(egui_extras::Column::exact(80.0))    // Reference
-            .column(egui_extras::Column::remainder())    // Description
-            .column(egui_extras::Column::exact(80.0))    // X Location
-            .column(egui_extras::Column::exact(80.0))    // Y Location
-            .column(egui_extras::Column::exact(80.0))    // Orientation
-            .column(egui_extras::Column::exact(100.0))   // Value
-            .column(egui_extras::Column::remainder())    // Footprint
-            .header(20.0, |mut header| {
-                header.col(|ui| { ui.strong("Item"); });
-                header.col(|ui| { ui.strong("Reference"); });
-                header.col(|ui| { ui.strong("Description"); });
-                header.col(|ui| { ui.strong(x_label); });
-                header.col(|ui| { ui.strong(y_label); });
-                header.col(|ui| { ui.strong("Rotation (°)"); });
+            .resizable(true)
+            .min_scrolled_height(available.y - 20.0)
+            .column(Column::auto().at_least(30.0))       // #
+            .column(Column::auto().at_least(60.0))       // Reference
+            .column(Column::auto().at_least(80.0))       // Value
+            .column(Column::remainder().at_least(120.0)) // Footprint
+            .column(Column::auto().at_least(60.0))       // X
+            .column(Column::auto().at_least(60.0))       // Y
+            .column(Column::auto().at_least(50.0))       // Layer
+            .header(18.0, |mut header| {
+                header.col(|ui| { ui.strong("#"); });
+                header.col(|ui| { ui.strong("Ref"); });
                 header.col(|ui| { ui.strong("Value"); });
                 header.col(|ui| { ui.strong("Footprint"); });
+                header.col(|ui| { ui.strong("X (mm)"); });
+                header.col(|ui| { ui.strong("Y (mm)"); });
+                header.col(|ui| { ui.strong("Layer"); });
             })
             .body(|body| {
-                body.heterogeneous_rows(
-                    filtered_components.iter().map(|_| 18.0),
-                    |row| {
-                        let row_index = row.index();
-                        if let Some(component) = filtered_components.get(row_index) {
-                            let response = render_component_row_clickable(row, component, is_mils, row_index + 1);
-                            if response.clicked() {
-                                clicked_row_index = Some(row_index);
-                            }
-                        }
-                    },
-                );
-            });
-    } else {
-        // Regular rendering for smaller lists
-        TableBuilder::new(ui)
-            .striped(true)
-            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(egui_extras::Column::exact(60.0))    // Item
-            .column(egui_extras::Column::exact(80.0))    // Reference
-            .column(egui_extras::Column::remainder())    // Description
-            .column(egui_extras::Column::exact(80.0))    // X Location
-            .column(egui_extras::Column::exact(80.0))    // Y Location
-            .column(egui_extras::Column::exact(80.0))    // Orientation
-            .column(egui_extras::Column::exact(100.0))   // Value
-            .column(egui_extras::Column::remainder())    // Footprint
-            .header(20.0, |mut header| {
-                header.col(|ui| { ui.strong("Item"); });
-                header.col(|ui| { ui.strong("Reference"); });
-                header.col(|ui| { ui.strong("Description"); });
-                header.col(|ui| { ui.strong(x_label); });
-                header.col(|ui| { ui.strong(y_label); });
-                header.col(|ui| { ui.strong("Rotation (°)"); });
-                header.col(|ui| { ui.strong("Value"); });
-                header.col(|ui| { ui.strong("Footprint"); });
-            })
-            .body(|mut body| {
-                for (row_index, component) in filtered_components.iter().enumerate() {
-                    body.row(18.0, |row| {
-                        let response = render_component_row_clickable(row, component, is_mils, row_index + 1);
-                        if response.clicked() {
-                            clicked_row_index = Some(row_index);
-                        }
-                    });
-                }
-            });
-    }
-    
-    // Handle selection for cross-probing
-    if let Some(selected_index) = clicked_row_index {
-        if let Some(component) = filtered_components.get(selected_index) {
-            *selected_component = Some((*component).clone());
-            // Send cross-probe signal to gerber viewer
-            cross_probe_signal.send((*component).clone()).unwrap();
-        }
-    }
-}
-
-/// Render a single component row - extracted for reuse
-fn render_component_row(mut row: egui_extras::TableRow, component: &BomComponent, is_mils: bool) {
-    row.col(|ui| {
-        ui.label(&component.item_number);
-    });
-    row.col(|ui| {
-        ui.label(&component.reference);
-    });
-    row.col(|ui| {
-        ui.label(&component.description);
-    });
-    row.col(|ui| {
-        let x_text = if is_mils {
-            let x_nm = mm_to_nm(component.x_location);
-            format!("{:.0}", nm_to_mils(x_nm))
-        } else {
-            format!("{:.2}", component.x_location)
-        };
-        ui.label(x_text);
-    });
-    row.col(|ui| {
-        let y_text = if is_mils {
-            let y_nm = mm_to_nm(component.y_location);
-            format!("{:.0}", nm_to_mils(y_nm))
-        } else {
-            format!("{:.2}", component.y_location)
-        };
-        ui.label(y_text);
-    });
-    row.col(|ui| {
-        ui.label(format!("{:.1}", component.orientation));
-    });
-    row.col(|ui| {
-        ui.label(&component.value);
-    });
-    row.col(|ui| {
-        ui.label(&component.footprint);
-    });
-}
-
-/// Render a single component row with click detection for cross-probing
-fn render_component_row_clickable(mut row: egui_extras::TableRow, component: &BomComponent, is_mils: bool, item_number: usize) -> egui::Response {
-    let mut response = None;
-    
-    row.col(|ui| {
-        response = Some(ui.selectable_label(false, item_number.to_string()));
-    });
-    row.col(|ui| {
-        let r = ui.selectable_label(false, &component.reference);
-        if response.is_none() { response = Some(r); }
-    });
-    row.col(|ui| {
-        let r = ui.selectable_label(false, &component.description);
-        if response.is_none() { response = Some(r); }
-    });
-    row.col(|ui| {
-        let x_text = if is_mils {
-            let x_nm = mm_to_nm(component.x_location);
-            format!("{:.0}", nm_to_mils(x_nm))
-        } else {
-            format!("{:.2}", component.x_location)
-        };
-        let r = ui.selectable_label(false, x_text);
-        if response.is_none() { response = Some(r); }
-    });
-    row.col(|ui| {
-        let y_text = if is_mils {
-            let y_nm = mm_to_nm(component.y_location);
-            format!("{:.0}", nm_to_mils(y_nm))
-        } else {
-            format!("{:.2}", component.y_location)
-        };
-        let r = ui.selectable_label(false, y_text);
-        if response.is_none() { response = Some(r); }
-    });
-    row.col(|ui| {
-        let r = ui.selectable_label(false, format!("{:.1}", component.orientation));
-        if response.is_none() { response = Some(r); }
-    });
-    row.col(|ui| {
-        let r = ui.selectable_label(false, &component.value);
-        if response.is_none() { response = Some(r); }
-    });
-    row.col(|ui| {
-        let r = ui.selectable_label(false, &component.footprint);
-        if response.is_none() { response = Some(r); }
-    });
-    
-    // Return the first response found from the row cells
-    response.unwrap()
-}
-
-/// Show the BOM table - legacy version
-fn show_bom_table(ui: &mut egui::Ui, components: &[BomComponent], is_mils: bool) {
-    if components.is_empty() {
-        ui.centered_and_justified(|ui| {
-            ui.label("No components available. Make sure KiCad is running with a PCB open.");
-        });
-        return;
-    }
-    
-    // Create table using egui_extras::TableBuilder
-    TableBuilder::new(ui)
-        .striped(true)
-        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-        .column(egui_extras::Column::exact(60.0))    // Item
-        .column(egui_extras::Column::exact(80.0))    // Reference
-        .column(egui_extras::Column::remainder())    // Description
-        .column(egui_extras::Column::exact(80.0))    // X Location
-        .column(egui_extras::Column::exact(80.0))    // Y Location
-        .column(egui_extras::Column::exact(80.0))    // Orientation
-        .column(egui_extras::Column::exact(100.0))   // Value
-        .column(egui_extras::Column::remainder())    // Footprint
-        .header(20.0, |mut header| {
-            header.col(|ui| {
-                ui.strong("Item");
-            });
-            header.col(|ui| {
-                ui.strong("Reference");
-            });
-            header.col(|ui| {
-                ui.strong("Description");
-            });
-            header.col(|ui| {
-                ui.strong("X (mm)");
-            });
-            header.col(|ui| {
-                ui.strong("Y (mm)");
-            });
-            header.col(|ui| {
-                ui.strong("Rotation (°)");
-            });
-            header.col(|ui| {
-                ui.strong("Value");
-            });
-            header.col(|ui| {
-                ui.strong("Footprint");
-            });
-        })
-        .body(|mut body| {
-            for component in components {
-                body.row(18.0, |mut row| {
+                body.rows(16.0, filtered.len(), |mut row| {
+                    let entry = filtered[row.index()];
+                    row.col(|ui| { ui.label(entry.item.to_string()); });
                     row.col(|ui| {
-                        ui.label(&component.item_number);
+                        ui.label(
+                            egui::RichText::new(&entry.reference)
+                                .color(crate::theme::TokyoNight::CYAN)
+                                .monospace()
+                        );
                     });
+                    row.col(|ui| { ui.label(&entry.value); });
                     row.col(|ui| {
-                        ui.label(&component.reference);
+                        ui.label(
+                            egui::RichText::new(&entry.footprint)
+                                .color(crate::theme::TokyoNight::FG_DIM)
+                                .monospace()
+                        );
                     });
-                    row.col(|ui| {
-                        ui.label(&component.description);
-                    });
-                    row.col(|ui| {
-                        let x_text = if is_mils {
-                            let x_nm = mm_to_nm(component.x_location);
-                            format!("{:.0}", nm_to_mils(x_nm))
-                        } else {
-                            format!("{:.2}", component.x_location)
-                        };
-                        ui.label(x_text);
-                    });
-                    row.col(|ui| {
-                        let y_text = if is_mils {
-                            let y_nm = mm_to_nm(component.y_location);
-                            format!("{:.0}", nm_to_mils(y_nm))
-                        } else {
-                            format!("{:.2}", component.y_location)
-                        };
-                        ui.label(y_text);
-                    });
-                    row.col(|ui| {
-                        ui.label(format!("{:.1}", component.orientation));
-                    });
-                    row.col(|ui| {
-                        ui.label(&component.value);
-                    });
-                    row.col(|ui| {
-                        ui.label(&component.footprint);
-                    });
+                    row.col(|ui| { ui.label(format!("{:.2}", entry.x)); });
+                    row.col(|ui| { ui.label(format!("{:.2}", entry.y)); });
+                    row.col(|ui| { ui.label(&entry.layer); });
                 });
-            }
-        });
+            });
+    });
 }
-
-// BOM ECS integration removed — layer_store replaces bevy_ecs in copperforge-core.
