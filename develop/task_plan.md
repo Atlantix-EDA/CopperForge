@@ -51,6 +51,9 @@ Model on Stencil implementation (stencil-ide/backend/src/bom.rs).
 - [ ] Fix created_at / last_modified timestamps (created date shows later than revised date)
 - [ ] Remove the separate Project tab — all project management in one place
 
+### UI / Theme
+- [ ] Font scale control (like saturn-grid-sim — theme::apply_font_scale with % slider)
+
 ### New Panels
 - [ ] Shell panel
 - [ ] Terminal panel
