@@ -31,6 +31,7 @@ impl LayerDetector {
             r"(?i)[-_\.]top\.gbr$", r"(?i)[-_\.]front[-_\.]?copper\.gbr$",
             r"(?i)[-_\.]component\.gbr$", r"(?i)\.gtl$",
             r"(?i)[-_\.]layer1\.gbr$", r"(?i)[-_\.]l1\.gbr$",
+            r"(?i)-Top Layer\.gbr$",  // KiCad 10 --no-protel-ext
         ].into_iter().map(|s| Regex::new(s).unwrap()).collect());
 
         // Bottom Copper (L2)
@@ -39,6 +40,7 @@ impl LayerDetector {
             r"(?i)[-_\.]bottom\.gbr$", r"(?i)[-_\.]back[-_\.]?copper\.gbr$",
             r"(?i)[-_\.]solder\.gbr$", r"(?i)\.gbl$",
             r"(?i)[-_\.]layer2\.gbr$", r"(?i)[-_\.]l2\.gbr$",
+            r"(?i)-Bottom Layer\.gbr$",  // KiCad 10 --no-protel-ext
         ].into_iter().map(|s| Regex::new(s).unwrap()).collect());
 
         // Inner layers
@@ -52,35 +54,41 @@ impl LayerDetector {
             r"(?i)[-_\.]layer4\.gbr$", r"(?i)[-_\.]l4\.gbr$", r"(?i)\.g2$",
         ].into_iter().map(|s| Regex::new(s).unwrap()).collect());
 
-        // Silkscreen
+        // Silkscreen (KiCad: "Overlay" = silkscreen)
         p.insert(LayerType::Silkscreen(Side::Top), vec![
             r"(?i)[-_\.]F[-_\.]?Silk[sS]?\.gbr$", r"(?i)[-_\.]F[-_\.]?Silkscreen\.gbr$",
             r"(?i)[-_\.]top[-_\.]?silk(?:screen)?\.gbr$", r"(?i)\.gto$", r"(?i)[-_\.]sst\.gbr$",
+            r"(?i)-Top Overlay\.gbr$",  // KiCad 10 --no-protel-ext
         ].into_iter().map(|s| Regex::new(s).unwrap()).collect());
 
         p.insert(LayerType::Silkscreen(Side::Bottom), vec![
             r"(?i)[-_\.]B[-_\.]?Silk[sS]?\.gbr$", r"(?i)[-_\.]B[-_\.]?Silkscreen\.gbr$",
             r"(?i)[-_\.]bottom[-_\.]?silk(?:screen)?\.gbr$", r"(?i)\.gbo$", r"(?i)[-_\.]ssb\.gbr$",
+            r"(?i)-Bottom Overlay\.gbr$",  // KiCad 10 --no-protel-ext
         ].into_iter().map(|s| Regex::new(s).unwrap()).collect());
 
-        // Soldermask
+        // Soldermask (KiCad: "Solder" = soldermask)
         p.insert(LayerType::Soldermask(Side::Top), vec![
             r"(?i)[-_\.]F[-_\.]?Mask\.gbr$", r"(?i)[-_\.]top[-_\.]?(?:solder)?mask\.gbr$",
             r"(?i)\.gts$", r"(?i)[-_\.]smt\.gbr$",
+            r"(?i)-Top Solder\.gbr$",  // KiCad 10 --no-protel-ext
         ].into_iter().map(|s| Regex::new(s).unwrap()).collect());
 
         p.insert(LayerType::Soldermask(Side::Bottom), vec![
             r"(?i)[-_\.]B[-_\.]?Mask\.gbr$", r"(?i)[-_\.]bottom[-_\.]?(?:solder)?mask\.gbr$",
             r"(?i)\.gbs$", r"(?i)[-_\.]smb\.gbr$",
+            r"(?i)-Bottom Solder\.gbr$",  // KiCad 10 --no-protel-ext
         ].into_iter().map(|s| Regex::new(s).unwrap()).collect());
 
         // Paste
         p.insert(LayerType::Paste(Side::Top), vec![
             r"(?i)[-_\.]F[-_\.]?Paste\.gbr$", r"(?i)[-_\.]top[-_\.]?paste\.gbr$", r"(?i)\.gtp$",
+            r"(?i)-Top Paste\.gbr$",  // KiCad 10 --no-protel-ext
         ].into_iter().map(|s| Regex::new(s).unwrap()).collect());
 
         p.insert(LayerType::Paste(Side::Bottom), vec![
             r"(?i)[-_\.]B[-_\.]?Paste\.gbr$", r"(?i)[-_\.]bottom[-_\.]?paste\.gbr$", r"(?i)\.gbp$",
+            r"(?i)-Bottom Paste\.gbr$",  // KiCad 10 --no-protel-ext
         ].into_iter().map(|s| Regex::new(s).unwrap()).collect());
 
         // Mechanical Outline
