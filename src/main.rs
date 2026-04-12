@@ -14,6 +14,7 @@ fn main() -> eframe::Result<()> {
         },
         Box::new(|cc|{
             egui_extras::install_image_loaders(&cc.egui_ctx);
+            copperforge_core::theme::apply_visuals(&cc.egui_ctx);
             Ok(Box::new(CopperForgeApp::new()))
         }))
 }

@@ -3,9 +3,9 @@ use once_cell::sync::Lazy;
 use crate::platform::parameters::gui::VERSION;
 
 static LOGO: Lazy<egui::Image<'static>> = Lazy::new(|| {
-    egui::Image::new(egui::include_image!("../../../../assets/media/ForgeCopper.png"))
-        .fit_to_original_size(0.75)
-        .max_size(egui::vec2(281.25, 225.0))
+    egui::Image::new(egui::include_image!("../../../../assets/media/saturn-logo.png"))
+        .fit_to_original_size(0.5)
+        .max_size(egui::vec2(200.0, 200.0))
         .clone()
 });
 
@@ -59,20 +59,26 @@ impl AboutPanel {
                         // Description
                         ui.label(
                             egui::RichText::new(
-                                "A Modern PCB Design Tool"
+                                "KiCad companion for gerber processing and project management"
                             )
-                            .size(16.0)
-                            .strong()
-                            .italics()
+                            .size(14.0)
+                            .color(crate::theme::TokyoNight::FG_DIM)
                         );
-                        
-                        ui.add_space(10.0);
-                        
-                        // Dependencies section
+
+                        ui.add_space(5.0);
+
                         ui.label(
-                            egui::RichText::new("Built with:")
+                            egui::RichText::new("James Bonanno — Atlantix EDA")
                             .size(12.0)
-                            .color(egui::Color32::from_rgb(150, 150, 150))
+                            .color(crate::theme::TokyoNight::CYAN)
+                        );
+
+                        ui.add_space(10.0);
+
+                        ui.label(
+                            egui::RichText::new("Built with Tokyo Night Storm theme")
+                            .size(11.0)
+                            .color(crate::theme::TokyoNight::COMMENT)
                         );
 
                         ui.add_space(5.0);
@@ -81,10 +87,10 @@ impl AboutPanel {
                         ui.label(
                             egui::RichText::new("Atlantix-EDA (@saturn77)")
                             .size(11.0)
-                            .color(egui::Color32::from_rgb(200, 200, 200))
+                            .color(crate::theme::TokyoNight::FG_DIM)
                         );
+                        Self::render_dependency(ui, "egui-citizen", "https://github.com/saturn77/egui-citizen", None);
                         Self::render_dependency(ui, "egui_mobius", "https://github.com/saturn77/egui_mobius", None);
-                        Self::render_dependency(ui, "egui_lens", "https://github.com/saturn77/egui_lens", None);
 
                         ui.add_space(5.0);
 

@@ -15,6 +15,7 @@ pub mod platform;
 pub mod project;
 pub mod project_manager;
 pub mod release;
+pub mod theme;
 pub mod ui;
 pub mod vendor;
 pub mod app;
