@@ -10,7 +10,6 @@ pub mod units;
 
 pub use types::*;
 pub use detection::*;
-pub use layer::*;
 pub use units::*;
 
 use std::collections::HashMap;

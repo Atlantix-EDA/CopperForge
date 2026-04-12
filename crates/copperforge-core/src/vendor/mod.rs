@@ -4,8 +4,6 @@
 //! do: zip up the right combination of gerber + drill files with the
 //! naming conventions each vendor expects.
 
-use std::path::PathBuf;
-
 /// Supported PCB fabrication vendors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum VendorKind {

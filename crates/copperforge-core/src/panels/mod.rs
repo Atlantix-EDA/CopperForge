@@ -28,8 +28,6 @@ pub use shell::ShellPanel;
 pub use terminal::TerminalPanel;
 pub use logger::LoggerPanel;
 
-use egui_citizen::{Citizen, CitizenId, CitizenState};
-
 /// Helper to create a citizen panel with standard boilerplate.
 macro_rules! citizen_panel {
     ($name:ident, $id:expr $(, $field:ident : $ty:ty = $default:expr)*) => {

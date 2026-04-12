@@ -190,7 +190,7 @@ pub fn show_project_manager_panel(
         let delete_project_id = ui.ctx().memory(|mem| {
             mem.data.get_temp::<String>(egui::Id::new("delete_project"))
         });
-        let toggle_expand_id = ui.ctx().memory(|mem| {
+        let _toggle_expand_id = ui.ctx().memory(|mem| {
             mem.data.get_temp::<String>(egui::Id::new("toggle_expand"))
         });
         

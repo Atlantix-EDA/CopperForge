@@ -1051,8 +1051,8 @@ impl eframe::App for CopperForgeApp {
                 .collapsible(false)
                 .resizable(false)
                 .default_pos(egui::pos2(
-                    ctx.screen_rect().center().x - 200.0,
-                    ctx.screen_rect().center().y - 200.0
+                    ctx.content_rect().center().x - 200.0,
+                    ctx.content_rect().center().y - 200.0
                 ))
                 .show(ctx, |ui| {
                     ui::AboutPanel::render(ui);
@@ -1074,8 +1074,8 @@ impl eframe::App for CopperForgeApp {
                 .collapsible(false)
                 .resizable(false)
                 .default_pos(egui::pos2(
-                    ctx.screen_rect().center().x - 200.0,
-                    ctx.screen_rect().center().y - 150.0
+                    ctx.content_rect().center().x - 200.0,
+                    ctx.content_rect().center().y - 150.0
                 ))
                 .show(ctx, |ui| {
                     self.render_kicad_info_modal(ui);

@@ -1,5 +1,4 @@
 use crate::CopperForgeApp;
-use crate::ui;
 use crate::layer_store::{mm_to_nm, nm_to_mm, mils_to_nm, nm_to_mils};
 use egui_citizen::message::CitizenId;
 

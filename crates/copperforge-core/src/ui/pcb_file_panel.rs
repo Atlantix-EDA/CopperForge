@@ -3,7 +3,6 @@ use crate::project::ProjectState;
 use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// Show the PCB file management panel
 pub fn show_pcb_file_panel<'a>(
