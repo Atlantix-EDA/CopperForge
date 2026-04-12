@@ -35,13 +35,10 @@ dirs = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sysinfo = { workspace = true }
-local-ip = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = { workspace = true }
 local-ip-address = { workspace = true }
 egui_dock = { workspace = true }
-rfd = { workspace = true }
-notify = { workspace = true }
 
 regex = { workspace = true }
 once_cell = { workspace = true }
