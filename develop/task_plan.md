@@ -43,6 +43,13 @@ Model on Stencil implementation (stencil-ide/backend/src/bom.rs).
 - [ ] OSH Park gerber packaging
 - [ ] Vendor quote request via TCP JSON to server
 
+### Project Panel Rework
+- [ ] Merge Project tab and Project Database tab into a single panel
+- [ ] Right-click context menu on project rows: Create / Open / Update / Delete
+- [ ] Modal dialog for project details (name, description, PCB path, author, etc.)
+- [ ] Description and metadata changes must persist on save (currently lost)
+- [ ] Remove the separate Project tab — all project management in one place
+
 ### New Panels
 - [ ] Shell panel
 - [ ] Terminal panel
