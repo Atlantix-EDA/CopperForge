@@ -6,6 +6,7 @@ pub mod drc_operations;
 pub mod ecs;
 pub mod event_logger;
 pub mod export;
+pub mod layer_store;
 pub mod messages;
 pub mod services;
 // layer_operations module removed - all functionality moved to ECS

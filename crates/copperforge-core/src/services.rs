@@ -37,8 +37,8 @@ pub struct SharedServices {
     pub drc_manager: DrcManager,
     pub project_manager: ProjectManager,
 
-    // ── ECS world (until Phase 2 replaces with LayerStore) ───
-    pub ecs_world: bevy_ecs::world::World,
+    // ── Layer management ────────────────────────────────────
+    pub layer_store: crate::layer_store::LayerStore,
 
     // ── Config persistence ────────────────────────────────────
     pub config_path: PathBuf,
