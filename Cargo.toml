@@ -53,6 +53,9 @@ egui_mobius = { version = "0.3.0-alpha.33" }
 # Citizen panel lifecycle
 egui_citizen = { path = "../egui-citizen/crates/egui_citizen" }
 
+# KiCad file parsing (BOM extraction from .kicad_pcb)
+kiparse = { git = "https://github.com/Atlantix-EDA/atlantix-eda.git", package = "kiparse" }
+
 # Logging and configuration
 env_logger = "0.11.8"
 log = "0.4"

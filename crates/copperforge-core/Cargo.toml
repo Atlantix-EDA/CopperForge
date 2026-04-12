@@ -26,6 +26,9 @@ egui_mobius = { workspace = true }
 # Citizen panel lifecycle
 egui_citizen = { workspace = true }
 
+# KiCad file parsing (BOM extraction)
+kiparse = { workspace = true }
+
 # Logging and configuration
 env_logger = { workspace = true }
 log = { workspace = true }

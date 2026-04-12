@@ -1,6 +1,7 @@
 // KiForge Core Library
 // Re-export all modules for external use
 
+pub mod bom;
 pub mod display;
 pub mod drc_operations;
 pub mod event_logger;
