@@ -95,56 +95,53 @@ impl Tab {
         }
     }
 
+    /// Dispatch rendering through citizen panels.
+    ///
+    /// Each TabKind maps to a citizen panel's show() method.
+    /// GerberView is special — it renders through the legacy Tab path
+    /// because it has 1300 lines of viewport interaction logic.
     pub fn content(&self, ui: &mut egui::Ui, params: &mut TabParams<'_>) {
+        use crate::panels::*;
+
         match self.kind {
             TabKind::ViewSettings => {
                 ui.vertical(|ui| {
-                    let logger_state_clone = params.app.logger_state.clone();
-                    let log_colors_clone = params.app.log_colors.clone();
-                    
                     ui.heading("Layer Controls");
                     ui.separator();
-                    ui::show_layers_panel(ui, params.app, &logger_state_clone, &log_colors_clone);
+                    ViewSettingsPanel::new(egui_citizen::CitizenState::default())
+                        .show(ui, params.app);
                 });
             }
             TabKind::DRC => {
-                let logger_state_clone = params.app.logger_state.clone();
-                let log_colors_clone = params.app.log_colors.clone();
-                ui::show_drc_panel(ui, params.app, &logger_state_clone, &log_colors_clone);
+                DrcPanel::new(egui_citizen::CitizenState::default())
+                    .show(ui, params.app);
             }
             TabKind::GerberView => {
                 self.render_gerber_view(ui, params.app);
             }
             TabKind::EventLog => {
-                // Enable text selection for the event log
-                ui.style_mut().interaction.selectable_labels = true;
-                let logger = ReactiveEventLogger::with_colors(&params.app.logger_state, &params.app.log_colors);
-                logger.show(ui);
+                EventLogPanel::new(egui_citizen::CitizenState::default())
+                    .show(ui, params.app);
             }
             TabKind::Project => {
-                let logger_state_clone = params.app.logger_state.clone();
-                let log_colors_clone = params.app.log_colors.clone();
-                ui::show_project_panel(ui, params.app, &logger_state_clone, &log_colors_clone);
+                ProjectPanel::new(egui_citizen::CitizenState::default())
+                    .show(ui, params.app);
             }
             TabKind::Projects => {
-                let logger_state_clone = params.app.logger_state.clone();
-                let log_colors_clone = params.app.log_colors.clone();
-                ui::show_projects_panel(ui, params.app, &logger_state_clone, &log_colors_clone);
+                ProjectsPanel::new(egui_citizen::CitizenState::default())
+                    .show(ui, params.app);
             }
             TabKind::PCBFile => {
-                let logger_state_clone = params.app.logger_state.clone();
-                let log_colors_clone = params.app.log_colors.clone();
-                ui::show_pcb_file_panel(ui, params.app, &logger_state_clone, &log_colors_clone);
+                PcbFilePanel::new(egui_citizen::CitizenState::default())
+                    .show(ui, params.app);
             }
             TabKind::Settings => {
-                let logger_state_clone = params.app.logger_state.clone();
-                let log_colors_clone = params.app.log_colors.clone();
-                ui::show_settings_panel(ui, params.app, &logger_state_clone, &log_colors_clone);
+                SettingsPanel::new(egui_citizen::CitizenState::default())
+                    .show(ui, params.app);
             }
             TabKind::BOM => {
-                let logger_state_clone = params.app.logger_state.clone();
-                let log_colors_clone = params.app.log_colors.clone();
-                ui::show_bom_panel(ui, params.app, &logger_state_clone, &log_colors_clone);
+                BomPanel::new(egui_citizen::CitizenState::default())
+                    .show(ui, params.app);
             }
         }
     }
