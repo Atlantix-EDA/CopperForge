@@ -144,13 +144,12 @@ impl ProjectDatabase {
             for project_id in project_ids {
                 // Skip corrupted projects instead of failing completely
                 match self.load_project(&project_id) {
-                    Ok(Some(mut project)) => {
-                        // Update last_modified from actual file modification time
-                        if let Ok(file_metadata) = std::fs::metadata(&project.metadata.pcb_file_path) {
-                            if let Ok(modified_time) = file_metadata.modified() {
-                                project.metadata.last_modified = modified_time.into();
-                            }
-                        }
+                    Ok(Some(project)) => {
+                        // last_modified is the DB record's own timestamp, bumped by
+                        // update_project / update_project_bom. Do NOT overwrite it
+                        // with the PCB file's filesystem mtime — that conflated two
+                        // different things and made created_at appear later than
+                        // last_modified when the PCB file predated the DB record.
                         projects.push(project.metadata);
                     }
                     Ok(None) => {

@@ -79,6 +79,10 @@ pub struct CopperForgeApp {
     pub show_about_modal: bool,
     pub show_kicad_version_modal: bool,
     pub kicad_version: Option<String>,
+    /// Cached discovery method for `kicad-cli` — one of "path", "flatpak", "snap".
+    /// Populated once at first use; lets us build a Command without re-probing
+    /// (probing costs ~1-3s for Flatpak sandbox cold-start).
+    pub kicad_cli_method: Option<String>,
     
     // Origin setting mode
     pub setting_origin_mode: bool,
@@ -109,6 +113,14 @@ pub struct CopperForgeApp {
 
     // Track last picked directory to avoid re-processing
     pub last_picked_projects_directory: Option<PathBuf>,
+
+    // Terminal panel buffers (OS shell)
+    pub term_output: Vec<String>,
+    pub term_cmd_buf: String,
+
+    // Shell panel buffers (CopperForge command shell)
+    pub shell_log: Vec<String>,
+    pub shell_cmd_buf: String,
 }
 
 impl Drop for CopperForgeApp {
@@ -179,7 +191,7 @@ impl CopperForgeApp {
         use egui_citizen::message::CitizenId;
         for id in [
             "gerber_view", "view_settings", "drc", "project", "projects",
-            "pcb_file", "settings", "bom", "event_log",
+            "settings", "bom",
             "shell", "terminal", "logger",
         ] {
             dispatcher.register(CitizenId::new(id));
@@ -216,6 +228,7 @@ impl CopperForgeApp {
             show_about_modal: false,
             show_kicad_version_modal: false,
             kicad_version: None,
+            kicad_cli_method: None,
             setting_origin_mode: false,
             origin_has_been_set: false,
             ruler_active: false,
@@ -229,6 +242,10 @@ impl CopperForgeApp {
             project_manager_state: None,
             projects_directory_dialog: egui_file_dialog::FileDialog::new(),
             last_picked_projects_directory: None,
+            term_output: Vec::new(),
+            term_cmd_buf: String::new(),
+            shell_log: Vec::new(),
+            shell_cmd_buf: String::new(),
         };
         
         if let Ok(project_config) = ProjectConfig::load_from_file(&app.config_path) {
@@ -405,7 +422,7 @@ impl CopperForgeApp {
         // Show KiCad version button
         // Detect KiCad version on first call
         if self.kicad_version.is_none() {
-            self.kicad_version = Self::detect_kicad_version();
+            self.detect_and_cache_kicad();
         }
 
         let kicad_text = if let Some(ref version) = self.kicad_version {
@@ -441,24 +458,57 @@ impl CopperForgeApp {
         ui.label(egui::RichText::new(clock_text).color(egui::Color32::from_rgb(220, 220, 220)));
     }
 
-    /// Detect KiCad version using the discovered kicad-cli
-    fn detect_kicad_version() -> Option<String> {
-        let (method, mut cmd) = Self::find_kicad_cli()?;
-        let output = cmd.arg("--version").output().ok()?;
-        if !output.status.success() { return None; }
-        let mut v = Self::parse_kicad_version(&output.stdout, false)?;
-        if method != "path" {
-            v = format!("{} ({})", v, method);
+    /// Detect KiCad version and cache the discovery method. First call probes
+    /// PATH / Flatpak / Snap (the Flatpak probe alone can take 1-3s). Subsequent
+    /// uses of `kicad-cli` reuse the cached method via `kicad_cli_command()`.
+    pub fn detect_and_cache_kicad(&mut self) {
+        let (method, mut cmd) = match Self::find_kicad_cli() {
+            Some(f) => f,
+            None => return,
+        };
+        let output = match cmd.arg("--version").output() {
+            Ok(o) if o.status.success() => o,
+            _ => return,
+        };
+        if let Some(mut v) = Self::parse_kicad_version(&output.stdout, false) {
+            if method != "path" {
+                v = format!("{} ({})", v, method);
+            }
+            self.kicad_version = Some(v);
         }
-        Some(v)
+        self.kicad_cli_method = Some(method);
     }
 
-    /// Find kicad-cli across PATH, Flatpak, and Snap.
-    /// Returns (install_method, Command) ready for appending args.
+    /// Build a `kicad-cli` Command using the cached discovery method, without
+    /// re-probing. Returns None if discovery hasn't run yet (call
+    /// `detect_and_cache_kicad()` first, or the ribbon's first-frame path).
+    pub fn kicad_cli_command(&self) -> Option<std::process::Command> {
+        self.kicad_cli_method.as_deref().map(Self::build_kicad_cli_command)
+    }
+
+    /// Pure constructor — no subprocess spawn. Safe to call on hot paths.
+    fn build_kicad_cli_command(method: &str) -> std::process::Command {
+        use std::process::Command;
+        match method {
+            "flatpak" => {
+                let mut cmd = Command::new("flatpak");
+                cmd.args(["run", "--command=kicad-cli", "org.kicad.KiCad"]);
+                cmd
+            }
+            "snap" => {
+                let mut cmd = Command::new("snap");
+                cmd.args(["run", "kicad.kicad-cli"]);
+                cmd
+            }
+            _ => Command::new("kicad-cli"),
+        }
+    }
+
+    /// Find kicad-cli across PATH, Flatpak, and Snap — expensive probe.
+    /// Prefer `kicad_cli_command()` after `detect_and_cache_kicad()` has run.
     pub fn find_kicad_cli() -> Option<(String, std::process::Command)> {
         use std::process::Command;
 
-        // 1. Native PATH
         for bin in ["kicad-cli", "kicad-cli-nightly"] {
             if let Ok(output) = Command::new(bin).arg("--version").output() {
                 if output.status.success() {
@@ -467,27 +517,21 @@ impl CopperForgeApp {
             }
         }
 
-        // 2. Flatpak
         if let Ok(output) = Command::new("flatpak")
             .args(["run", "--command=kicad-cli", "org.kicad.KiCad", "--version"])
             .output()
         {
             if output.status.success() {
-                let mut cmd = Command::new("flatpak");
-                cmd.args(["run", "--command=kicad-cli", "org.kicad.KiCad"]);
-                return Some(("flatpak".into(), cmd));
+                return Some(("flatpak".into(), Self::build_kicad_cli_command("flatpak")));
             }
         }
 
-        // 3. Snap
         if let Ok(output) = Command::new("snap")
             .args(["run", "kicad.kicad-cli", "--version"])
             .output()
         {
             if output.status.success() {
-                let mut cmd = Command::new("snap");
-                cmd.args(["run", "kicad.kicad-cli"]);
-                return Some(("snap".into(), cmd));
+                return Some(("snap".into(), Self::build_kicad_cli_command("snap")));
             }
         }
 
@@ -643,17 +687,18 @@ impl CopperForgeApp {
         let drc_tab = Tab::new(TabKind::DRC, SurfaceIndex::main(), NodeIndex(1));
         let view_settings_tab = Tab::new(TabKind::ViewSettings, SurfaceIndex::main(), NodeIndex(2));
 
-        // Left side top tabs in exact order from screenshot
+        // Left side top tabs
         let project_tab = Tab::new(TabKind::Project, SurfaceIndex::main(), NodeIndex(3));
-        let pcb_file_tab = Tab::new(TabKind::PCBFile, SurfaceIndex::main(), NodeIndex(4));
         let settings_tab = Tab::new(TabKind::Settings, SurfaceIndex::main(), NodeIndex(5));
 
         // Left side bottom tabs
         let projects_tab = Tab::new(TabKind::Projects, SurfaceIndex::main(), NodeIndex(6));
 
-        // Right side tabs
-        let log_tab = Tab::new(TabKind::EventLog, SurfaceIndex::main(), NodeIndex(7));
-        let bom_tab = Tab::new(TabKind::BOM, SurfaceIndex::main(), NodeIndex(8));
+        // Right side tabs — logger / terminal / shell share a group
+        let logger_tab = Tab::new(TabKind::Logger, SurfaceIndex::main(), NodeIndex(7));
+        let terminal_tab = Tab::new(TabKind::Terminal, SurfaceIndex::main(), NodeIndex(8));
+        let shell_tab = Tab::new(TabKind::Shell, SurfaceIndex::main(), NodeIndex(9));
+        let bom_tab = Tab::new(TabKind::BOM, SurfaceIndex::main(), NodeIndex(10));
 
         let mut dock_state = DockState::new(vec![gerber_tab]);
         let surface = dock_state.main_surface_mut();
@@ -661,11 +706,11 @@ impl CopperForgeApp {
         let [left, right] = surface.split_left(
             NodeIndex::root(),
             0.3,
-            vec![project_tab, pcb_file_tab, settings_tab],
+            vec![project_tab, settings_tab],
         );
 
         surface.split_below(left, 0.7, vec![projects_tab]);
-        surface.split_below(right, 0.5, vec![log_tab, bom_tab]);
+        surface.split_below(right, 0.5, vec![logger_tab, terminal_tab, shell_tab, bom_tab]);
         surface.split_right(right, 0.5, vec![drc_tab, view_settings_tab]);
         dock_state
     }
@@ -849,18 +894,10 @@ impl eframe::App for CopperForgeApp {
                         ui.label("📁 KiCad PCB File:");
                         
                         // Show current file or placeholder
-                        let current_file_text = match &self.project_manager.state {
-                            ProjectState::NoProject => "No file selected".to_string(),
-                            ProjectState::Ready { pcb_path, .. } |
-                            ProjectState::PcbSelected { pcb_path } |
-                            ProjectState::GeneratingGerbers { pcb_path } |
-                            ProjectState::GerbersGenerated { pcb_path, .. } |
-                            ProjectState::LoadingGerbers { pcb_path, .. } => {
-                                pcb_path.file_name()
-                                    .map(|n| n.to_string_lossy().to_string())
-                                    .unwrap_or_else(|| "Unknown file".to_string())
-                            }
-                        };
+                        let current_file_text = self.project_manager.state.pcb_path()
+                            .and_then(|p| p.file_name())
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| "No file selected".to_string());
                         
                         ui.label(egui::RichText::new(current_file_text).strong());
                         

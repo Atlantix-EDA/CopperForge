@@ -25,10 +25,11 @@ pub enum TabKind {
     ViewSettings,
     DRC,
     GerberView,
-    EventLog,
+    Logger,
+    Terminal,
+    Shell,
     Project,
     Projects,  // Project database spreadsheet
-    PCBFile,   // PCB file management
     Settings,
     BOM,
 }
@@ -40,10 +41,11 @@ impl TabKind {
             TabKind::ViewSettings => CitizenId::new("view_settings"),
             TabKind::DRC => CitizenId::new("drc"),
             TabKind::GerberView => CitizenId::new("gerber_view"),
-            TabKind::EventLog => CitizenId::new("event_log"),
+            TabKind::Logger => CitizenId::new("logger"),
+            TabKind::Terminal => CitizenId::new("terminal"),
+            TabKind::Shell => CitizenId::new("shell"),
             TabKind::Project => CitizenId::new("project"),
             TabKind::Projects => CitizenId::new("projects"),
-            TabKind::PCBFile => CitizenId::new("pcb_file"),
             TabKind::Settings => CitizenId::new("settings"),
             TabKind::BOM => CitizenId::new("bom"),
         }
@@ -85,10 +87,11 @@ impl Tab {
             TabKind::ViewSettings => "View Settings".to_string(),
             TabKind::DRC => "DRC".to_string(),
             TabKind::GerberView => "Gerber View".to_string(),
-            TabKind::EventLog => "Event Log".to_string(),
+            TabKind::Logger => "Logger".to_string(),
+            TabKind::Terminal => "Terminal".to_string(),
+            TabKind::Shell => "Shell".to_string(),
             TabKind::Project => "Project".to_string(),
             TabKind::Projects => "Projects".to_string(),
-            TabKind::PCBFile => "PCB File".to_string(),
             TabKind::Settings => "Settings".to_string(),
             TabKind::BOM => "BOM".to_string(),
         }
@@ -118,8 +121,16 @@ impl Tab {
             TabKind::GerberView => {
                 self.render_gerber_view(ui, params.app);
             }
-            TabKind::EventLog => {
-                EventLogPanel::new(egui_citizen::CitizenState::default())
+            TabKind::Logger => {
+                LoggerPanel::new(egui_citizen::CitizenState::default())
+                    .show(ui, params.app);
+            }
+            TabKind::Terminal => {
+                TerminalPanel::new(egui_citizen::CitizenState::default())
+                    .show(ui, params.app);
+            }
+            TabKind::Shell => {
+                ShellPanel::new(egui_citizen::CitizenState::default())
                     .show(ui, params.app);
             }
             TabKind::Project => {
@@ -128,10 +139,6 @@ impl Tab {
             }
             TabKind::Projects => {
                 ProjectsPanel::new(egui_citizen::CitizenState::default())
-                    .show(ui, params.app);
-            }
-            TabKind::PCBFile => {
-                PcbFilePanel::new(egui_citizen::CitizenState::default())
                     .show(ui, params.app);
             }
             TabKind::Settings => {
@@ -161,7 +168,14 @@ impl Tab {
 
 fn render_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
     ui.vertical(|ui| {
-        // First row: Main view controls
+        // First row: PCB / gerber workflow (explicit actions, no auto-anything)
+        ui.horizontal(|ui| {
+            render_pcb_workflow_controls(ui, app);
+        });
+
+        ui.add_space(4.0);
+
+        // Second row: Main view controls
         ui.horizontal(|ui| {
             render_quadrant_controls(ui, app);
             ui.separator();
@@ -169,10 +183,10 @@ fn render_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
             ui.separator();
             render_transform_controls(ui, app);
         });
-        
-        ui.add_space(4.0); // Small gap between rows
-        
-        // Second row: Measurement and grid tools
+
+        ui.add_space(4.0);
+
+        // Third row: Measurement and grid tools
         ui.horizontal(|ui| {
             render_zoom_display(ui, app);
             ui.separator();
@@ -181,6 +195,100 @@ fn render_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
             render_grid_controls(ui, app);
         });
     });
+}
+
+/// PCB file workflow on the Gerber Viewer ribbon — replaces the retired PCB File tab.
+fn render_pcb_workflow_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
+    use crate::project::{gerber_ops, ProjectState};
+
+    // Clone reactive handles up front so we can take `&mut app` later without
+    // a borrow conflict with a logger that borrows `app.logger_state`.
+    let logger_state = app.logger_state.clone();
+    let log_colors = app.log_colors.clone();
+    let logger = ReactiveEventLogger::with_colors(&logger_state, &log_colors);
+
+    // State label (dim when NoProject)
+    let (state_label, state_color) = match &app.project_manager.state {
+        ProjectState::NoProject => ("no PCB", egui::Color32::from_rgb(120, 120, 120)),
+        ProjectState::PcbSelected { .. } => ("PCB selected", egui::Color32::from_rgb(180, 180, 220)),
+        ProjectState::GeneratingGerbers { .. } => ("generating…", egui::Color32::from_rgb(230, 200, 120)),
+        ProjectState::GerbersGenerated { .. } => ("gerbers ready", egui::Color32::from_rgb(180, 220, 180)),
+        ProjectState::LoadingGerbers { .. } => ("loading…", egui::Color32::from_rgb(230, 200, 120)),
+        ProjectState::Ready { .. } => ("viewer loaded", egui::Color32::from_rgb(120, 220, 150)),
+    };
+    ui.label(egui::RichText::new(format!("● {state_label}")).color(state_color).monospace());
+
+    ui.separator();
+
+    let has_pcb = app.project_manager.state.pcb_path().is_some();
+    let has_gerber_dir = app.project_manager.state.gerber_dir().is_some();
+
+    // Generate: explicit. Disabled if no PCB is selected.
+    if ui.add_enabled(has_pcb, egui::Button::new("⚙ Generate Gerbers")).clicked() {
+        if let Some(pcb_path) = app.project_manager.state.pcb_path().map(|p| p.to_path_buf()) {
+            // Ensure kicad-cli discovery has run (no-op after the first probe).
+            if app.kicad_cli_command().is_none() {
+                app.detect_and_cache_kicad();
+            }
+            let Some(cli) = app.kicad_cli_command() else {
+                logger.log_error("kicad-cli not found (checked PATH, Flatpak, and Snap)");
+                return;
+            };
+            logger.log_info(&format!(
+                "Generating gerbers via kicad-cli ({})…",
+                app.kicad_cli_method.as_deref().unwrap_or("?")
+            ));
+            app.project_manager.state = ProjectState::GeneratingGerbers { pcb_path: pcb_path.clone() };
+            if let Some(output_dir) = gerber_ops::generate_gerbers_from_pcb(&pcb_path, cli, &logger) {
+                app.project_manager.state = ProjectState::GerbersGenerated { pcb_path, gerber_dir: output_dir };
+            } else {
+                app.project_manager.state = ProjectState::PcbSelected { pcb_path };
+            }
+        }
+    }
+
+    // Load: disabled until gerbers have been generated (or already loaded — allows Reload).
+    let load_label = if matches!(app.project_manager.state, ProjectState::Ready { .. }) {
+        "↻ Reload Gerbers"
+    } else {
+        "⬇ Load Gerbers"
+    };
+    if ui.add_enabled(has_gerber_dir, egui::Button::new(load_label)).clicked() {
+        if let (Some(pcb_path), Some(gerber_dir)) = (
+            app.project_manager.state.pcb_path().map(|p| p.to_path_buf()),
+            app.project_manager.state.gerber_dir().map(|p| p.to_path_buf()),
+        ) {
+            app.project_manager.state = ProjectState::LoadingGerbers { pcb_path: pcb_path.clone(), gerber_dir: gerber_dir.clone() };
+            gerber_ops::load_gerbers_into_viewer(app, &gerber_dir, &logger);
+            let last_modified = std::fs::metadata(&pcb_path)
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::now());
+            app.project_manager.state = ProjectState::Ready { pcb_path, gerber_dir, last_modified };
+        }
+    }
+
+    // Stale-file indicator
+    if let ProjectState::Ready { pcb_path, last_modified, .. } = &app.project_manager.state {
+        if let Ok(meta) = std::fs::metadata(pcb_path) {
+            if let Ok(modified) = meta.modified() {
+                if &modified != last_modified {
+                    ui.colored_label(egui::Color32::YELLOW, "⚠ PCB modified — regenerate");
+                }
+            }
+        }
+    }
+
+    ui.separator();
+
+    if ui.add_enabled(has_pcb, egui::Button::new("✖ Clear")).clicked() {
+        app.project_manager.state = ProjectState::NoProject;
+        if let Some(ref mut manager_state) = app.project_manager_state {
+            manager_state.current_project = None;
+            manager_state.selected_project_id = None;
+        }
+        app.layer_store.clear_all();
+        logger.log_info("Cleared PCB file selection");
+    }
 }
 
 fn render_quadrant_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {

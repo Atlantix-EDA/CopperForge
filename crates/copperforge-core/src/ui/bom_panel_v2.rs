@@ -4,7 +4,6 @@
 
 use crate::CopperForgeApp;
 use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
-use crate::project::ProjectState;
 use egui_mobius_reactive::Dynamic;
 use egui_extras::{TableBuilder, Column};
 
@@ -41,14 +40,7 @@ pub fn show_bom_panel<'a>(
     let logger = ReactiveEventLogger::with_colors(logger_state, log_colors);
 
     // Get PCB path from project state
-    let pcb_path = match &app.project_manager.state {
-        ProjectState::Ready { pcb_path, .. } |
-        ProjectState::PcbSelected { pcb_path } |
-        ProjectState::GeneratingGerbers { pcb_path } |
-        ProjectState::GerbersGenerated { pcb_path, .. } |
-        ProjectState::LoadingGerbers { pcb_path, .. } => Some(pcb_path.clone()),
-        ProjectState::NoProject => None,
-    };
+    let pcb_path = app.project_manager.state.pcb_path().map(|p| p.to_path_buf());
 
     // Initialize BOM state if needed
     if app.bom_state.is_none() {

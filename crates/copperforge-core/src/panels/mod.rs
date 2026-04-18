@@ -2,10 +2,8 @@
 //!
 //! Panel rendering logic migrates here from ui/ in Phase 5.
 
-mod event_log;
 mod settings;
 mod project;
-mod pcb_file;
 mod drc;
 mod view_settings;
 mod projects;
@@ -15,10 +13,8 @@ mod shell;
 mod terminal;
 mod logger;
 
-pub use event_log::EventLogPanel;
 pub use settings::SettingsPanel;
 pub use project::ProjectPanel;
-pub use pcb_file::PcbFilePanel;
 pub use drc::DrcPanel;
 pub use view_settings::ViewSettingsPanel;
 pub use projects::ProjectsPanel;

@@ -6,6 +6,23 @@ use egui_mobius_reactive::Dynamic;
 use std::collections::HashMap;
 use egui_ltreeview::{TreeView, Action};
 
+/// Right-click intents on a project row, deposited into egui memory by the
+/// context-menu closure and dispatched after `TreeView::show` returns.
+const PROJECT_CONTEXT_INTENT: &str = "project_context_intent";
+
+/// (action, project_id). `action` is one of "open", "update", "delete", "new", "new_child".
+/// For "new" the project_id is empty; for "new_child" it is the parent id.
+type ProjectIntent = (String, String);
+
+fn set_project_intent(ctx: &egui::Context, action: &str, project_id: &str) {
+    ctx.memory_mut(|mem| {
+        mem.data.insert_temp(
+            egui::Id::new(PROJECT_CONTEXT_INTENT),
+            (action.to_string(), project_id.to_string()),
+        );
+    });
+}
+
 /// Show the projects database panel with tree view layout
 pub fn show_projects_panel<'a>(
     ui: &mut egui::Ui,
@@ -131,6 +148,43 @@ pub fn show_projects_panel<'a>(
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
                             let (_response, actions) = TreeView::new(ui.make_persistent_id("projects_tree"))
+                                .fallback_context_menu(|ui, selected| {
+                                    // `selected` is ltreeview's current selection (last left-clicked node).
+                                    // Derive the project id from it (handles "proj_123:sheet_0" node ids).
+                                    let project_id_opt: Option<String> = selected.first().map(|s: &String| {
+                                        if let Some((head, _)) = s.split_once(':') {
+                                            head.to_string()
+                                        } else {
+                                            s.clone()
+                                        }
+                                    });
+
+                                    if let Some(project_id) = project_id_opt {
+                                        ui.label(egui::RichText::new("Selected project").small().weak());
+                                        if ui.button("📂 Open Project").clicked() {
+                                            set_project_intent(ui.ctx(), "open", &project_id);
+                                            ui.close();
+                                        }
+                                        if ui.button("Update Project").clicked() {
+                                            set_project_intent(ui.ctx(), "update", &project_id);
+                                            ui.close();
+                                        }
+                                        if ui.button("Delete Project").clicked() {
+                                            set_project_intent(ui.ctx(), "delete", &project_id);
+                                            ui.close();
+                                        }
+                                        ui.separator();
+                                        if ui.button("➕ New Child Project").clicked() {
+                                            set_project_intent(ui.ctx(), "new_child", &project_id);
+                                            ui.close();
+                                        }
+                                    }
+
+                                    if ui.button("➕ New Project").clicked() {
+                                        set_project_intent(ui.ctx(), "new", "");
+                                        ui.close();
+                                    }
+                                })
                                 .show(ui, |builder| {
                                     // Get root projects
                                     let root_projects: Vec<_> = manager_state.project_list
@@ -395,6 +449,49 @@ pub fn show_projects_panel<'a>(
             });
         }
 
+        // Dispatch right-click context menu intent
+        let context_intent = ui.ctx().memory(|mem| {
+            mem.data.get_temp::<ProjectIntent>(egui::Id::new(PROJECT_CONTEXT_INTENT))
+        });
+
+        if let Some((action, project_id)) = context_intent {
+            ui.ctx().memory_mut(|mem| {
+                mem.data.remove::<ProjectIntent>(egui::Id::new(PROJECT_CONTEXT_INTENT));
+            });
+
+            logger.log_info(&format!("Context menu: {} ({})", action, project_id));
+
+            match action.as_str() {
+                "open" => {
+                    // Route through the existing load_project memory-key so the
+                    // full restore flow (PCB path + BOM) runs unchanged below.
+                    ui.ctx().memory_mut(|mem| {
+                        mem.data.insert_temp(egui::Id::new("load_project"), project_id.clone());
+                    });
+                }
+                "update" => {
+                    // Select the project — right-hand details panel already
+                    // exposes the editable fields + Save button.
+                    manager_state.selected_project_id = Some(project_id.clone());
+                    logger.log_info("Edit project fields in the right panel, then click Save Project.");
+                }
+                "delete" => {
+                    manager_state.show_delete_confirmation = Some(project_id.clone());
+                }
+                "new" => {
+                    manager_state.new_project_parent_id = None;
+                    manager_state.show_create_dialog = true;
+                    logger.log_info("New Project — open the Project Manager tab to complete the create dialog.");
+                }
+                "new_child" => {
+                    manager_state.new_project_parent_id = Some(project_id.clone());
+                    manager_state.show_create_dialog = true;
+                    logger.log_info("New Child Project — open the Project Manager tab to complete the create dialog.");
+                }
+                _ => {}
+            }
+        }
+
         // Handle save project action (name, tags, description)
         let save_info = ui.ctx().memory(|mem| {
             mem.data.get_temp::<(String, String, String)>(egui::Id::new("save_project"))
@@ -412,8 +509,9 @@ pub fn show_projects_panel<'a>(
                 .filter(|s| !s.is_empty())
                 .collect();
 
-            // Get the current description from memory
-            let description_id = egui::Id::new(format!("description_{}", project_id));
+            // Get the current description from memory — must match the key used
+            // when writing the edit buffer above (description_buffer_{id}).
+            let description_id = egui::Id::new(format!("description_buffer_{}", project_id));
             let new_description = ui.ctx().memory(|mem| {
                 mem.data.get_temp::<String>(description_id)
                     .unwrap_or_else(|| {
