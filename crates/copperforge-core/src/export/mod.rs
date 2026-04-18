@@ -14,7 +14,7 @@ pub struct PngExporter;
 impl PngExporter {
     /// Export each layer in quadrant view as a separate PNG file
     pub fn export_quadrant_layers(app: &mut CopperForgeApp, output_dir: &PathBuf, width: u32, height: u32) -> Result<Vec<PathBuf>, String> {
-        if !app.display_manager.quadrant_view_enabled {
+        if !app.services.display_manager.quadrant_view_enabled {
             return Err("Quadrant view must be enabled for layer export".to_string());
         }
 
@@ -22,7 +22,7 @@ impl PngExporter {
         
         // Get mechanical outline layer - this defines the consistent bounding box for all exports
         let (mechanical_outline_gerber, master_bbox) = {
-            let mech_layer = app.layer_store.find(LayerType::MechanicalOutline)
+            let mech_layer = app.services.layer_store.find(LayerType::MechanicalOutline)
                 .ok_or("Mechanical outline layer is required for consistent PNG export boundaries")?;
             let gerber_layer = mech_layer.gerber.clone();
             let bbox = Self::calculate_master_bounding_box(app, &gerber_layer)?;
@@ -33,9 +33,9 @@ impl PngExporter {
 
         // Collect visible layers data first to avoid borrowing conflicts
         let mut layers_to_export = Vec::new();
-        for layer in app.layer_store.layers.iter() {
+        for layer in app.services.layer_store.layers.iter() {
             if layer.visible && layer.layer_type != LayerType::MechanicalOutline {
-                if layer.layer_type.should_render(app.display_manager.showing_top) {
+                if layer.layer_type.should_render(app.services.display_manager.showing_top) {
                     layers_to_export.push((layer.layer_type, layer.gerber.clone()));
                 }
             }
@@ -163,7 +163,7 @@ impl PngExporter {
         // Note: Layer positions are managed by the DisplayManager
         
         // Get quadrant offset for this layer type - this is the key positioning info
-        let quadrant_offset = app.display_manager.get_quadrant_offset(layer_type);
+        let quadrant_offset = app.services.display_manager.get_quadrant_offset(layer_type);
         
         println!("🎯 Exporting {} with quadrant offset: ({:.1}, {:.1})", 
                 layer_type.display_name(), quadrant_offset.x, quadrant_offset.y);
@@ -308,21 +308,21 @@ impl PngExporter {
         let original_bbox = gerber_layer.bounding_box().clone();
         
         // Get quadrant offset for this layer type
-        let quadrant_offset = app.display_manager.get_quadrant_offset(layer_type);
+        let quadrant_offset = app.services.display_manager.get_quadrant_offset(layer_type);
         
         // Calculate combined offset
         let combined_offset = VectorOffset {
-            x: app.display_manager.center_offset.x + quadrant_offset.x,
-            y: app.display_manager.center_offset.y + quadrant_offset.y,
+            x: app.services.display_manager.center_offset.x + quadrant_offset.x,
+            y: app.services.display_manager.center_offset.y + quadrant_offset.y,
         };
         
         // Create transform similar to what's used in rendering
-        let origin: Vector2<f64> = app.display_manager.center_offset.clone().into();
+        let origin: Vector2<f64> = app.services.display_manager.center_offset.clone().into();
         let offset: Vector2<f64> = combined_offset.into();
         
         let transform = GerberTransform {
-            rotation: app.rotation_degrees.to_radians(),
-            mirroring: app.display_manager.mirroring.clone().into(),
+            rotation: app.services.rotation_degrees.to_radians(),
+            mirroring: app.services.display_manager.mirroring.clone().into(),
             origin: origin - offset,
             offset,
             scale: 1.0,
@@ -538,7 +538,7 @@ impl PngExporter {
         ) * 0.95; // Add margin
 
         // Get quadrant offset for centering
-        let quadrant_offset = app.display_manager.get_quadrant_offset(layer_type);
+        let quadrant_offset = app.services.display_manager.get_quadrant_offset(layer_type);
         let center_x = bbox.center().x + quadrant_offset.x;
         let center_y = bbox.center().y + quadrant_offset.y;
 

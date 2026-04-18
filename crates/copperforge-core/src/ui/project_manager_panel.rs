@@ -20,7 +20,7 @@ pub fn show_project_manager_panel(
         None
     };
     
-    let project_state = &app.project_manager.state;
+    let project_state = &app.services.project_state.get();
     
     if let Some(ref mut manager_state) = app.project_manager_state {
         // Handle any errors

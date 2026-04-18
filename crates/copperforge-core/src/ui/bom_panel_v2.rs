@@ -40,7 +40,7 @@ pub fn show_bom_panel<'a>(
     let logger = ReactiveEventLogger::with_colors(logger_state, log_colors);
 
     // Get PCB path from project state
-    let pcb_path = app.project_manager.state.pcb_path().map(|p| p.to_path_buf());
+    let pcb_path = app.services.project_state.get().pcb_path().map(|p| p.to_path_buf());
 
     // Initialize BOM state if needed
     if app.bom_state.is_none() {

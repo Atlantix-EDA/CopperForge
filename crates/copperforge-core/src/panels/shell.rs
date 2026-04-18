@@ -152,7 +152,7 @@ fn env_lines(app: &crate::CopperForgeApp) -> Vec<String> {
     let mut lines = vec!["KiCad:".into()];
     lines.push(format!(
         "  version          = {}",
-        app.kicad_version.as_deref().unwrap_or("(not detected)")
+        app.services.kicad_version.as_deref().unwrap_or("(not detected)")
     ));
 
     // Any KICAD_* env vars that are actually set — skip the hardcoded guesswork.
@@ -182,13 +182,13 @@ fn status_lines(app: &crate::CopperForgeApp) -> Vec<String> {
 
     lines.push(format!(
         "  PCB file        = {}",
-        app.project_manager.state.pcb_path()
+        app.services.project_state.get().pcb_path()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "(none)".into())
     ));
     lines.push(format!(
         "  Gerber layers   = {}",
-        app.layer_store.layers.len()
+        app.services.layer_store.layers.len()
     ));
     lines.push(format!(
         "  BOM components  = {}",
@@ -196,11 +196,11 @@ fn status_lines(app: &crate::CopperForgeApp) -> Vec<String> {
     ));
     lines.push(format!(
         "  Units           = {}",
-        if app.global_units_mils { "mils" } else { "mm" }
+        if app.services.global_units_mils { "mils" } else { "mm" }
     ));
     lines.push(format!(
         "  KiCad           = {}",
-        app.kicad_version.as_deref().unwrap_or("(not detected)")
+        app.services.kicad_version.as_deref().unwrap_or("(not detected)")
     ));
     lines
 }

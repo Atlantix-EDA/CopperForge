@@ -31,10 +31,10 @@ fn show_create_project_form(
 ) {
     // Initialize project manager state if not already done
     if app.project_manager_state.is_none() {
-        let mut state = ProjectManagerState::with_config(&app.project_manager.config);
+        let mut state = ProjectManagerState::with_config(&app.services.config);
 
         // Initialize database
-        let db_path = app.config_path.join("projects.db");
+        let db_path = app.services.config_path.join("projects.db");
         if let Err(e) = state.initialize_database(&db_path) {
             logger.log_error(&format!("Failed to initialize project database: {}", e));
         }
@@ -218,7 +218,7 @@ fn show_create_project_form(
                                     }));
 
                                 // Set initial directory from preferences if available
-                                if let Some(ref preferred_dir) = app.project_manager.config.preferred_projects_directory {
+                                if let Some(ref preferred_dir) = app.services.config.preferred_projects_directory {
                                     dialog = dialog.initial_directory(preferred_dir.clone());
                                 }
 

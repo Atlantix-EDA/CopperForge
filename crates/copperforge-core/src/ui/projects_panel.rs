@@ -34,10 +34,10 @@ pub fn show_projects_panel<'a>(
 
     // Initialize project manager state if not already done
     if app.project_manager_state.is_none() {
-        let mut state = ProjectManagerState::with_config(&app.project_manager.config);
+        let mut state = ProjectManagerState::with_config(&app.services.config);
 
         // Initialize database
-        let db_path = app.config_path.join("projects.db");
+        let db_path = app.services.config_path.join("projects.db");
         if let Err(e) = state.initialize_database(&db_path) {
             logger.log_error(&format!("Failed to initialize project database: {}", e));
         }
@@ -638,9 +638,9 @@ pub fn show_projects_panel<'a>(
                 // Successfully loaded project data, now restore the project state
                 if let Some(ref project) = manager_state.current_project {
                     // 1. Set the PCB file path in the project manager
-                    app.project_manager.state = crate::project::ProjectState::PcbSelected {
-                        pcb_path: project.metadata.pcb_file_path.clone()
-                    };
+                    app.services.project_state.set(crate::project::ProjectState::PcbSelected {
+                        pcb_path: project.metadata.pcb_file_path.clone(),
+                    });
 
                     // 2. Restore BOM components if available
                     if !project.bom_components.is_empty() {

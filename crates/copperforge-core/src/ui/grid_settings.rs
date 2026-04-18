@@ -12,16 +12,16 @@ pub fn show_grid_panel<'a>(
     let logger = ReactiveEventLogger::with_colors(logger_state, log_colors);
     
     ui.add_space(4.0);
-    if ui.checkbox(&mut app.grid_settings.enabled, "Enable Grid").changed() {
+    if ui.checkbox(&mut app.services.grid_settings.enabled, "Enable Grid").changed() {
         logger.log_custom(
             LOG_TYPE_GRID,
-            &format!("Grid display {}", if app.grid_settings.enabled { "enabled" } else { "disabled" })
+            &format!("Grid display {}", if app.services.grid_settings.enabled { "enabled" } else { "disabled" })
         );
     }
     
     ui.horizontal(|ui| {
         // Get units from layer store
-        let units = &app.layer_store.units;
+        let units = &app.services.layer_store.units;
 
         let label = if units.is_mils() {
             "Grid Spacing (mils):"
@@ -30,11 +30,11 @@ pub fn show_grid_panel<'a>(
         };
         ui.label(label);
         
-        let _prev_spacing_mm = app.grid_settings.spacing_mm;
+        let _prev_spacing_mm = app.services.grid_settings.spacing_mm;
         
         if units.is_mils() {
             // Convert to mils for display using nanometer precision
-            let spacing_nm = mm_to_nm(app.grid_settings.spacing_mm as f64);
+            let spacing_nm = mm_to_nm(app.services.grid_settings.spacing_mm as f64);
             let mut spacing_mils = nm_to_mils(spacing_nm) as f32;
             let prev_mils = spacing_mils;
             
@@ -55,7 +55,7 @@ pub fn show_grid_panel<'a>(
             if slider_response.changed() || text_response.changed() {
                 // Convert back through nanometers for precision
                 let spacing_nm = mils_to_nm(spacing_mils as f64);
-                app.grid_settings.spacing_mm = nm_to_mm(spacing_nm) as f32;
+                app.services.grid_settings.spacing_mm = nm_to_mm(spacing_nm) as f32;
                 logger.log_custom(
                     LOG_TYPE_GRID,
                     &format!("Grid spacing changed from {:.1} to {:.1} mils", prev_mils, spacing_mils)
@@ -63,17 +63,17 @@ pub fn show_grid_panel<'a>(
             }
         } else {
             // Work directly in mm
-            let prev_mm = app.grid_settings.spacing_mm;
+            let prev_mm = app.services.grid_settings.spacing_mm;
             
             // Add slider
             let slider_response = ui.add(
-                egui::Slider::new(&mut app.grid_settings.spacing_mm, 0.025..=25.0)
+                egui::Slider::new(&mut app.services.grid_settings.spacing_mm, 0.025..=25.0)
                     .logarithmic(true)
             );
             
             // Add text input box next to slider
             let text_response = ui.add(
-                egui::DragValue::new(&mut app.grid_settings.spacing_mm)
+                egui::DragValue::new(&mut app.services.grid_settings.spacing_mm)
                     .speed(0.1)
                     .range(0.025..=25.0)
                     .suffix(" mm")
@@ -82,7 +82,7 @@ pub fn show_grid_panel<'a>(
             if slider_response.changed() || text_response.changed() {
                 logger.log_custom(
                     LOG_TYPE_GRID,
-                    &format!("Grid spacing changed from {:.2} to {:.2} mm", prev_mm, app.grid_settings.spacing_mm)
+                    &format!("Grid spacing changed from {:.2} to {:.2} mm", prev_mm, app.services.grid_settings.spacing_mm)
                 );
             }
         }
@@ -90,11 +90,11 @@ pub fn show_grid_panel<'a>(
     
     ui.horizontal(|ui| {
         ui.label("Grid Dot Size:");
-        let prev_dot_size = app.grid_settings.dot_size;
-        if ui.add(egui::Slider::new(&mut app.grid_settings.dot_size, 0.5..=5.0)).changed() {
+        let prev_dot_size = app.services.grid_settings.dot_size;
+        if ui.add(egui::Slider::new(&mut app.services.grid_settings.dot_size, 0.5..=5.0)).changed() {
             logger.log_custom(
                 LOG_TYPE_GRID,
-                &format!("Grid dot size changed from {:.1} to {:.1}", prev_dot_size, app.grid_settings.dot_size)
+                &format!("Grid dot size changed from {:.1} to {:.1}", prev_dot_size, app.services.grid_settings.dot_size)
             );
         }
     });
@@ -104,17 +104,17 @@ pub fn show_grid_panel<'a>(
     ui.heading("Grid Features");
     
     // Snap to grid checkbox
-    if ui.checkbox(&mut app.grid_settings.snap_enabled, "Snap to Grid").changed() {
+    if ui.checkbox(&mut app.services.grid_settings.snap_enabled, "Snap to Grid").changed() {
         logger.log_custom(
             LOG_TYPE_GRID,
-            &format!("Snap to grid {}", if app.grid_settings.snap_enabled { "enabled" } else { "disabled" })
+            &format!("Snap to grid {}", if app.services.grid_settings.snap_enabled { "enabled" } else { "disabled" })
         );
     }
     
     // Align to grid button
     ui.horizontal(|ui| {
         if ui.button("⌗ Align View to Grid (A)").clicked() {
-            crate::display::align_to_grid(&mut app.view_state, &app.grid_settings);
+            crate::display::align_to_grid(&mut app.services.view_state, &app.services.grid_settings);
             logger.log_custom(LOG_TYPE_GRID, "View aligned to grid");
         }
         
@@ -122,9 +122,9 @@ pub fn show_grid_panel<'a>(
     });
     
     // Show grid visibility status
-    if app.grid_settings.enabled {
+    if app.services.grid_settings.enabled {
         ui.separator();
-        let status = get_grid_status(&app.view_state, app.grid_settings.spacing_mm);
+        let status = get_grid_status(&app.services.view_state, app.services.grid_settings.spacing_mm);
         
         match status {
             GridStatus::TooFine => {
