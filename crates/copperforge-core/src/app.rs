@@ -44,13 +44,18 @@ pub struct CopperForgeApp {
     pub projects_directory_dialog: egui_file_dialog::FileDialog,
     pub last_picked_projects_directory: Option<PathBuf>,
 
-    // ── Panel-owned state (temporary — migrates into citizens) ─
-    pub bom_state: Option<ui::BomPanelState>,
+    // ── Persisted citizen panels ───────────────────────────────
+    /// Persisted so panel-local state (BOM cache, terminal buffer, shell
+    /// history, etc.) survives across frames. Stateless panels (DRC,
+    /// ViewSettings, Project, Projects, Settings) are still created fresh
+    /// per frame in tabs.rs since they have nothing to carry.
+    pub bom_panel: crate::panels::BomPanel,
+    pub terminal_panel: crate::panels::TerminalPanel,
+    pub shell_panel: crate::panels::ShellPanel,
+    pub logger_panel: crate::panels::LoggerPanel,
+
+    // ── Panel-owned state (for panels not yet citizen-persisted) ─
     pub project_manager_state: Option<project_manager::ProjectManagerState>,
-    pub term_output: Vec<String>,
-    pub term_cmd_buf: String,
-    pub shell_log: Vec<String>,
-    pub shell_cmd_buf: String,
 }
 
 impl Drop for CopperForgeApp {
@@ -209,6 +214,7 @@ impl CopperForgeApp {
             latched_measurement_end: None,
             show_about_modal: false,
             show_kicad_version_modal: false,
+            bom_component_count: 0,
             config,
         };
 
@@ -236,12 +242,11 @@ impl CopperForgeApp {
             last_picked_pcb_file: None,
             projects_directory_dialog: egui_file_dialog::FileDialog::new(),
             last_picked_projects_directory: None,
-            bom_state: None,
+            bom_panel: crate::panels::BomPanel::new(egui_citizen::CitizenState::default()),
+            terminal_panel: crate::panels::TerminalPanel::new(egui_citizen::CitizenState::default()),
+            shell_panel: crate::panels::ShellPanel::new(egui_citizen::CitizenState::default()),
+            logger_panel: crate::panels::LoggerPanel::new(egui_citizen::CitizenState::default()),
             project_manager_state: None,
-            term_output: Vec::new(),
-            term_cmd_buf: String::new(),
-            shell_log: Vec::new(),
-            shell_cmd_buf: String::new(),
         };
 
         let logger = ReactiveEventLogger::with_colors(&app.services.logger_state, &app.services.log_colors);

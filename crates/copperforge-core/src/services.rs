@@ -72,4 +72,10 @@ pub struct SharedServices {
     // ── Modal flags ───────────────────────────────────────────
     pub show_about_modal: bool,
     pub show_kicad_version_modal: bool,
+
+    // ── Cross-panel summaries ─────────────────────────────────
+    /// Count of BOM entries loaded in the BOM panel. Mirror so other panels
+    /// (e.g. the Shell `status` command) can report it without reaching into
+    /// BomPanel's private state. Updated by BomPanel on extraction.
+    pub bom_component_count: usize,
 }

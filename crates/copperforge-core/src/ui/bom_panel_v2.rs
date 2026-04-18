@@ -2,12 +2,12 @@
 //!
 //! Uses kiparse to parse the PCB file directly. No live KiCad connection needed.
 
-use crate::CopperForgeApp;
-use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
-use egui_mobius_reactive::Dynamic;
+use crate::event_logger::ReactiveEventLogger;
+use crate::services::SharedServices;
 use egui_extras::{TableBuilder, Column};
 
 /// Cached BOM state — parsed once, rendered every frame without re-parsing.
+/// Owned by the `BomPanel` citizen.
 pub struct BomPanelState {
     pub entries: Vec<crate::bom::BomEntry>,
     pub dimensions: Option<crate::bom::BoardDimensions>,
@@ -30,24 +30,23 @@ impl BomPanelState {
     }
 }
 
-/// Show the BOM panel.
-pub fn show_bom_panel<'a>(
+/// Show the BOM panel. State is owned by the caller (the BomPanel citizen).
+pub fn show_bom_panel(
     ui: &mut egui::Ui,
-    app: &mut CopperForgeApp,
-    logger_state: &'a Dynamic<ReactiveEventLoggerState>,
-    log_colors: &'a Dynamic<LogColors>,
+    state: &mut Option<BomPanelState>,
+    services: &mut SharedServices,
 ) {
-    let logger = ReactiveEventLogger::with_colors(logger_state, log_colors);
+    let logger = ReactiveEventLogger::with_colors(&services.logger_state, &services.log_colors);
 
     // Get PCB path from project state
-    let pcb_path = app.services.project_state.get().pcb_path().map(|p| p.to_path_buf());
+    let pcb_path = services.project_state.get().pcb_path().map(|p| p.to_path_buf());
 
     // Initialize BOM state if needed
-    if app.bom_state.is_none() {
-        app.bom_state = Some(BomPanelState::new());
+    if state.is_none() {
+        *state = Some(BomPanelState::new());
     }
 
-    let bom_state = app.bom_state.as_mut().unwrap();
+    let bom_state = state.as_mut().unwrap();
 
     ui.vertical(|ui| {
         // Toolbar
@@ -70,6 +69,7 @@ pub fn show_bom_panel<'a>(
                             bom_state.summary = crate::bom::component_summary(&entries);
                             bom_state.entries = entries;
                             bom_state.pcb_path_hash = path_hash;
+                            services.bom_component_count = bom_state.entries.len();
                         }
                         Err(e) => {
                             logger.log_error(&format!("BOM extraction failed: {}", e));
@@ -88,6 +88,7 @@ pub fn show_bom_panel<'a>(
                         bom_state.summary = crate::bom::component_summary(&entries);
                         bom_state.entries = entries;
                         bom_state.pcb_path_hash = path_hash;
+                        services.bom_component_count = bom_state.entries.len();
                     }
                     if let Ok(Some(dims)) = crate::bom::extract_board_dimensions(pcb) {
                         bom_state.dimensions = Some(dims);

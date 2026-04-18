@@ -122,16 +122,13 @@ impl Tab {
                 self.render_gerber_view(ui, params.app);
             }
             TabKind::Logger => {
-                LoggerPanel::new(egui_citizen::CitizenState::default())
-                    .show(ui, params.app);
+                params.app.logger_panel.show(ui, &mut params.app.services);
             }
             TabKind::Terminal => {
-                TerminalPanel::new(egui_citizen::CitizenState::default())
-                    .show(ui, params.app);
+                params.app.terminal_panel.show(ui, &mut params.app.services);
             }
             TabKind::Shell => {
-                ShellPanel::new(egui_citizen::CitizenState::default())
-                    .show(ui, params.app);
+                params.app.shell_panel.show(ui, &mut params.app.services);
             }
             TabKind::Project => {
                 ProjectPanel::new(egui_citizen::CitizenState::default())
@@ -146,8 +143,7 @@ impl Tab {
                     .show(ui, params.app);
             }
             TabKind::BOM => {
-                BomPanel::new(egui_citizen::CitizenState::default())
-                    .show(ui, params.app);
+                params.app.bom_panel.show(ui, &mut params.app.services);
             }
         }
     }

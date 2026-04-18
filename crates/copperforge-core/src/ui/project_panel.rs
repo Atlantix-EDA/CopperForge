@@ -283,7 +283,7 @@ fn show_create_project_form(
                             .collect();
 
                         // Get BOM components
-                        let bom_components: Vec<crate::project_manager::bom::BomComponent> = if let Some(ref bom_state) = app.bom_state {
+                        let bom_components: Vec<crate::project_manager::bom::BomComponent> = if let Some(ref bom_state) = app.bom_panel.state {
                             bom_state.entries.iter().cloned().map(Into::into).collect()
                         } else {
                             Vec::new()

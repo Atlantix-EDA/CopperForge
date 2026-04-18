@@ -14,7 +14,7 @@ pub fn show_project_manager_panel(
     let logger = ReactiveEventLogger::with_colors(logger_state, log_colors);
     
     // Split app borrow to avoid conflicts
-    let bom_components: Option<Vec<crate::project_manager::bom::BomComponent>> = if let Some(ref bom_state) = app.bom_state {
+    let bom_components: Option<Vec<crate::project_manager::bom::BomComponent>> = if let Some(ref bom_state) = app.bom_panel.state {
         Some(bom_state.entries.iter().cloned().map(Into::into).collect())
     } else {
         None

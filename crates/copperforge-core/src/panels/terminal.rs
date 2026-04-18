@@ -4,15 +4,19 @@ use egui::RichText;
 use egui_citizen::{Citizen, CitizenId, CitizenState};
 
 use super::citizen_panel;
+use crate::services::SharedServices;
 use crate::theme::TokyoNight;
 
 const PROMPT: &str = "$ ";
 const INPUT_ID: &str = "terminal_input";
 
-citizen_panel!(TerminalPanel, "terminal");
+citizen_panel!(TerminalPanel, "terminal",
+    output: Vec<String> = Vec::new(),
+    cmd_buf: String = String::new()
+);
 
 impl TerminalPanel {
-    pub fn show(&self, ui: &mut egui::Ui, app: &mut crate::CopperForgeApp) {
+    pub fn show(&mut self, ui: &mut egui::Ui, _services: &mut SharedServices) {
         let frame = egui::Frame::new()
             .fill(TokyoNight::BG_DARK)
             .inner_margin(8.0);
@@ -26,7 +30,7 @@ impl TerminalPanel {
                 .auto_shrink([false; 2])
                 .stick_to_bottom(true)
                 .show(ui, |ui| {
-                    for line in app.term_output.iter() {
+                    for line in self.output.iter() {
                         render_line(ui, line);
                     }
 
@@ -39,7 +43,7 @@ impl TerminalPanel {
                                 .strong(),
                         );
                         let response = ui.add(
-                            egui::TextEdit::singleline(&mut app.term_cmd_buf)
+                            egui::TextEdit::singleline(&mut self.cmd_buf)
                                 .id(text_id)
                                 .desired_width(ui.available_width())
                                 .font(egui::TextStyle::Monospace)
@@ -48,18 +52,18 @@ impl TerminalPanel {
                         );
 
                         if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                            let input = app.term_cmd_buf.trim().to_string();
+                            let input = self.cmd_buf.trim().to_string();
                             if !input.is_empty() {
                                 if input == "clear" || input == "cls" {
-                                    app.term_output.clear();
+                                    self.output.clear();
                                 } else {
-                                    app.term_output.push(format!("{PROMPT}{input}"));
+                                    self.output.push(format!("{PROMPT}{input}"));
                                     for line in run_shell_command(&input) {
-                                        app.term_output.push(line);
+                                        self.output.push(line);
                                     }
                                 }
                             }
-                            app.term_cmd_buf.clear();
+                            self.cmd_buf.clear();
                             ui.memory_mut(|m| m.request_focus(text_id));
                         }
 

@@ -7,15 +7,19 @@ use egui::RichText;
 use egui_citizen::{Citizen, CitizenId, CitizenState};
 
 use super::citizen_panel;
+use crate::services::SharedServices;
 use crate::theme::TokyoNight;
 
 const PROMPT: &str = "forge> ";
 const INPUT_ID: &str = "shell_input";
 
-citizen_panel!(ShellPanel, "shell");
+citizen_panel!(ShellPanel, "shell",
+    log: Vec<String> = Vec::new(),
+    cmd_buf: String = String::new()
+);
 
 impl ShellPanel {
-    pub fn show(&self, ui: &mut egui::Ui, app: &mut crate::CopperForgeApp) {
+    pub fn show(&mut self, ui: &mut egui::Ui, services: &mut SharedServices) {
         let frame = egui::Frame::new()
             .fill(TokyoNight::BG_DARK)
             .inner_margin(8.0);
@@ -29,8 +33,8 @@ impl ShellPanel {
                 .auto_shrink([false; 2])
                 .stick_to_bottom(true)
                 .show(ui, |ui| {
-                    let lines: Vec<String> = app.shell_log.clone();
-                    for line in lines.iter() {
+                    let snapshot: Vec<String> = self.log.clone();
+                    for line in snapshot.iter() {
                         render_line(ui, line);
                     }
 
@@ -43,7 +47,7 @@ impl ShellPanel {
                                 .strong(),
                         );
                         let response = ui.add(
-                            egui::TextEdit::singleline(&mut app.shell_cmd_buf)
+                            egui::TextEdit::singleline(&mut self.cmd_buf)
                                 .id(text_id)
                                 .desired_width(ui.available_width())
                                 .font(egui::TextStyle::Monospace)
@@ -52,19 +56,19 @@ impl ShellPanel {
                         );
 
                         if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                            let input = app.shell_cmd_buf.trim().to_string();
+                            let input = self.cmd_buf.trim().to_string();
                             if !input.is_empty() {
                                 if input == "clear" || input == "cls" {
-                                    app.shell_log.clear();
+                                    self.log.clear();
                                 } else {
-                                    app.shell_log.push(format!("{PROMPT}{input}"));
-                                    let output = execute_command(&input, app);
+                                    self.log.push(format!("{PROMPT}{input}"));
+                                    let output = execute_command(&input, services);
                                     for line in output {
-                                        app.shell_log.push(line);
+                                        self.log.push(line);
                                     }
                                 }
                             }
-                            app.shell_cmd_buf.clear();
+                            self.cmd_buf.clear();
                             ui.memory_mut(|m| m.request_focus(text_id));
                         }
 
@@ -86,7 +90,7 @@ fn render_line(ui: &mut egui::Ui, line: &str) {
     );
 }
 
-fn execute_command(input: &str, app: &crate::CopperForgeApp) -> Vec<String> {
+fn execute_command(input: &str, services: &SharedServices) -> Vec<String> {
     let parts: Vec<&str> = input.split_whitespace().collect();
     let cmd = parts.first().map(|s| s.to_lowercase()).unwrap_or_default();
 
@@ -106,8 +110,8 @@ fn execute_command(input: &str, app: &crate::CopperForgeApp) -> Vec<String> {
         ],
         "ver" | "version" => version_lines(),
         "info" | "system" | "sysinfo" => info_lines(),
-        "status" | "state" => status_lines(app),
-        "env" => env_lines(app),
+        "status" | "state" => status_lines(services),
+        "env" => env_lines(services),
         "sh" => {
             if parts.len() > 1 {
                 let shell_cmd = parts[1..].join(" ");
@@ -133,7 +137,6 @@ fn execute_command(input: &str, app: &crate::CopperForgeApp) -> Vec<String> {
 }
 
 fn version_lines() -> Vec<String> {
-    // Same content the Logger shows at startup — welcome banner + dependency versions.
     let mut banner = crate::platform::banner::Banner::new();
     banner.format();
     banner.message
@@ -148,14 +151,13 @@ fn info_lines() -> Vec<String> {
     details.format_os().lines().map(|s| s.to_string()).collect()
 }
 
-fn env_lines(app: &crate::CopperForgeApp) -> Vec<String> {
+fn env_lines(services: &SharedServices) -> Vec<String> {
     let mut lines = vec!["KiCad:".into()];
     lines.push(format!(
         "  version          = {}",
-        app.services.kicad_version.as_deref().unwrap_or("(not detected)")
+        services.kicad_version.as_deref().unwrap_or("(not detected)")
     ));
 
-    // Any KICAD_* env vars that are actually set — skip the hardcoded guesswork.
     let mut kicad_vars: Vec<(String, String)> = std::env::vars()
         .filter(|(k, _)| k.starts_with("KICAD"))
         .collect();
@@ -177,30 +179,30 @@ fn env_lines(app: &crate::CopperForgeApp) -> Vec<String> {
     lines
 }
 
-fn status_lines(app: &crate::CopperForgeApp) -> Vec<String> {
+fn status_lines(services: &SharedServices) -> Vec<String> {
     let mut lines = vec!["CopperForge Status:".into()];
 
     lines.push(format!(
         "  PCB file        = {}",
-        app.services.project_state.get().pcb_path()
+        services.project_state.get().pcb_path()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "(none)".into())
     ));
     lines.push(format!(
         "  Gerber layers   = {}",
-        app.services.layer_store.layers.len()
+        services.layer_store.layers.len()
     ));
     lines.push(format!(
         "  BOM components  = {}",
-        app.bom_state.as_ref().map(|s| s.entries.len()).unwrap_or(0)
+        services.bom_component_count
     ));
     lines.push(format!(
         "  Units           = {}",
-        if app.services.global_units_mils { "mils" } else { "mm" }
+        if services.global_units_mils { "mils" } else { "mm" }
     ));
     lines.push(format!(
         "  KiCad           = {}",
-        app.services.kicad_version.as_deref().unwrap_or("(not detected)")
+        services.kicad_version.as_deref().unwrap_or("(not detected)")
     ));
     lines
 }
