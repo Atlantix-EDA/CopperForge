@@ -4,7 +4,12 @@ use chrono::{DateTime, Utc};
 use crate::project_manager::bom::BomComponent;
 use crate::project_manager::kicad_hierarchy::ProjectHierarchy;
 
-/// Database manager for project storage
+/// Database manager for project storage.
+/// `Clone` is derived because `sled::Db` is internally Arc-backed — clones
+/// share the same underlying DB handle without re-acquiring the sled
+/// directory lock. This lets `ProjectManagerState` hold its own handle on
+/// the same DB that `SharedServices.project_db` opened at startup.
+#[derive(Clone)]
 pub struct ProjectDatabase {
     db: sled::Db,
 }
@@ -54,6 +59,10 @@ pub struct ProjectData {
     pub metadata: ProjectMetadata,
     pub bom_components: Vec<BomComponent>,
     pub notes: String,
+    /// Tagged fabrication releases (rev_01, rev_02, ...). Populated by the
+    /// Release workflow. `#[serde(default)]` keeps old DB records readable.
+    #[serde(default)]
+    pub releases: Vec<crate::release::Release>,
     /// Hierarchical structure of schematics and PCB files
     /// Cached for performance, can be regenerated from disk
     #[serde(skip)]
@@ -113,6 +122,7 @@ impl ProjectDatabase {
                                 },
                                 bom_components: old_project.bom_components,
                                 notes: old_project.notes,
+                                releases: Vec::new(),
                                 hierarchy: None, // Will be loaded on demand
                             };
 

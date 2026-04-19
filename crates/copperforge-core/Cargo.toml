@@ -52,3 +52,6 @@ thiserror = { workspace = true }
 
 # Tree view
 egui_ltreeview = { workspace = true }
+
+# Release archives (gerber+drill zip)
+zip = { workspace = true }

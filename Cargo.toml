@@ -77,3 +77,6 @@ thiserror = "1.0"
 
 # Tree view
 egui_ltreeview = "0.6.0"
+
+# Release archives (gerber+drill zip)
+zip = { version = "2.2", default-features = false, features = ["deflate"] }

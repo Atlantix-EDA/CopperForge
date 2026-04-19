@@ -97,21 +97,42 @@ fn execute_command(input: &str, services: &SharedServices) -> Vec<String> {
     match cmd.as_str() {
         "help" | "?" => vec![
             "Built-in commands:".into(),
-            "  help         Show this help".into(),
-            "  ver          Show CopperForge version".into(),
-            "  info         Show host OS / CPU / memory / network".into(),
-            "  status       Show current project + PCB + layers".into(),
-            "  env          Show discovered KiCad + relevant env vars".into(),
-            "  clear        Clear the shell".into(),
+            "  help              Show this help".into(),
+            "  ver               Show CopperForge version".into(),
+            "  info              Show host OS / CPU / memory / network".into(),
+            "  status            Show current project + PCB + layers".into(),
+            "  env               Show discovered KiCad + relevant env vars".into(),
+            "  new-project <n>   Scaffold a new KiCad project under the default".into(),
+            "                    projects directory using config defaults".into(),
+            "  clear             Clear the shell".into(),
             "".into(),
             "OS commands:".into(),
-            "  !<cmd>       Run an OS shell command (e.g. !uname -a)".into(),
-            "  sh <cmd>     Run an OS shell command (e.g. sh ls -la)".into(),
+            "  !<cmd>            Run an OS shell command (e.g. !uname -a)".into(),
+            "  sh <cmd>          Run an OS shell command (e.g. sh ls -la)".into(),
         ],
         "ver" | "version" => version_lines(),
         "info" | "system" | "sysinfo" => info_lines(),
         "status" | "state" => status_lines(services),
         "env" => env_lines(services),
+        "new-project" | "newproject" | "new" => {
+            if parts.len() < 2 {
+                vec![
+                    "Usage: new-project <name>".into(),
+                    "".into(),
+                    "Scaffolds <name>/ under ~/projects (or config-supplied dir)".into(),
+                    "with .kicad_pro / .kicad_sch / .kicad_pcb stubs, then adds".into(),
+                    "it to the CopperForge project DB.".into(),
+                    "".into(),
+                    "Defaults (from ~/.config/copperforge/project_config.json):".into(),
+                    format!("  author             = {}", services.config.default_author),
+                    format!("  company            = {}", services.config.default_company),
+                    format!("  include_kiverse    = {}", services.config.include_kiverse),
+                    format!("  include_atlantix   = {}", services.config.include_atlantix_resistors),
+                ]
+            } else {
+                new_project(parts[1], services)
+            }
+        }
         "sh" => {
             if parts.len() > 1 {
                 let shell_cmd = parts[1..].join(" ");
@@ -177,6 +198,80 @@ fn env_lines(services: &SharedServices) -> Vec<String> {
         lines.push(format!("  {var:<16} = {val}"));
     }
     lines
+}
+
+fn new_project(name: &str, services: &SharedServices) -> Vec<String> {
+    use crate::project_manager::kicad_project::{create_kicad_project, NewKicadProjectInfo};
+    use crate::project_manager::kicad_global_libs::setup_kiverse_globally;
+    use crate::project_manager::database::{generate_project_id, ProjectData, ProjectMetadata};
+
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return vec!["error: project name cannot be empty".into()];
+    }
+
+    let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    let location = services
+        .config
+        .preferred_projects_directory
+        .clone()
+        .unwrap_or_else(|| home.join("projects"));
+    let kiverse_path = home.join("kiverse");
+
+    // Optional: wire kiverse libs into the user's global KiCad config.
+    if services.config.include_kiverse || services.config.include_atlantix_resistors {
+        let kiverse_opt = if kiverse_path.exists() { Some(kiverse_path.clone()) } else { None };
+        if let Err(e) = setup_kiverse_globally(kiverse_opt) {
+            eprintln!("Warning: kiverse global setup failed: {}", e);
+        }
+    }
+
+    // Scaffold the .kicad_pro / .kicad_sch / .kicad_pcb on disk.
+    let mut info = NewKicadProjectInfo::new(name.clone(), location.clone());
+    info.author = services.config.default_author.clone();
+    info.company = services.config.default_company.clone();
+    info.include_kiverse = false;
+    info.include_atlantix_resistors = false;
+    info.kiverse_path = Some(kiverse_path);
+
+    let project_dir = match create_kicad_project(&info) {
+        Ok(dir) => dir,
+        Err(e) => return vec![format!("error: failed to create KiCad project: {}", e)],
+    };
+
+    // Register in the CopperForge DB.
+    let now = chrono::Utc::now();
+    let metadata = ProjectMetadata {
+        id: generate_project_id(),
+        name: name.clone(),
+        description: String::new(),
+        pcb_file_path: info.pcb_file_path(),
+        created_at: now,
+        last_modified: now,
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        tags: Vec::new(),
+        parent_id: None,
+    };
+    let data = ProjectData {
+        metadata,
+        bom_components: Vec::new(),
+        notes: String::new(),
+        releases: Vec::new(),
+        hierarchy: None,
+    };
+    if let Err(e) = services.project_db.save_project(&data) {
+        return vec![
+            format!("warning: KiCad files created at {} but DB save failed: {}", project_dir.display(), e),
+        ];
+    }
+
+    vec![
+        format!("Created: {}", project_dir.display()),
+        format!("  .kicad_pro = {}", info.project_file_path().display()),
+        format!("  .kicad_sch = {}", info.schematic_file_path().display()),
+        format!("  .kicad_pcb = {}", info.pcb_file_path().display()),
+        "Registered in CopperForge project DB.".into(),
+    ]
 }
 
 fn status_lines(services: &SharedServices) -> Vec<String> {

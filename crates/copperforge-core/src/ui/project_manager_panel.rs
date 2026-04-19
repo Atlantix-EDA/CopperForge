@@ -244,223 +244,133 @@ pub fn show_create_project_dialog(
     bom_components: Vec<crate::project_manager::bom::BomComponent>,
     logger: &ReactiveEventLogger,
 ) {
-    egui::Window::new("Create New Project")
+    egui::Window::new("Import KiCad Project")
         .id(egui::Id::new("create_project_dialog"))
         .collapsible(false)
         .resizable(false)
         .movable(true)
         .default_pos(egui::Pos2::new(300.0, 150.0))
-        .min_size(egui::Vec2::new(550.0, 500.0))
+        .min_size(egui::Vec2::new(550.0, 400.0))
         .show(ctx, |ui| {
             ui.vertical(|ui| {
-                // Toggle between creating new or importing existing
+                // Handle the file dialog FIRST so auto-population runs this frame.
+                if let Some(pro_path) = manager_state.pcb_file_dialog.update(ui.ctx()).picked() {
+                    let pro_path = pro_path.to_path_buf();
+                    let should_process = manager_state.last_picked_pro_path.as_ref() != Some(&pro_path);
+                    if should_process {
+                        manager_state.last_picked_pro_path = Some(pro_path.clone());
+                        manager_state.new_project_pcb_path = Some(pro_path.with_extension("kicad_pcb"));
+                        if let Ok(meta) = crate::project_manager::kicad_metadata::read_kicad_metadata(&pro_path) {
+                            if let Some(desc) = meta.description {
+                                if manager_state.new_project_description.is_empty() {
+                                    manager_state.new_project_description = desc;
+                                }
+                            }
+                            if manager_state.new_project_name.is_empty() {
+                                if let Some(stem) = pro_path.file_stem() {
+                                    manager_state.new_project_name = stem.to_string_lossy().into_owned();
+                                }
+                            }
+                        }
+                    }
+                }
+
                 ui.horizontal(|ui| {
-                    ui.label("Project Type:");
-                    ui.radio_value(&mut manager_state.create_new_kicad_project, true, "🆕 Create New KiCad Project");
-                    ui.radio_value(&mut manager_state.create_new_kicad_project, false, "📂 Import Existing PCB");
+                    ui.label("KiCad Project File (.kicad_pro):");
+                    let pro_file_text = manager_state.new_project_pcb_path.as_ref()
+                        .map(|p| p.with_extension("kicad_pro").file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| "Unknown file".into()))
+                        .unwrap_or_else(|| "No KiCad project file selected".into());
+                    ui.label(&pro_file_text);
+
+                    if ui.button("Browse...").clicked() {
+                        use std::sync::Arc;
+                        use std::mem;
+                        use egui_file_dialog::FileDialog;
+                        let dialog = mem::replace(&mut manager_state.pcb_file_dialog, FileDialog::new());
+                        manager_state.pcb_file_dialog = dialog
+                            .add_file_filter("KiCad Project", Arc::new(|path: &std::path::Path| {
+                                path.extension()
+                                    .and_then(|e| e.to_str())
+                                    .map(|e| e == "kicad_pro")
+                                    .unwrap_or(false)
+                            }))
+                            .default_file_filter("KiCad Project");
+                        manager_state.pcb_file_dialog.pick_file();
+                    }
                 });
 
-                ui.separator();
                 ui.add_space(10.0);
 
-                // Common fields
                 ui.label("Project Name:");
-
                 ui.horizontal(|ui| {
-                    // Text entry field always visible for editing
                     ui.text_edit_singleline(&mut manager_state.new_project_name);
-
-                    // Show ComboBox with recent project names
                     egui::ComboBox::from_id_salt("project_name_combo_dialog")
                         .selected_text("📋 Recent")
                         .show_ui(ui, |ui| {
-                            if !manager_state.recent_project_names.is_empty() {
-                                // Clone the list to avoid borrow issues
-                                let recent_names = manager_state.recent_project_names.clone();
-                                for recent_name in &recent_names {
-                                    if ui.selectable_label(false, recent_name).clicked() {
-                                        // Load full project metadata (name, description, tags)
-                                        manager_state.load_project_metadata_into_form(recent_name);
+                            if manager_state.recent_project_names.is_empty() {
+                                ui.label(egui::RichText::new("No recent projects").small().italics());
+                            } else {
+                                let recent = manager_state.recent_project_names.clone();
+                                for n in &recent {
+                                    if ui.selectable_label(false, n).clicked() {
+                                        manager_state.load_project_metadata_into_form(n);
                                     }
                                 }
-                            } else {
-                                ui.label(egui::RichText::new("No recent projects").small().italics());
                             }
                         });
                 });
 
                 ui.add_space(5.0);
-
                 ui.label("Description:");
                 ui.text_edit_multiline(&mut manager_state.new_project_description);
 
                 ui.add_space(5.0);
-
                 ui.label("Tags (comma-separated):");
                 ui.text_edit_singleline(&mut manager_state.new_project_tags);
 
-                ui.add_space(10.0);
-
-                // Show different fields based on project type
-                if manager_state.create_new_kicad_project {
-                    ui.heading("New KiCad Project Settings");
-                    ui.separator();
-
-                    // Location
-                    ui.horizontal(|ui| {
-                        ui.label("Location:");
-                        let location_text = manager_state.new_kicad_project_location
-                            .to_string_lossy()
-                            .to_string();
-                        ui.label(&location_text);
-
-                        if ui.button("Browse...").clicked() {
-                            manager_state.location_dialog.pick_directory();
-                        }
-                    });
-
-                    // Handle location dialog
-                    if let Some(path) = manager_state.location_dialog.update(ui.ctx()).picked() {
-                        manager_state.new_kicad_project_location = path.to_path_buf();
-                    }
-
-                    ui.add_space(5.0);
-
-                    // Author
-                    ui.horizontal(|ui| {
-                        ui.label("Author:");
-                        ui.text_edit_singleline(&mut manager_state.new_kicad_project_author);
-                    });
-
-                    ui.add_space(5.0);
-
-                    // Company
-                    ui.horizontal(|ui| {
-                        ui.label("Company:");
-                        ui.text_edit_singleline(&mut manager_state.new_kicad_project_company);
-                    });
-
-                    ui.add_space(10.0);
-
-                    // Library options
-                    ui.heading("Library Configuration");
-                    ui.separator();
-
-                    ui.checkbox(&mut manager_state.include_kiverse, "Include KiVerse Symbol Library");
-                    ui.checkbox(&mut manager_state.include_atlantix_resistors, "Include Atlantix-EDA Resistor Library");
-
-                    ui.add_space(5.0);
-
-                    // KiVerse path
-                    ui.horizontal(|ui| {
-                        ui.label("KiVerse Path:");
-                        let kiverse_text = manager_state.kiverse_path
-                            .to_string_lossy()
-                            .to_string();
-                        ui.label(&kiverse_text);
-                    });
-                    ui.label("💡 Default: ~/kiverse");
-
-                } else {
-                    // Import existing KiCad project
-                    ui.horizontal(|ui| {
-                        ui.label("KiCad Project File (.kicad_pro):");
-
-                        let pcb_file_text = if let Some(ref path) = manager_state.new_project_pcb_path {
-                            path.file_name()
-                                .map(|n| n.to_string_lossy().to_string())
-                                .unwrap_or_else(|| "Unknown file".to_string())
-                        } else {
-                            "No KiCad project file selected".to_string()
-                        };
-
-                        ui.label(&pcb_file_text);
-
-                        if ui.button("Browse...").clicked() {
-                            use std::sync::Arc;
-                            use std::mem;
-                            use egui_file_dialog::FileDialog;
-
-                            // Take the dialog, add filter, and put it back
-                            let dialog = mem::replace(&mut manager_state.pcb_file_dialog, FileDialog::new());
-                            manager_state.pcb_file_dialog = dialog
-                                .add_file_filter("KiCad Project", Arc::new(|path: &std::path::Path| {
-                                    path.extension()
-                                        .and_then(|ext| ext.to_str())
-                                        .map(|ext| ext == "kicad_pro")
-                                        .unwrap_or(false)
-                                }));
-                            manager_state.pcb_file_dialog.pick_file();
-                        }
-                    });
-
-                    // Handle KiCad project file dialog
-                    if let Some(pro_path) = manager_state.pcb_file_dialog.update(ui.ctx()).picked() {
-                        // Convert .kicad_pro path to .kicad_pcb path
-                        let pcb_path = pro_path.with_extension("kicad_pcb");
-                        manager_state.new_project_pcb_path = Some(pcb_path);
-                    }
-                }
-
                 ui.add_space(15.0);
 
-                // Buttons
                 ui.horizontal(|ui| {
-                    if ui.button("Create").clicked() {
-                        // Validate input
+                    if ui.button("📥 Import").clicked() {
                         if manager_state.new_project_name.trim().is_empty() {
-                            manager_state.last_error = Some("Project name cannot be empty".to_string());
+                            manager_state.last_error = Some("Project name cannot be empty".into());
                             return;
                         }
-
-                        // Parse tags
+                        let pcb_path = match manager_state.new_project_pcb_path.clone() {
+                            Some(p) => p,
+                            None => {
+                                manager_state.last_error = Some("Please select a .kicad_pro file first".into());
+                                return;
+                            }
+                        };
                         let tags: Vec<String> = manager_state.new_project_tags
                             .split(',')
                             .map(|s| s.trim().to_string())
                             .filter(|s| !s.is_empty())
                             .collect();
-
-                        // Create project based on type
-                        let result = if manager_state.create_new_kicad_project {
-                            // Create new KiCad project from scratch
-                            manager_state.create_new_kicad_project_from_scratch(
-                                manager_state.new_project_name.clone(),
-                                manager_state.new_project_description.clone(),
-                                tags,
-                            )
-                        } else {
-                            // Import existing PCB
-                            let pcb_path = if let Some(ref path) = manager_state.new_project_pcb_path {
-                                path.clone()
-                            } else {
-                                manager_state.last_error = Some("Please select a PCB file first".to_string());
-                                return;
-                            };
-
-                            manager_state.create_project(
-                                manager_state.new_project_name.clone(),
-                                manager_state.new_project_description.clone(),
-                                pcb_path,
-                                tags,
-                                bom_components.clone(),
-                            )
-                        };
-
-                        match result {
-                            Ok(project_id) => {
-                                logger.log_info(&format!("Created project: {} (ID: {})", manager_state.new_project_name, project_id));
-                                // Only reset on success - this keeps user preferences but clears project fields
+                        match manager_state.create_project(
+                            manager_state.new_project_name.clone(),
+                            manager_state.new_project_description.clone(),
+                            pcb_path,
+                            tags,
+                            bom_components.clone(),
+                        ) {
+                            Ok(id) => {
+                                logger.log_info(&format!(
+                                    "Imported project: {} (ID: {})",
+                                    manager_state.new_project_name, id
+                                ));
                                 manager_state.reset_create_dialog();
                             }
                             Err(e) => {
-                                // Don't reset on error - user can fix the issue and try again
-                                manager_state.last_error = Some(format!("Failed to create project: {}", e));
+                                manager_state.last_error = Some(format!("Failed to import: {}", e));
                             }
                         }
                     }
 
                     if ui.button("Cancel").clicked() {
-                        // On cancel, hide dialog but keep fields for next time
                         manager_state.show_create_dialog = false;
                     }
                 });

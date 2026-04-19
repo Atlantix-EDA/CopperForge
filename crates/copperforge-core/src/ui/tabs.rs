@@ -250,11 +250,13 @@ fn render_pcb_workflow_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
             app.services.project_state.get().pcb_path().map(|p| p.to_path_buf()),
             app.services.project_state.get().gerber_dir().map(|p| p.to_path_buf()),
         ) {
-            app.services.project_state.set(ProjectState::LoadingGerbers { pcb_path: pcb_path.clone(), gerber_dir: gerber_dir.clone() });            gerber_ops::load_gerbers_into_viewer(app, &gerber_dir, &logger);
+            app.services.project_state.set(ProjectState::LoadingGerbers { pcb_path: pcb_path.clone(), gerber_dir: gerber_dir.clone() });
+            gerber_ops::load_gerbers_into_viewer(app, &gerber_dir, &logger);
             let last_modified = std::fs::metadata(&pcb_path)
                 .and_then(|m| m.modified())
                 .unwrap_or(std::time::SystemTime::now());
-            app.services.project_state.set(ProjectState::Ready { pcb_path, gerber_dir, last_modified });        }
+            app.services.project_state.set(ProjectState::Ready { pcb_path, gerber_dir, last_modified });
+        }
     }
 
     // Stale-file indicator
@@ -270,14 +272,97 @@ fn render_pcb_workflow_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
 
     ui.separator();
 
+    // Release: only enabled once gerbers are loaded AND a project record exists
+    // in the database (so the release can be persisted against a project).
+    let is_ready = matches!(app.services.project_state.get(), ProjectState::Ready { .. });
+    let has_current_project = app.project_manager_state
+        .as_ref()
+        .and_then(|s| s.current_project.as_ref())
+        .is_some();
+    let release_enabled = is_ready && has_current_project;
+
+    let release_btn = ui.add_enabled(release_enabled, egui::Button::new("🚀 Release"));
+    let release_btn = if !has_current_project && is_ready {
+        release_btn.on_disabled_hover_text("Open or create a project record in the Projects tab first.")
+    } else if !is_ready {
+        release_btn.on_disabled_hover_text("Load gerbers (Generate + Load) before cutting a release.")
+    } else {
+        release_btn
+    };
+    if release_btn.clicked() {
+        open_release_modal(app);
+    }
+
+    // Pick up a pending "regenerate-release" intent from the Projects tab
+    // (set by right-click → Regenerate on a rev node). We open the release
+    // modal pre-filled with the existing rev's fields + overwrite flag.
+    let regen_tag = ui.ctx().memory(|mem| {
+        mem.data.get_temp::<String>(egui::Id::new("regen_release_intent"))
+    });
+    if let Some(composite) = regen_tag {
+        ui.ctx().memory_mut(|mem| {
+            mem.data.remove::<String>(egui::Id::new("regen_release_intent"));
+        });
+        open_regenerate_release_modal(app, &composite);
+    }
+
+    ui.separator();
+
     if ui.add_enabled(has_pcb, egui::Button::new("✖ Clear")).clicked() {
-        app.services.project_state.set(ProjectState::NoProject);        if let Some(ref mut manager_state) = app.project_manager_state {
+        app.services.project_state.set(ProjectState::NoProject);
+        if let Some(ref mut manager_state) = app.project_manager_state {
             manager_state.current_project = None;
             manager_state.selected_project_id = None;
         }
         app.services.layer_store.clear_all();
         logger.log_info("Cleared PCB file selection");
     }
+}
+
+/// Seed the release modal with sensible defaults: next rev tag + current
+/// project description prefilled.
+fn open_release_modal(app: &mut CopperForgeApp) {
+    let (existing_releases, description_prefill) = app.project_manager_state
+        .as_ref()
+        .and_then(|s| s.current_project.as_ref())
+        .map(|p| (p.releases.clone(), p.metadata.description.clone()))
+        .unwrap_or_default();
+    let suggested_tag = crate::release::suggest_next_rev_tag(&existing_releases);
+    app.release_modal = Some(crate::app::ReleaseModalState {
+        rev_tag: suggested_tag,
+        description: description_prefill,
+        changes: String::new(),
+        include_date_in_name: true,
+        include_notes_in_zip: true,
+        error: None,
+        overwrite_existing: false,
+    });
+}
+
+/// Open the release modal in Regenerate mode — seeded from the existing
+/// release's fields, overwrite flag set. `composite` is "proj_X:rev:rev_02".
+fn open_regenerate_release_modal(app: &mut CopperForgeApp, composite: &str) {
+    let mut parts = composite.splitn(3, ':');
+    let project_id = match parts.next() { Some(s) => s, None => return };
+    let _marker = parts.next();
+    let rev_tag = match parts.next() { Some(s) => s, None => return };
+
+    let existing = app.project_manager_state
+        .as_ref()
+        .and_then(|pm| pm.project_releases.get(project_id))
+        .and_then(|releases| releases.iter().find(|r| r.tag == rev_tag))
+        .cloned();
+    let Some(existing) = existing else { return };
+
+    app.release_modal = Some(crate::app::ReleaseModalState {
+        rev_tag: existing.tag.clone(),
+        description: existing.description.clone(),
+        changes: existing.changes.clone(),
+        include_date_in_name: existing.include_date_in_name,
+        include_notes_in_zip: existing.include_notes_in_zip,
+        error: None,
+        overwrite_existing: true,
+    });
 }
 
 fn render_quadrant_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
