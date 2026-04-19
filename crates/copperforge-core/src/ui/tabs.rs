@@ -71,7 +71,7 @@ pub struct Tab {
 impl Tab {
     /// Helper to get units from app
     fn get_units(app: &CopperForgeApp) -> &crate::layer_store::UnitsState {
-        &app.layer_store.units
+        &app.services.layer_store.units
     }
     
     pub fn new(kind: TabKind, surface: SurfaceIndex, node: NodeIndex) -> Self {
@@ -122,16 +122,13 @@ impl Tab {
                 self.render_gerber_view(ui, params.app);
             }
             TabKind::Logger => {
-                LoggerPanel::new(egui_citizen::CitizenState::default())
-                    .show(ui, params.app);
+                params.app.logger_panel.show(ui, &mut params.app.services);
             }
             TabKind::Terminal => {
-                TerminalPanel::new(egui_citizen::CitizenState::default())
-                    .show(ui, params.app);
+                params.app.terminal_panel.show(ui, &mut params.app.services);
             }
             TabKind::Shell => {
-                ShellPanel::new(egui_citizen::CitizenState::default())
-                    .show(ui, params.app);
+                params.app.shell_panel.show(ui, &mut params.app.services);
             }
             TabKind::Project => {
                 ProjectPanel::new(egui_citizen::CitizenState::default())
@@ -146,8 +143,7 @@ impl Tab {
                     .show(ui, params.app);
             }
             TabKind::BOM => {
-                BomPanel::new(egui_citizen::CitizenState::default())
-                    .show(ui, params.app);
+                params.app.bom_panel.show(ui, &mut params.app.services);
             }
         }
     }
@@ -202,13 +198,13 @@ fn render_pcb_workflow_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
     use crate::project::{gerber_ops, ProjectState};
 
     // Clone reactive handles up front so we can take `&mut app` later without
-    // a borrow conflict with a logger that borrows `app.logger_state`.
-    let logger_state = app.logger_state.clone();
-    let log_colors = app.log_colors.clone();
+    // a borrow conflict with a logger that borrows `app.services.logger_state`.
+    let logger_state = app.services.logger_state.clone();
+    let log_colors = app.services.log_colors.clone();
     let logger = ReactiveEventLogger::with_colors(&logger_state, &log_colors);
 
     // State label (dim when NoProject)
-    let (state_label, state_color) = match &app.project_manager.state {
+    let (state_label, state_color) = match &app.services.project_state.get() {
         ProjectState::NoProject => ("no PCB", egui::Color32::from_rgb(120, 120, 120)),
         ProjectState::PcbSelected { .. } => ("PCB selected", egui::Color32::from_rgb(180, 180, 220)),
         ProjectState::GeneratingGerbers { .. } => ("generating…", egui::Color32::from_rgb(230, 200, 120)),
@@ -220,55 +216,51 @@ fn render_pcb_workflow_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
 
     ui.separator();
 
-    let has_pcb = app.project_manager.state.pcb_path().is_some();
-    let has_gerber_dir = app.project_manager.state.gerber_dir().is_some();
+    let has_pcb = app.services.project_state.get().pcb_path().is_some();
+    let has_gerber_dir = app.services.project_state.get().gerber_dir().is_some();
 
     // Generate: explicit. Disabled if no PCB is selected.
     if ui.add_enabled(has_pcb, egui::Button::new("⚙ Generate Gerbers")).clicked() {
-        if let Some(pcb_path) = app.project_manager.state.pcb_path().map(|p| p.to_path_buf()) {
-            // Ensure kicad-cli discovery has run (no-op after the first probe).
-            if app.kicad_cli_command().is_none() {
-                app.detect_and_cache_kicad();
-            }
+        if let Some(pcb_path) = app.services.project_state.get().pcb_path().map(|p| p.to_path_buf()) {
             let Some(cli) = app.kicad_cli_command() else {
-                logger.log_error("kicad-cli not found (checked PATH, Flatpak, and Snap)");
+                logger.log_error("kicad-cli not found (checked PATH, Flatpak, and Snap at startup)");
                 return;
             };
             logger.log_info(&format!(
                 "Generating gerbers via kicad-cli ({})…",
-                app.kicad_cli_method.as_deref().unwrap_or("?")
+                app.services.kicad_cli_method.as_deref().unwrap_or("?")
             ));
-            app.project_manager.state = ProjectState::GeneratingGerbers { pcb_path: pcb_path.clone() };
+            app.services.project_state.set(ProjectState::GeneratingGerbers { pcb_path: pcb_path.clone() });
             if let Some(output_dir) = gerber_ops::generate_gerbers_from_pcb(&pcb_path, cli, &logger) {
-                app.project_manager.state = ProjectState::GerbersGenerated { pcb_path, gerber_dir: output_dir };
+                app.services.project_state.set(ProjectState::GerbersGenerated { pcb_path, gerber_dir: output_dir });
             } else {
-                app.project_manager.state = ProjectState::PcbSelected { pcb_path };
+                app.services.project_state.set(ProjectState::PcbSelected { pcb_path });
             }
         }
     }
 
     // Load: disabled until gerbers have been generated (or already loaded — allows Reload).
-    let load_label = if matches!(app.project_manager.state, ProjectState::Ready { .. }) {
+    let load_label = if matches!(app.services.project_state.get(), ProjectState::Ready { .. }) {
         "↻ Reload Gerbers"
     } else {
         "⬇ Load Gerbers"
     };
     if ui.add_enabled(has_gerber_dir, egui::Button::new(load_label)).clicked() {
         if let (Some(pcb_path), Some(gerber_dir)) = (
-            app.project_manager.state.pcb_path().map(|p| p.to_path_buf()),
-            app.project_manager.state.gerber_dir().map(|p| p.to_path_buf()),
+            app.services.project_state.get().pcb_path().map(|p| p.to_path_buf()),
+            app.services.project_state.get().gerber_dir().map(|p| p.to_path_buf()),
         ) {
-            app.project_manager.state = ProjectState::LoadingGerbers { pcb_path: pcb_path.clone(), gerber_dir: gerber_dir.clone() };
+            app.services.project_state.set(ProjectState::LoadingGerbers { pcb_path: pcb_path.clone(), gerber_dir: gerber_dir.clone() });
             gerber_ops::load_gerbers_into_viewer(app, &gerber_dir, &logger);
             let last_modified = std::fs::metadata(&pcb_path)
                 .and_then(|m| m.modified())
                 .unwrap_or(std::time::SystemTime::now());
-            app.project_manager.state = ProjectState::Ready { pcb_path, gerber_dir, last_modified };
+            app.services.project_state.set(ProjectState::Ready { pcb_path, gerber_dir, last_modified });
         }
     }
 
     // Stale-file indicator
-    if let ProjectState::Ready { pcb_path, last_modified, .. } = &app.project_manager.state {
+    if let ProjectState::Ready { pcb_path, last_modified, .. } = &app.services.project_state.get() {
         if let Ok(meta) = std::fs::metadata(pcb_path) {
             if let Ok(modified) = meta.modified() {
                 if &modified != last_modified {
@@ -280,24 +272,106 @@ fn render_pcb_workflow_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
 
     ui.separator();
 
+    // Release: only enabled once gerbers are loaded AND a project record exists
+    // in the database (so the release can be persisted against a project).
+    let is_ready = matches!(app.services.project_state.get(), ProjectState::Ready { .. });
+    let has_current_project = app.project_manager_state
+        .as_ref()
+        .and_then(|s| s.current_project.as_ref())
+        .is_some();
+    let release_enabled = is_ready && has_current_project;
+
+    let release_btn = ui.add_enabled(release_enabled, egui::Button::new("🚀 Release"));
+    let release_btn = if !has_current_project && is_ready {
+        release_btn.on_disabled_hover_text("Open or create a project record in the Projects tab first.")
+    } else if !is_ready {
+        release_btn.on_disabled_hover_text("Load gerbers (Generate + Load) before cutting a release.")
+    } else {
+        release_btn
+    };
+    if release_btn.clicked() {
+        open_release_modal(app);
+    }
+
+    // Pick up a pending "regenerate-release" intent from the Projects tab
+    // (set by right-click → Regenerate on a rev node). We open the release
+    // modal pre-filled with the existing rev's fields + overwrite flag.
+    let regen_tag = ui.ctx().memory(|mem| {
+        mem.data.get_temp::<String>(egui::Id::new("regen_release_intent"))
+    });
+    if let Some(composite) = regen_tag {
+        ui.ctx().memory_mut(|mem| {
+            mem.data.remove::<String>(egui::Id::new("regen_release_intent"));
+        });
+        open_regenerate_release_modal(app, &composite);
+    }
+
+    ui.separator();
+
     if ui.add_enabled(has_pcb, egui::Button::new("✖ Clear")).clicked() {
-        app.project_manager.state = ProjectState::NoProject;
+        app.services.project_state.set(ProjectState::NoProject);
         if let Some(ref mut manager_state) = app.project_manager_state {
             manager_state.current_project = None;
             manager_state.selected_project_id = None;
         }
-        app.layer_store.clear_all();
+        app.services.layer_store.clear_all();
         logger.log_info("Cleared PCB file selection");
     }
 }
 
+/// Seed the release modal with sensible defaults: next rev tag + current
+/// project description prefilled.
+fn open_release_modal(app: &mut CopperForgeApp) {
+    let (existing_releases, description_prefill) = app.project_manager_state
+        .as_ref()
+        .and_then(|s| s.current_project.as_ref())
+        .map(|p| (p.releases.clone(), p.metadata.description.clone()))
+        .unwrap_or_default();
+    let suggested_tag = crate::release::suggest_next_rev_tag(&existing_releases);
+    app.release_modal = Some(crate::app::ReleaseModalState {
+        rev_tag: suggested_tag,
+        description: description_prefill,
+        changes: String::new(),
+        include_date_in_name: true,
+        include_notes_in_zip: true,
+        error: None,
+        overwrite_existing: false,
+    });
+}
+
+/// Open the release modal in Regenerate mode — seeded from the existing
+/// release's fields, overwrite flag set. `composite` is "proj_X:rev:rev_02".
+fn open_regenerate_release_modal(app: &mut CopperForgeApp, composite: &str) {
+    let mut parts = composite.splitn(3, ':');
+    let project_id = match parts.next() { Some(s) => s, None => return };
+    let _marker = parts.next();
+    let rev_tag = match parts.next() { Some(s) => s, None => return };
+
+    let existing = app.project_manager_state
+        .as_ref()
+        .and_then(|pm| pm.project_releases.get(project_id))
+        .and_then(|releases| releases.iter().find(|r| r.tag == rev_tag))
+        .cloned();
+    let Some(existing) = existing else { return };
+
+    app.release_modal = Some(crate::app::ReleaseModalState {
+        rev_tag: existing.tag.clone(),
+        description: existing.description.clone(),
+        changes: existing.changes.clone(),
+        include_date_in_name: existing.include_date_in_name,
+        include_notes_in_zip: existing.include_notes_in_zip,
+        error: None,
+        overwrite_existing: true,
+    });
+}
+
 fn render_quadrant_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
-    if ui.checkbox(&mut app.display_manager.quadrant_view_enabled, "Quadrant View").clicked() {
-        app.layer_store.mark_dirty();
-        app.needs_initial_view = true;
+    if ui.checkbox(&mut app.services.display_manager.quadrant_view_enabled, "Quadrant View").clicked() {
+        app.services.layer_store.mark_dirty();
+        app.services.needs_initial_view = true;
     }
     
-    if app.display_manager.quadrant_view_enabled {
+    if app.services.display_manager.quadrant_view_enabled {
         ui.separator();
         ui.label("Spacing:");
         
@@ -305,10 +379,10 @@ fn render_quadrant_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
         let units_resource = Tab::get_units(app);
         
         let (mut spacing_value, units_suffix, conversion_factor) = if units_resource.is_mils() {
-            let spacing_nm = mm_to_nm(app.display_manager.quadrant_offset_magnitude);
+            let spacing_nm = mm_to_nm(app.services.display_manager.quadrant_offset_magnitude);
             (nm_to_mils(spacing_nm) as f32, "mils", 0.0254)
         } else {
-            (app.display_manager.quadrant_offset_magnitude as f32, "mm", 1.0)
+            (app.services.display_manager.quadrant_offset_magnitude as f32, "mm", 1.0)
         };
 
         let speed = if units_resource.is_mils() { 10.0 } else { 1.0 };
@@ -321,15 +395,15 @@ fn render_quadrant_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
             .changed() 
         {
             let spacing_mm = spacing_value * conversion_factor;
-            app.display_manager.set_quadrant_offset_magnitude(spacing_mm as f64);
-            app.layer_store.mark_dirty();
+            app.services.display_manager.set_quadrant_offset_magnitude(spacing_mm as f64);
+            app.services.layer_store.mark_dirty();
         }
         
         ui.separator();
         
         if ui.button("📷 Export Layers as PNG").clicked() {
-            let logger_state = app.logger_state.clone();
-            let log_colors = app.log_colors.clone();
+            let logger_state = app.services.logger_state.clone();
+            let log_colors = app.services.log_colors.clone();
             let logger = ReactiveEventLogger::with_colors(&logger_state, &log_colors);
             crate::ui::orientation_panel::export_quadrant_layers_to_png(app, &logger);
         }
@@ -337,9 +411,9 @@ fn render_quadrant_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
 }
 
 fn render_layer_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
-    let flip_text = if app.display_manager.showing_top { "🔄 Flip to Bottom (F)" } else { "🔄 Flip to Top (F)" };
+    let flip_text = if app.services.display_manager.showing_top { "🔄 Flip to Bottom (F)" } else { "🔄 Flip to Top (F)" };
     if ui.button(flip_text).clicked() {
-        app.display_manager.showing_top = !app.display_manager.showing_top;
+        app.services.display_manager.showing_top = !app.services.display_manager.showing_top;
         
         // Auto-toggle layer visibility based on flip state
         use crate::layer_store::{LayerType, Side};
@@ -349,43 +423,43 @@ fn render_layer_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
                 LayerType::Silkscreen(Side::Top) |
                 LayerType::Soldermask(Side::Top) |
                 LayerType::Paste(Side::Top) => {
-                    app.display_manager.showing_top
+                    app.services.display_manager.showing_top
                 },
                 LayerType::Copper(_) => {
-                    !app.display_manager.showing_top
+                    !app.services.display_manager.showing_top
                 },
                 LayerType::Silkscreen(Side::Bottom) |
                 LayerType::Soldermask(Side::Bottom) |
                 LayerType::Paste(Side::Bottom) => {
-                    !app.display_manager.showing_top
+                    !app.services.display_manager.showing_top
                 },
                 LayerType::MechanicalOutline => {
                     // Leave outline visibility unchanged
-                    app.layer_store.get_visibility(layer_type)
+                    app.services.layer_store.get_visibility(layer_type)
                 }
             };
-            app.layer_store.set_visibility(layer_type, visible);
+            app.services.layer_store.set_visibility(layer_type, visible);
         }
         
-        app.layer_store.mark_dirty();
+        app.services.layer_store.mark_dirty();
     }
 }
 
 fn render_transform_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
     // Rotate button
     if ui.button("🔄 Rotate (R)").clicked() {
-        app.rotation_degrees = (app.rotation_degrees + 90.0) % 360.0;
+        app.services.rotation_degrees = (app.services.rotation_degrees + 90.0) % 360.0;
         
         // Don't reset view - just mark coordinates as dirty to update rotation
         // This keeps the view centered on the current origin
-        app.layer_store.mark_dirty();
+        app.services.layer_store.mark_dirty();
         
-        let logger_state = app.logger_state.clone();
-        let log_colors = app.log_colors.clone();
+        let logger_state = app.services.logger_state.clone();
+        let log_colors = app.services.log_colors.clone();
         let logger = ReactiveEventLogger::with_colors(&logger_state, &log_colors);
         logger.log_custom(
             crate::project::constants::LOG_TYPE_ROTATION, 
-            &format!("Rotated to {:.0}°", app.rotation_degrees)
+            &format!("Rotated to {:.0}°", app.services.rotation_degrees)
         );
     }
     
@@ -393,62 +467,62 @@ fn render_transform_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
     ui.label("🔥 Rendering (v0.2.0)");
     
     // Mirror buttons
-    let x_mirror_text = if app.display_manager.mirroring.x { "↔️ X Mirror ✓" } else { "↔️ X Mirror" };
+    let x_mirror_text = if app.services.display_manager.mirroring.x { "↔️ X Mirror ✓" } else { "↔️ X Mirror" };
     if ui.button(x_mirror_text).clicked() {
-        app.display_manager.mirroring.x = !app.display_manager.mirroring.x;
+        app.services.display_manager.mirroring.x = !app.services.display_manager.mirroring.x;
         // Don't reset custom origin, just mark coordinates as dirty
-        app.layer_store.mark_dirty();
+        app.services.layer_store.mark_dirty();
         
-        let logger_state = app.logger_state.clone();
-        let log_colors = app.log_colors.clone();
+        let logger_state = app.services.logger_state.clone();
+        let log_colors = app.services.log_colors.clone();
         let logger = ReactiveEventLogger::with_colors(&logger_state, &log_colors);
         logger.log_custom(
             crate::project::constants::LOG_TYPE_MIRROR,
-            &format!("X mirroring {}", if app.display_manager.mirroring.x { "enabled" } else { "disabled" })
+            &format!("X mirroring {}", if app.services.display_manager.mirroring.x { "enabled" } else { "disabled" })
         );
     }
     
-    let y_mirror_text = if app.display_manager.mirroring.y { "↕️ Y Mirror ✓" } else { "↕️ Y Mirror" };
+    let y_mirror_text = if app.services.display_manager.mirroring.y { "↕️ Y Mirror ✓" } else { "↕️ Y Mirror" };
     if ui.button(y_mirror_text).clicked() {
-        app.display_manager.mirroring.y = !app.display_manager.mirroring.y;
+        app.services.display_manager.mirroring.y = !app.services.display_manager.mirroring.y;
         // Don't reset custom origin, just mark coordinates as dirty
-        app.layer_store.mark_dirty();
+        app.services.layer_store.mark_dirty();
         
-        let logger_state = app.logger_state.clone();
-        let log_colors = app.log_colors.clone();
+        let logger_state = app.services.logger_state.clone();
+        let log_colors = app.services.log_colors.clone();
         let logger = ReactiveEventLogger::with_colors(&logger_state, &log_colors);
         logger.log_custom(
             crate::project::constants::LOG_TYPE_MIRROR,
-            &format!("Y mirroring {}", if app.display_manager.mirroring.y { "enabled" } else { "disabled" })
+            &format!("Y mirroring {}", if app.services.display_manager.mirroring.y { "enabled" } else { "disabled" })
         );
     }
     
     ui.separator();
     
     // Origin setting button
-    let origin_set = app.display_manager.design_offset.x != 0.0 || app.display_manager.design_offset.y != 0.0;
+    let origin_set = app.services.display_manager.design_offset.x != 0.0 || app.services.display_manager.design_offset.y != 0.0;
     if origin_set {
         if ui.button("🎯 Reset Origin").clicked() {
-            app.display_manager.design_offset = crate::display::VectorOffset { x: 0.0, y: 0.0 };
-            app.origin_has_been_set = false;
+            app.services.display_manager.design_offset = crate::display::VectorOffset { x: 0.0, y: 0.0 };
+            app.services.origin_has_been_set = false;
             
             // Force view refresh to properly center coordinates at the new origin
-            app.needs_initial_view = true;
+            app.services.needs_initial_view = true;
             
             // Mark coordinates as dirty to force refresh
-            app.layer_store.mark_dirty();
+            app.services.layer_store.mark_dirty();
             
-            let logger_state = app.logger_state.clone();
-            let log_colors = app.log_colors.clone();
+            let logger_state = app.services.logger_state.clone();
+            let log_colors = app.services.log_colors.clone();
             let logger = ReactiveEventLogger::with_colors(&logger_state, &log_colors);
             logger.log_info("Reset origin to (0, 0) - view recentered");
         }
     } else {
         if ui.button("🎯 Set Origin").clicked() {
-            app.setting_origin_mode = true;
+            app.services.setting_origin_mode = true;
             
-            let logger_state = app.logger_state.clone();
-            let log_colors = app.log_colors.clone();
+            let logger_state = app.services.logger_state.clone();
+            let log_colors = app.services.log_colors.clone();
             let logger = ReactiveEventLogger::with_colors(&logger_state, &log_colors);
             logger.log_info("Click on the PCB to set the origin");
         }
@@ -479,7 +553,7 @@ fn render_grid_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
         } else {
             spacing as f32
         };
-        if (app.grid_settings.spacing_mm - spacing_mm).abs() < 0.001 {
+        if (app.services.grid_settings.spacing_mm - spacing_mm).abs() < 0.001 {
             current_spacing_display = if is_mils {
                 format!("{} mils", spacing as i32)
             } else {
@@ -504,7 +578,7 @@ fn render_grid_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
                     format!("{:.3} mm", spacing)
                 };
                 if ui.selectable_label(false, label).clicked() {
-                    app.grid_settings.spacing_mm = spacing_mm;
+                    app.services.grid_settings.spacing_mm = spacing_mm;
                 }
             }
         });
@@ -513,30 +587,30 @@ fn render_grid_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
     
     // Grid dot size slider
     ui.label("Dot Size:");
-    ui.add(egui::Slider::new(&mut app.grid_settings.dot_size, 0.5..=5.0).suffix("px"));
+    ui.add(egui::Slider::new(&mut app.services.grid_settings.dot_size, 0.5..=5.0).suffix("px"));
     
     ui.separator();
     
     // Enterprise feature: Snap to Grid
-    ui.checkbox(&mut app.grid_settings.snap_enabled, "🧲 Snap to Grid");
+    ui.checkbox(&mut app.services.grid_settings.snap_enabled, "🧲 Snap to Grid");
 }
 
 fn render_ruler_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
     ui.label("📏 Ruler Tool:");
     
-    let ruler_button_text = if app.ruler_active { "📏 Ruler ✓" } else { "📏 Ruler" };
+    let ruler_button_text = if app.services.ruler_active { "📏 Ruler ✓" } else { "📏 Ruler" };
     if ui.button(ruler_button_text).clicked() {
-        app.ruler_active = !app.ruler_active;
-        if !app.ruler_active {
+        app.services.ruler_active = !app.services.ruler_active;
+        if !app.services.ruler_active {
             // Clear ruler when deactivated
-            app.ruler_start = None;
-            app.ruler_end = None;
+            app.services.ruler_start = None;
+            app.services.ruler_end = None;
         }
     }
     
     // Show ruler measurement if active and both points set
-    if app.ruler_active {
-        if let (Some(start), Some(end)) = (app.ruler_start, app.ruler_end) {
+    if app.services.ruler_active {
+        if let (Some(start), Some(end)) = (app.services.ruler_start, app.services.ruler_end) {
             let dx = end.x - start.x;
             let dy = end.y - start.y;
             let distance = (dx * dx + dy * dy).sqrt();
@@ -553,14 +627,14 @@ fn render_ruler_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
                 ui.label(format!("📏 Distance: {:.3} mm", distance));
                 ui.label(format!("📐 ΔX: {:.3} mm, ΔY: {:.3} mm", dx.abs(), dy.abs()));
             }
-        } else if app.ruler_start.is_some() {
+        } else if app.services.ruler_start.is_some() {
             ui.label("Click second point to complete measurement");
         } else {
             ui.label("Click first point to start measurement (or press M to toggle)");
         }
     }
     // Show latched measurement if not in active measurement mode
-    else if let (Some(start), Some(end)) = (app.latched_measurement_start, app.latched_measurement_end) {
+    else if let (Some(start), Some(end)) = (app.services.latched_measurement_start, app.services.latched_measurement_end) {
         let dx = end.x - start.x;
         let dy = end.y - start.y;
         let distance = (dx * dx + dy * dy).sqrt();
@@ -599,10 +673,10 @@ fn setup_viewport(ui: &mut egui::Ui, app: &mut CopperForgeApp) -> (Rect, egui::R
     // Handle double-click to center view (but maintain custom origin)
     if response.double_clicked() {
         // Only reset the view, don't change the custom origin (design_offset)
-        app.needs_initial_view = true;
+        app.services.needs_initial_view = true;
         
-        let logger_state = app.logger_state.clone();
-        let log_colors = app.log_colors.clone();
+        let logger_state = app.services.logger_state.clone();
+        let log_colors = app.services.log_colors.clone();
         let logger = ReactiveEventLogger::with_colors(&logger_state, &log_colors);
         logger.log_info("Centered view (double-click)");
     }
@@ -620,34 +694,34 @@ fn handle_viewport_interactions(ui: &mut egui::Ui, app: &mut CopperForgeApp, vie
     handle_mouse_wheel_zoom(ui, app, viewport, response);
     
     // Update UI state if not dragging zoom window
-    if !app.zoom_window_dragging {
-        app.ui_state.update(ui, viewport, response, &mut app.view_state);
+    if !app.services.zoom_window_dragging {
+        app.services.ui_state.update(ui, viewport, response, &mut app.services.view_state);
         
         let viewport_center = viewport.center();
         
         // Calculate actual origin position based on custom origin if set
-        let design_offset = &app.display_manager.design_offset;
+        let design_offset = &app.services.display_manager.design_offset;
         if design_offset.x != 0.0 || design_offset.y != 0.0 {
             // Custom origin is set - convert to screen position
-            app.ui_state.origin_screen_pos = app.view_state.gerber_to_screen_coords(
+            app.services.ui_state.origin_screen_pos = app.services.view_state.gerber_to_screen_coords(
                 Vector2::from(design_offset.clone()).to_position().to_point2()
             );
         } else {
             // No custom origin - use viewport center
-            app.ui_state.origin_screen_pos = viewport_center;
+            app.services.ui_state.origin_screen_pos = viewport_center;
         }
         
-        app.ui_state.center_screen_pos = viewport_center;
+        app.services.ui_state.center_screen_pos = viewport_center;
         
         // Update cursor coordinates using raw transform (not affected by design_offset)
         if let Some(cursor_pos) = ui.input(|i| i.pointer.hover_pos()) {
             // Use the original gerber coordinate system for origin setting
-            let raw_gerber_pos = app.view_state.screen_to_gerber_coords(cursor_pos);
-            app.ui_state.cursor_gerber_coords = Some(raw_gerber_pos);
+            let raw_gerber_pos = app.services.view_state.screen_to_gerber_coords(cursor_pos);
+            app.services.ui_state.cursor_gerber_coords = Some(raw_gerber_pos);
         }
         
         // Show visual feedback when in origin setting mode
-        if app.setting_origin_mode {
+        if app.services.setting_origin_mode {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
             
             // Draw preview text at cursor
@@ -664,7 +738,7 @@ fn handle_viewport_interactions(ui: &mut egui::Ui, app: &mut CopperForgeApp, vie
         }
         
         // Show visual feedback when in measurement mode
-        if app.ruler_active && !app.setting_origin_mode {
+        if app.services.ruler_active && !app.services.setting_origin_mode {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
             
             // Draw preview text at cursor
@@ -672,7 +746,7 @@ fn handle_viewport_interactions(ui: &mut egui::Ui, app: &mut CopperForgeApp, vie
                 let painter = ui.painter();
                 
                 // Draw preview text
-                let text = if app.ruler_start.is_some() && app.ruler_end.is_none() {
+                let text = if app.services.ruler_start.is_some() && app.services.ruler_end.is_none() {
                     "Click second point to complete measurement"
                 } else {
                     "Click to start measurement"
@@ -688,38 +762,38 @@ fn handle_viewport_interactions(ui: &mut egui::Ui, app: &mut CopperForgeApp, vie
         }
         
         // Handle professional ruler tool with right-click drag
-        if app.ruler_active && !app.setting_origin_mode {
+        if app.services.ruler_active && !app.services.setting_origin_mode {
             handle_ruler_interaction(ui, app, response);
         }
         
         // Handle origin setting
-        if app.setting_origin_mode && response.clicked() {
-            if let Some(gerber_coords) = app.ui_state.cursor_gerber_coords {
+        if app.services.setting_origin_mode && response.clicked() {
+            if let Some(gerber_coords) = app.services.ui_state.cursor_gerber_coords {
                 // Enterprise feature: Apply snap to grid if enabled
-                let final_coords = if app.grid_settings.snap_enabled {
+                let final_coords = if app.services.grid_settings.snap_enabled {
                     let point = nalgebra::Point2::new(gerber_coords.x, gerber_coords.y);
-                    crate::display::snap_to_grid(point, &app.grid_settings)
+                    crate::display::snap_to_grid(point, &app.services.grid_settings)
                 } else {
                     nalgebra::Point2::new(gerber_coords.x, gerber_coords.y)
                 };
                 
-                app.display_manager.design_offset = crate::display::VectorOffset {
+                app.services.display_manager.design_offset = crate::display::VectorOffset {
                     x: final_coords.x,
                     y: final_coords.y,
                 };
-                app.setting_origin_mode = false;
-                app.origin_has_been_set = true;
+                app.services.setting_origin_mode = false;
+                app.services.origin_has_been_set = true;
                 
                 // Force view refresh to properly center coordinates at the new origin
-                app.needs_initial_view = true;
+                app.services.needs_initial_view = true;
                 
                 // Mark coordinates as dirty to force refresh
-                app.layer_store.mark_dirty();
+                app.services.layer_store.mark_dirty();
                 
-                let logger_state = app.logger_state.clone();
-                let log_colors = app.log_colors.clone();
+                let logger_state = app.services.logger_state.clone();
+                let log_colors = app.services.log_colors.clone();
                 let logger = ReactiveEventLogger::with_colors(&logger_state, &log_colors);
-                let snap_msg = if app.grid_settings.snap_enabled { " (snapped to grid)" } else { "" };
+                let snap_msg = if app.services.grid_settings.snap_enabled { " (snapped to grid)" } else { "" };
                 logger.log_info(&format!("Set origin to ({:.2}, {:.2}) mm{} - view recentered", final_coords.x, final_coords.y, snap_msg));
             }
         }
@@ -733,20 +807,20 @@ fn handle_zoom_window(ui: &mut egui::Ui, app: &mut CopperForgeApp, viewport: &Re
     if response.contains_pointer() {
         if ui.input(|i| i.pointer.button_pressed(right_button)) {
             if let Some(pos) = mouse_pos_screen {
-                app.zoom_window_start = Some(pos);
-                app.zoom_window_dragging = true;
+                app.services.zoom_window_start = Some(pos);
+                app.services.zoom_window_dragging = true;
             }
         }
     }
     
     // Complete zoom window
-    if app.zoom_window_dragging && ui.input(|i| i.pointer.button_released(right_button)) {
-        if let (Some(start), Some(end)) = (app.zoom_window_start, ui.input(|i| i.pointer.hover_pos())) {
+    if app.services.zoom_window_dragging && ui.input(|i| i.pointer.button_released(right_button)) {
+        if let (Some(start), Some(end)) = (app.services.zoom_window_start, ui.input(|i| i.pointer.hover_pos())) {
             let zoom_rect = Rect::from_two_pos(start, end);
             
             if zoom_rect.width() > 10.0 && zoom_rect.height() > 10.0 {
-                let gerber_start = app.view_state.screen_to_gerber_coords(zoom_rect.min);
-                let gerber_end = app.view_state.screen_to_gerber_coords(zoom_rect.max);
+                let gerber_start = app.services.view_state.screen_to_gerber_coords(zoom_rect.min);
+                let gerber_end = app.services.view_state.screen_to_gerber_coords(zoom_rect.max);
                 
                 let gerber_width = (gerber_end.x - gerber_start.x).abs() as f32;
                 let gerber_height = (gerber_end.y - gerber_start.y).abs() as f32;
@@ -758,10 +832,10 @@ fn handle_zoom_window(ui: &mut egui::Ui, app: &mut CopperForgeApp, viewport: &Re
                 let gerber_center_x = (gerber_start.x + gerber_end.x) / 2.0;
                 let gerber_center_y = (gerber_start.y + gerber_end.y) / 2.0;
                 
-                app.view_state.scale = new_scale;
+                app.services.view_state.scale = new_scale;
                 
                 let viewport_center = viewport.center();
-                app.view_state.translation = Vec2::new(
+                app.services.view_state.translation = Vec2::new(
                     viewport_center.x - (gerber_center_x * new_scale as f64) as f32,
                     viewport_center.y + (gerber_center_y * new_scale as f64) as f32
                 );
@@ -770,14 +844,14 @@ fn handle_zoom_window(ui: &mut egui::Ui, app: &mut CopperForgeApp, viewport: &Re
             }
         }
         
-        app.zoom_window_dragging = false;
-        app.zoom_window_start = None;
+        app.services.zoom_window_dragging = false;
+        app.services.zoom_window_start = None;
     }
     
     // Cancel zoom window on escape
-    if app.zoom_window_dragging && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-        app.zoom_window_dragging = false;
-        app.zoom_window_start = None;
+    if app.services.zoom_window_dragging && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        app.services.zoom_window_dragging = false;
+        app.services.zoom_window_start = None;
     }
 }
 
@@ -802,21 +876,21 @@ fn handle_mouse_wheel_zoom(ui: &mut egui::Ui, app: &mut CopperForgeApp, _viewpor
         };
         
         // Get current scale and calculate new scale
-        let old_scale = app.view_state.scale;
+        let old_scale = app.services.view_state.scale;
         let new_scale = (old_scale * zoom_factor).clamp(0.01, 100.0);
         
         // Calculate the gerber coordinates at the mouse position before scaling
-        let gerber_point = app.view_state.screen_to_gerber_coords(mouse_pos);
+        let gerber_point = app.services.view_state.screen_to_gerber_coords(mouse_pos);
         
         // Update the scale
-        app.view_state.scale = new_scale;
+        app.services.view_state.scale = new_scale;
         
         // Calculate the new screen position of the same gerber point
-        let new_screen_pos = app.view_state.gerber_to_screen_coords(gerber_point);
+        let new_screen_pos = app.services.view_state.gerber_to_screen_coords(gerber_point);
         
         // Adjust translation to keep the mouse cursor over the same gerber point
         let translation_adjustment = mouse_pos - new_screen_pos;
-        app.view_state.translation += translation_adjustment;
+        app.services.view_state.translation += translation_adjustment;
         
         // Sync with ECS zoom resource
         app.sync_zoom_to_ecs();
@@ -827,22 +901,22 @@ fn render_gerber_content(ui: &mut egui::Ui, app: &mut CopperForgeApp, viewport: 
     let painter = ui.painter_at(*viewport);
     painter.rect_filled(*viewport, 0.0, ui.visuals().extreme_bg_color);
     
-    if app.needs_initial_view {
+    if app.services.needs_initial_view {
         app.reset_view(*viewport);
     }
     
     let painter = ui.painter().with_clip_rect(*viewport);
     
     // Draw grid
-    crate::display::draw_grid(&painter, viewport, &app.view_state, &app.grid_settings);
+    crate::display::draw_grid(&painter, viewport, &app.services.view_state, &app.services.grid_settings);
     
     // Draw quadrant axes
-    if app.display_manager.quadrant_view_enabled {
-        draw_quadrant_axes(&painter, viewport, &app.view_state, app.ui_state.origin_screen_pos);
+    if app.services.display_manager.quadrant_view_enabled {
+        draw_quadrant_axes(&painter, viewport, &app.services.view_state, app.services.ui_state.origin_screen_pos);
     }
     
     // Draw crosshairs - always at the active origin
-    draw_crosshair(&painter, app.ui_state.origin_screen_pos, Color32::BLUE);
+    draw_crosshair(&painter, app.services.ui_state.origin_screen_pos, Color32::BLUE);
     
     // Render layers using ECS system (gerber-viewer 0.2.0 compatible)
     app.render_layers_ecs(&painter);
@@ -856,22 +930,22 @@ fn render_gerber_content(ui: &mut egui::Ui, app: &mut CopperForgeApp, viewport: 
 
 
 fn render_overlays(app: &mut CopperForgeApp, painter: &Painter, viewport: &Rect) {
-    let screen_radius = MARKER_RADIUS * app.view_state.scale;
+    let screen_radius = MARKER_RADIUS * app.services.view_state.scale;
     
     // Origin marker - show only the active origin point
-    let design_offset = &app.display_manager.design_offset;
+    let design_offset = &app.services.display_manager.design_offset;
     let has_custom_origin = design_offset.x != 0.0 || design_offset.y != 0.0;
     
     if has_custom_origin {
         // Show custom origin (yellow marker) - this is the only visible origin
-        let design_offset_screen_position = app.view_state.gerber_to_screen_coords(Vector2::from(design_offset.clone()).to_position().to_point2());
+        let design_offset_screen_position = app.services.view_state.gerber_to_screen_coords(Vector2::from(design_offset.clone()).to_position().to_point2());
         draw_marker(painter, design_offset_screen_position, Color32::ORANGE, Color32::YELLOW, screen_radius);
     } else {
         // Show center origin (purple marker) when no custom origin is set
-        let purple_dot_pos = if app.display_manager.quadrant_view_enabled {
-            app.ui_state.center_screen_pos
+        let purple_dot_pos = if app.services.display_manager.quadrant_view_enabled {
+            app.services.ui_state.center_screen_pos
         } else {
-            app.ui_state.origin_screen_pos
+            app.services.ui_state.origin_screen_pos
         };
         draw_marker(painter, purple_dot_pos, Color32::PURPLE, Color32::MAGENTA, screen_radius);
     }
@@ -896,18 +970,18 @@ fn render_overlays(app: &mut CopperForgeApp, painter: &Painter, viewport: &Rect)
 }
 
 fn render_corner_overlays(app: &mut CopperForgeApp, painter: &Painter) {
-    if !app.drc_manager.corner_overlay_shapes.is_empty() {
+    if !app.services.drc_manager.corner_overlay_shapes.is_empty() {
         let overlay_color = Color32::from_rgb(0, 255, 0);
         
-        for shape in &app.drc_manager.corner_overlay_shapes {
+        for shape in &app.services.drc_manager.corner_overlay_shapes {
             let mut transformed_vertices = Vec::new();
             
             for point in &shape.points {
                 let mut vertex_pos = *point;
                 
                 // Apply rotation
-                if app.rotation_degrees != 0.0 {
-                    let rotation_radians = app.rotation_degrees.to_radians();
+                if app.services.rotation_degrees != 0.0 {
+                    let rotation_radians = app.services.rotation_degrees.to_radians();
                     let (sin_theta, cos_theta) = (rotation_radians.sin(), rotation_radians.cos());
                     
                     let rotated_x = vertex_pos.x * cos_theta as f64 - vertex_pos.y * sin_theta as f64;
@@ -916,18 +990,18 @@ fn render_corner_overlays(app: &mut CopperForgeApp, painter: &Painter) {
                 }
                 
                 // Apply mirroring
-                if app.display_manager.mirroring.x {
+                if app.services.display_manager.mirroring.x {
                     vertex_pos = vertex_pos.invert_x();
                 }
-                if app.display_manager.mirroring.y {
+                if app.services.display_manager.mirroring.y {
                     vertex_pos = vertex_pos.invert_y();
                 }
                 
                 // Apply offsets
-                let origin = Vector2::from(app.display_manager.center_offset.clone()) - Vector2::from(app.display_manager.design_offset.clone());
+                let origin = Vector2::from(app.services.display_manager.center_offset.clone()) - Vector2::from(app.services.display_manager.design_offset.clone());
                 vertex_pos = vertex_pos + origin.to_position();
                 
-                let vertex_screen = app.view_state.gerber_to_screen_coords(vertex_pos.to_point2());
+                let vertex_screen = app.services.view_state.gerber_to_screen_coords(vertex_pos.to_point2());
                 transformed_vertices.push(vertex_screen);
             }
             
@@ -943,13 +1017,13 @@ fn render_corner_overlays(app: &mut CopperForgeApp, painter: &Painter) {
 }
 
 fn render_drc_violations(app: &mut CopperForgeApp, painter: &Painter) {
-    for violation in &app.drc_manager.violations {
+    for violation in &app.services.drc_manager.violations {
         let violation_pos = Position::new(violation.x as f64, violation.y as f64);
         let mut transformed_pos = violation_pos;
         
         // Apply rotation
-        if app.rotation_degrees != 0.0 {
-            let rotation_radians = app.rotation_degrees.to_radians();
+        if app.services.rotation_degrees != 0.0 {
+            let rotation_radians = app.services.rotation_degrees.to_radians();
             let (sin_theta, cos_theta) = (rotation_radians.sin(), rotation_radians.cos());
             let rotated_x = transformed_pos.x * cos_theta as f64 - transformed_pos.y * sin_theta as f64;
             let rotated_y = transformed_pos.x * sin_theta as f64 + transformed_pos.y * cos_theta as f64;
@@ -957,21 +1031,21 @@ fn render_drc_violations(app: &mut CopperForgeApp, painter: &Painter) {
         }
         
         // Apply mirroring
-        if app.display_manager.mirroring.x {
+        if app.services.display_manager.mirroring.x {
             transformed_pos = transformed_pos.invert_x();
         }
-        if app.display_manager.mirroring.y {
+        if app.services.display_manager.mirroring.y {
             transformed_pos = transformed_pos.invert_y();
         }
         
         // Apply offsets
-        let origin = Vector2::from(app.display_manager.center_offset.clone()) - Vector2::from(app.display_manager.design_offset.clone());
+        let origin = Vector2::from(app.services.display_manager.center_offset.clone()) - Vector2::from(app.services.display_manager.design_offset.clone());
         transformed_pos = transformed_pos + origin.to_position();
         
-        let screen_pos = app.view_state.gerber_to_screen_coords(transformed_pos.to_point2());
+        let screen_pos = app.services.view_state.gerber_to_screen_coords(transformed_pos.to_point2());
         
         let base_size = 3.0;
-        let marker_size = base_size * app.view_state.scale.max(0.5);
+        let marker_size = base_size * app.services.view_state.scale.max(0.5);
         let color = Color32::RED;
         
         draw_violation_marker(painter, screen_pos, marker_size, color);
@@ -979,7 +1053,7 @@ fn render_drc_violations(app: &mut CopperForgeApp, painter: &Painter) {
 }
 
 fn render_board_dimensions(app: &mut CopperForgeApp, painter: &Painter, viewport: &Rect) {
-    if let Some(layer) = app.layer_store.find(crate::layer_store::LayerType::MechanicalOutline) {
+    if let Some(layer) = app.services.layer_store.find(crate::layer_store::LayerType::MechanicalOutline) {
         let bbox = layer.gerber.bounding_box();
         let width_mm = bbox.width();
         let height_mm = bbox.height();
@@ -1007,8 +1081,8 @@ fn render_board_dimensions(app: &mut CopperForgeApp, painter: &Painter, viewport
 }
 
 fn render_zoom_window(app: &mut CopperForgeApp, painter: &Painter) {
-    if app.zoom_window_dragging {
-        if let (Some(start), Some(current)) = (app.zoom_window_start, painter.ctx().input(|i| i.pointer.hover_pos())) {
+    if app.services.zoom_window_dragging {
+        if let (Some(start), Some(current)) = (app.services.zoom_window_start, painter.ctx().input(|i| i.pointer.hover_pos())) {
             let zoom_rect = Rect::from_two_pos(start, current);
             
             // Draw semi-transparent fill
@@ -1041,19 +1115,19 @@ fn render_zoom_window(app: &mut CopperForgeApp, painter: &Painter) {
 
 fn render_ruler(app: &mut CopperForgeApp, painter: &Painter) {
     // Render active ruler if active
-    if app.ruler_active {
-        render_ruler_measurement(app, painter, app.ruler_start, app.ruler_end, true);
+    if app.services.ruler_active {
+        render_ruler_measurement(app, painter, app.services.ruler_start, app.services.ruler_end, true);
     }
     // Render latched ruler if not active but latched measurement exists
-    else if app.latched_measurement_start.is_some() && app.latched_measurement_end.is_some() {
-        render_ruler_measurement(app, painter, app.latched_measurement_start, app.latched_measurement_end, false);
+    else if app.services.latched_measurement_start.is_some() && app.services.latched_measurement_end.is_some() {
+        render_ruler_measurement(app, painter, app.services.latched_measurement_start, app.services.latched_measurement_end, false);
     }
 }
 
 fn render_ruler_measurement(app: &mut CopperForgeApp, painter: &Painter, start_opt: Option<nalgebra::Point2<f64>>, end_opt: Option<nalgebra::Point2<f64>>, is_active: bool) {
     // Draw ruler points and line
     if let Some(start) = start_opt {
-        let start_screen = app.view_state.gerber_to_screen_coords(start);
+        let start_screen = app.services.view_state.gerber_to_screen_coords(start);
         
         // Choose colors based on active/latched state
         let (point_color, line_color, text_color) = if is_active {
@@ -1067,7 +1141,7 @@ fn render_ruler_measurement(app: &mut CopperForgeApp, painter: &Painter, start_o
         painter.circle_stroke(start_screen, 6.0, Stroke::new(2.0, line_color));
         
         if let Some(end) = end_opt {
-            let end_screen = app.view_state.gerber_to_screen_coords(end);
+            let end_screen = app.services.view_state.gerber_to_screen_coords(end);
             
             // Draw end point
             painter.circle_filled(end_screen, 4.0, point_color);
@@ -1138,7 +1212,7 @@ fn render_ruler_measurement(app: &mut CopperForgeApp, painter: &Painter, start_o
 }
 
 fn handle_ruler_interaction(ui: &mut egui::Ui, app: &mut CopperForgeApp, response: &egui::Response) {
-    if !app.ruler_active {
+    if !app.services.ruler_active {
         return;
     }
     
@@ -1147,55 +1221,55 @@ fn handle_ruler_interaction(ui: &mut egui::Ui, app: &mut CopperForgeApp, respons
     // In ruler mode, left-click to set measurement points
     if response.clicked() {
         if let Some(mouse_screen_pos) = mouse_pos {
-            let gerber_coords = app.view_state.screen_to_gerber_coords(mouse_screen_pos);
+            let gerber_coords = app.services.view_state.screen_to_gerber_coords(mouse_screen_pos);
             
             // Apply snap to grid if enabled
-            let final_coords = if app.grid_settings.snap_enabled {
+            let final_coords = if app.services.grid_settings.snap_enabled {
                 let point = nalgebra::Point2::new(gerber_coords.x, gerber_coords.y);
-                crate::display::snap_to_grid(point, &app.grid_settings)
+                crate::display::snap_to_grid(point, &app.services.grid_settings)
             } else {
                 nalgebra::Point2::new(gerber_coords.x, gerber_coords.y)
             };
             
-            if app.ruler_start.is_none() {
+            if app.services.ruler_start.is_none() {
                 // First click - set start point
-                app.ruler_start = Some(final_coords);
-                app.ruler_end = None;
-                app.ruler_dragging = true; // Enable live preview
-            } else if app.ruler_end.is_none() {
+                app.services.ruler_start = Some(final_coords);
+                app.services.ruler_end = None;
+                app.services.ruler_dragging = true; // Enable live preview
+            } else if app.services.ruler_end.is_none() {
                 // Second click - set end point and complete measurement
-                app.ruler_end = Some(final_coords);
-                app.ruler_dragging = false;
+                app.services.ruler_end = Some(final_coords);
+                app.services.ruler_dragging = false;
             } else {
                 // Third click - start new measurement
-                app.ruler_start = Some(final_coords);
-                app.ruler_end = None;
-                app.ruler_dragging = true;
+                app.services.ruler_start = Some(final_coords);
+                app.services.ruler_end = None;
+                app.services.ruler_dragging = true;
             }
         }
     }
     
     // Show live preview when dragging (after first click, before second click)
-    if app.ruler_dragging && app.ruler_start.is_some() && mouse_pos.is_some() {
+    if app.services.ruler_dragging && app.services.ruler_start.is_some() && mouse_pos.is_some() {
         let mouse_screen_pos = mouse_pos.unwrap();
-        let gerber_coords = app.view_state.screen_to_gerber_coords(mouse_screen_pos);
+        let gerber_coords = app.services.view_state.screen_to_gerber_coords(mouse_screen_pos);
         
         // Apply snap to grid if enabled
-        let final_coords = if app.grid_settings.snap_enabled {
+        let final_coords = if app.services.grid_settings.snap_enabled {
             let point = nalgebra::Point2::new(gerber_coords.x, gerber_coords.y);
-            crate::display::snap_to_grid(point, &app.grid_settings)
+            crate::display::snap_to_grid(point, &app.services.grid_settings)
         } else {
             nalgebra::Point2::new(gerber_coords.x, gerber_coords.y)
         };
         
         // Update live preview end point
-        app.ruler_end = Some(final_coords);
+        app.services.ruler_end = Some(final_coords);
     }
 }
 
 fn render_cursor_info(ui: &mut egui::Ui, app: &mut CopperForgeApp, painter: &Painter, viewport: &Rect) {
     // Hide cursor coordinates when ruler mode is active
-    if app.ruler_active {
+    if app.services.ruler_active {
         return;
     }
     
@@ -1203,13 +1277,13 @@ fn render_cursor_info(ui: &mut egui::Ui, app: &mut CopperForgeApp, painter: &Pai
     
     if let Some(mouse_screen_pos) = mouse_pos_screen {
         if viewport.contains(mouse_screen_pos) {
-            let gerber_pos = app.view_state.screen_to_gerber_coords(mouse_screen_pos);
+            let gerber_pos = app.services.view_state.screen_to_gerber_coords(mouse_screen_pos);
             
             // Apply the design_offset as a simple coordinate offset for display
             // The design_offset is where we want (0,0) to be, so we subtract it from current position
             let adjusted_pos = Position::new(
-                gerber_pos.x - app.display_manager.design_offset.x,
-                gerber_pos.y - app.display_manager.design_offset.y
+                gerber_pos.x - app.services.display_manager.design_offset.x,
+                gerber_pos.y - app.services.display_manager.design_offset.y
             );
             
             let units_resource = Tab::get_units(app);
@@ -1290,31 +1364,31 @@ fn render_cursor_info(ui: &mut egui::Ui, app: &mut CopperForgeApp, painter: &Pai
 
 fn render_measurement_crosshair(app: &mut CopperForgeApp, painter: &Painter) {
     // Skip if in origin setting mode
-    if app.setting_origin_mode {
+    if app.services.setting_origin_mode {
         return;
     }
     
     // Draw crosshairs for active measurement points
-    if app.ruler_active {
-        if let Some(start_point) = app.ruler_start {
-            let screen_pos = app.view_state.gerber_to_screen_coords(start_point);
+    if app.services.ruler_active {
+        if let Some(start_point) = app.services.ruler_start {
+            let screen_pos = app.services.view_state.gerber_to_screen_coords(start_point);
             draw_measurement_crosshair(painter, screen_pos, Color32::from_rgb(139, 0, 0)); // Dark red for active
         }
         
-        if let Some(end_point) = app.ruler_end {
-            let screen_pos = app.view_state.gerber_to_screen_coords(end_point);
+        if let Some(end_point) = app.services.ruler_end {
+            let screen_pos = app.services.view_state.gerber_to_screen_coords(end_point);
             draw_measurement_crosshair(painter, screen_pos, Color32::from_rgb(139, 0, 0)); // Dark red for active
         }
     }
     // Draw crosshairs for latched measurement points (grayed out)
     else {
-        if let Some(start_point) = app.latched_measurement_start {
-            let screen_pos = app.view_state.gerber_to_screen_coords(start_point);
+        if let Some(start_point) = app.services.latched_measurement_start {
+            let screen_pos = app.services.view_state.gerber_to_screen_coords(start_point);
             draw_measurement_crosshair(painter, screen_pos, Color32::from_rgb(100, 100, 100)); // Gray for latched
         }
         
-        if let Some(end_point) = app.latched_measurement_end {
-            let screen_pos = app.view_state.gerber_to_screen_coords(end_point);
+        if let Some(end_point) = app.services.latched_measurement_end {
+            let screen_pos = app.services.view_state.gerber_to_screen_coords(end_point);
             draw_measurement_crosshair(painter, screen_pos, Color32::from_rgb(100, 100, 100)); // Gray for latched
         }
     }
@@ -1373,8 +1447,8 @@ impl<'a> egui_dock::TabViewer for TabViewer<'a> {
 fn render_zoom_display(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
     // Get zoom info from ECS, fallback to legacy ViewState
     let (zoom_percentage, scale_factor) = (
-        app.layer_store.zoom.zoom_percentage(),
-        app.layer_store.zoom.scale,
+        app.services.layer_store.zoom.zoom_percentage(),
+        app.services.layer_store.zoom.scale,
     );
     
     // Format zoom display with appropriate precision

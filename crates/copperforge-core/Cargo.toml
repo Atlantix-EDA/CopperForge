@@ -37,7 +37,6 @@ serde_json = { workspace = true }
 sysinfo = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = { workspace = true }
-local-ip-address = { workspace = true }
 egui_dock = { workspace = true }
 
 regex = { workspace = true }
@@ -45,10 +44,13 @@ once_cell = { workspace = true }
 
 
 
-# Project database
-sled = { workspace = true }
+# Project database (embedded pure-Rust KV store)
+redb = { workspace = true }
 bincode = { workspace = true }
 thiserror = { workspace = true }
 
 # Tree view
 egui_ltreeview = { workspace = true }
+
+# Release archives (gerber+drill zip)
+zip = { workspace = true }

@@ -69,13 +69,13 @@ pub fn generate_gerbers_from_pcb(
 /// Load gerber files from `gerber_dir` into the app's layer store.
 pub fn load_gerbers_into_viewer(app: &mut CopperForgeApp, gerber_dir: &Path, logger: &ReactiveEventLogger) {
     logger.log_info("Clearing existing gerber layers...");
-    app.layer_store.clear_all();
+    app.services.layer_store.clear_all();
 
-    match app.layer_store.load_from_directory(gerber_dir) {
+    match app.services.layer_store.load_from_directory(gerber_dir) {
         Ok((loaded_count, unassigned_count)) => {
             if loaded_count > 0 {
                 logger.log_info(&format!("Successfully loaded {} gerber layers", loaded_count));
-                app.needs_initial_view = true;
+                app.services.needs_initial_view = true;
             } else if unassigned_count > 0 {
                 logger.log_warning(&format!("{} gerber files could not be automatically assigned", unassigned_count));
             } else {

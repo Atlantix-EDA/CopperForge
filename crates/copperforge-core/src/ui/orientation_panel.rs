@@ -15,7 +15,7 @@ pub fn show_orientation_panel<'a>(
 #[allow(dead_code)]
 /// Export layers from quadrant view to PNG files
 pub fn export_quadrant_layers_to_png(app: &mut CopperForgeApp, logger: &ReactiveEventLogger) {
-    if !app.display_manager.quadrant_view_enabled {
+    if !app.services.display_manager.quadrant_view_enabled {
         logger.log_error("Quadrant view must be enabled to export layers as PNG");
         return;
     }

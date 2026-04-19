@@ -1,8 +1,10 @@
-//! Shared domain services accessible by all citizen panels.
+//! Shared application services — the single source of truth for state that
+//! crosses panel boundaries.
 //!
-//! This struct will replace the flat fields on `CopperForgeApp` once the
-//! migration to citizen panels is complete. Panels receive `&SharedServices`
-//! (read) or `&mut SharedServices` (write) instead of `&mut CopperForgeApp`.
+//! Populated eagerly during `CopperForgeApp::new()` via an explicit init
+//! sequence (config → KiCad discovery → project DB). Panels read and mutate
+//! `SharedServices` directly; panel-local state lives inside the panel's
+//! citizen struct.
 
 use std::path::PathBuf;
 
@@ -12,38 +14,47 @@ use gerber_viewer::{GerberLayer, ViewState, UiState};
 
 use crate::display::{DisplayManager, GridSettings};
 use crate::drc_operations::DrcManager;
-use crate::event_logger::{ReactiveEventLoggerState, LogColors};
-use crate::project::ProjectManager;
+use crate::event_logger::{LogColors, ReactiveEventLoggerState};
+use crate::project::{manager::ProjectConfig, ProjectState};
+use crate::project_manager::database::ProjectDatabase;
 
-/// Shared domain state accessible by all citizen panels.
+/// Every cross-panel fact lives here. Populated once at init.
 pub struct SharedServices {
-    // ── Logger (reactive, cloneable) ──────────────────────────
+    // ── Reactive (observable across panels) ───────────────────
+    /// Drives BOM refresh, gerber ribbon state, and everything else that
+    /// keys off "which PCB is active and what stage are we at".
+    pub project_state: Dynamic<ProjectState>,
     pub logger_state: Dynamic<ReactiveEventLoggerState>,
     pub log_colors: Dynamic<LogColors>,
 
+    // ── Init-time facts (set once, rarely mutate) ─────────────
+    pub config: ProjectConfig,
+    pub config_path: PathBuf,
+    pub kicad_version: Option<String>,
+    /// One of "path" / "flatpak" / "snap". Used by
+    /// `CopperForgeApp::kicad_cli_command()` to build Commands without probing.
+    pub kicad_cli_method: Option<String>,
+    pub project_db: ProjectDatabase,
+
     // ── Gerber / viewport ─────────────────────────────────────
+    pub layer_store: crate::layer_store::LayerStore,
     pub gerber_layer: GerberLayer,
     pub view_state: ViewState,
     pub ui_state: UiState,
     pub needs_initial_view: bool,
     pub rotation_degrees: f32,
 
-    // ── Display ───────────────────────────────────────────────
+    // ── Display / DRC / grid ──────────────────────────────────
     pub display_manager: DisplayManager,
+    pub drc_manager: DrcManager,
     pub grid_settings: GridSettings,
     pub global_units_mils: bool,
 
-    // ── Domain managers ───────────────────────────────────────
-    pub drc_manager: DrcManager,
-    pub project_manager: ProjectManager,
+    // ── User preferences ──────────────────────────────────────
+    pub user_timezone: Option<String>,
+    pub use_24_hour_clock: bool,
 
-    // ── Layer management ────────────────────────────────────
-    pub layer_store: crate::layer_store::LayerStore,
-
-    // ── Config persistence ────────────────────────────────────
-    pub config_path: PathBuf,
-
-    // ── Viewport interaction state ────────────────────────────
+    // ── Viewport interaction ──────────────────────────────────
     pub zoom_window_start: Option<Pos2>,
     pub zoom_window_dragging: bool,
     pub setting_origin_mode: bool,
@@ -58,12 +69,13 @@ pub struct SharedServices {
     pub latched_measurement_start: Option<nalgebra::Point2<f64>>,
     pub latched_measurement_end: Option<nalgebra::Point2<f64>>,
 
-    // ── User preferences ──────────────────────────────────────
-    pub user_timezone: Option<String>,
-    pub use_24_hour_clock: bool,
-
-    // ── Modal states ──────────────────────────────────────────
+    // ── Modal flags ───────────────────────────────────────────
     pub show_about_modal: bool,
     pub show_kicad_version_modal: bool,
-    pub kicad_version: Option<String>,
+
+    // ── Cross-panel summaries ─────────────────────────────────
+    /// Count of BOM entries loaded in the BOM panel. Mirror so other panels
+    /// (e.g. the Shell `status` command) can report it without reaching into
+    /// BomPanel's private state. Updated by BomPanel on extraction.
+    pub bom_component_count: usize,
 }

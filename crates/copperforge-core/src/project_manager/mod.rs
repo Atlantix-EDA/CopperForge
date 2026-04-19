@@ -7,11 +7,13 @@ pub mod kicad_hierarchy;
 
 use database::{ProjectDatabase, ProjectData, ProjectMetadata, generate_project_id, ProjectDatabaseError};
 use bom::BomComponent;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use chrono::Utc;
 use egui_file_dialog::FileDialog;
 
-/// Project manager state
+/// Project manager state. Create-new-project scaffolding was moved to the
+/// Shell panel's `new-project` command; what's left here is strictly the
+/// import / list / edit / delete flow for the CopperForge project DB.
 pub struct ProjectManagerState {
     pub database: Option<ProjectDatabase>,
     pub current_project: Option<ProjectData>,
@@ -26,24 +28,23 @@ pub struct ProjectManagerState {
     pub new_project_pcb_path: Option<PathBuf>,
     pub new_project_parent_id: Option<String>,
     pub last_error: Option<String>,
-    // New fields for creating KiCad projects from scratch
-    pub create_new_kicad_project: bool,
-    pub new_kicad_project_location: PathBuf,
-    pub new_kicad_project_author: String,
-    pub new_kicad_project_company: String,
-    pub include_kiverse: bool,
-    pub include_atlantix_resistors: bool,
-    pub kiverse_path: PathBuf,
-    // File dialogs
+    /// File dialog for picking a .kicad_pro to import.
     pub pcb_file_dialog: FileDialog,
-    pub location_dialog: FileDialog,
-    // Recent project names (for quick iteration)
+    /// Recent project names (for quick form re-fill).
     pub recent_project_names: Vec<String>,
-    // Track last picked file to avoid re-processing
+    /// Last .kicad_pro path processed — gates the pedigree auto-fill so we
+    /// don't re-run it every frame while the dialog reports the same pick.
+    /// Cleared on `reset_create_dialog` so re-picking after a successful
+    /// import actually re-populates the form.
     pub last_picked_pro_path: Option<PathBuf>,
-    // Project hierarchy tree view
+    /// Project hierarchy tree view
     pub expanded_project_id: Option<String>,
     pub project_hierarchies: std::collections::HashMap<String, kicad_hierarchy::ProjectHierarchy>,
+    /// Per-project release cache, keyed by project id. Rebuilt on
+    /// `initialize_database()` and bumped by `record_release()` when a
+    /// new release is cut via the Release modal. Drives the `outputs/`
+    /// subtree in the Projects tab.
+    pub project_releases: std::collections::HashMap<String, Vec<crate::release::Release>>,
 }
 
 impl Default for ProjectManagerState {
@@ -53,10 +54,10 @@ impl Default for ProjectManagerState {
 }
 
 impl ProjectManagerState {
-    /// Create a new ProjectManagerState with values from ProjectConfig
-    pub fn with_config(config: &crate::project::manager::ProjectConfig) -> Self {
-        let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-
+    /// Create a new ProjectManagerState. Most fields default to empty /
+    /// None and get populated as the user interacts with the import form.
+    /// `_config` is kept for signature stability (callers pass it today).
+    pub fn with_config(_config: &crate::project::manager::ProjectConfig) -> Self {
         Self {
             database: None,
             current_project: None,
@@ -71,32 +72,52 @@ impl ProjectManagerState {
             new_project_pcb_path: None,
             new_project_parent_id: None,
             last_error: None,
-            create_new_kicad_project: true,  // Default to creating new projects
-            new_kicad_project_location: home_dir.clone(),
-            new_kicad_project_author: config.default_author.clone(),
-            new_kicad_project_company: config.default_company.clone(),
-            include_kiverse: config.include_kiverse,
-            include_atlantix_resistors: config.include_atlantix_resistors,
-            kiverse_path: home_dir.join("kiverse"),
             pcb_file_dialog: FileDialog::new(),
-            location_dialog: FileDialog::new(),
             recent_project_names: Vec::new(),
             last_picked_pro_path: None,
             expanded_project_id: None,
             project_hierarchies: std::collections::HashMap::new(),
+            project_releases: std::collections::HashMap::new(),
         }
     }
 
-    /// Initialize the project database
-    pub fn initialize_database(&mut self, db_path: &Path) -> Result<(), ProjectDatabaseError> {
-        let database = ProjectDatabase::new(db_path)?;
-        self.project_list = database.list_projects()?;
-        self.database = Some(database);
-
-        // Populate recent project names (5 most recent)
+    /// Wire up the project database by cloning the shared handle.
+    /// `ProjectDatabase` is `Clone` — the sled handle underneath is Arc-backed,
+    /// so this does NOT re-acquire the directory lock. The bug was that the
+    /// previous implementation called `ProjectDatabase::new(db_path)` here
+    /// while `SharedServices` had already opened the same path at startup;
+    /// sled's exclusive lock made the second open silently fail, leaving
+    /// `self.database = None` and every subsequent DB call erroring with
+    /// "Database not initialized."
+    pub fn initialize_database(&mut self, db: &ProjectDatabase) -> Result<(), ProjectDatabaseError> {
+        self.project_list = db.list_projects()?;
+        self.database = Some(db.clone());
         self.update_recent_project_names();
-
+        self.reload_all_releases(db);
         Ok(())
+    }
+
+    /// Rebuild the per-project release cache from the DB.
+    /// O(N) full-project loads; fine at the scale we expect (dozens of
+    /// projects at most). Silently skips any project that fails to load.
+    pub fn reload_all_releases(&mut self, db: &ProjectDatabase) {
+        self.project_releases.clear();
+        for meta in &self.project_list {
+            if let Ok(Some(data)) = db.load_project(&meta.id) {
+                if !data.releases.is_empty() {
+                    self.project_releases.insert(meta.id.clone(), data.releases);
+                }
+            }
+        }
+    }
+
+    /// Record a freshly-created release in both the live cache and the DB's
+    /// current_project snapshot. Called from the Release modal dispatcher.
+    pub fn record_release(&mut self, project_id: &str, release: crate::release::Release) {
+        self.project_releases
+            .entry(project_id.to_string())
+            .or_default()
+            .push(release);
     }
 
     /// Update recent project names list with the 5 most recently modified projects
@@ -129,6 +150,14 @@ impl ProjectManagerState {
         bom_components: Vec<BomComponent>,
     ) -> Result<String, ProjectDatabaseError> {
         if let Some(ref database) = self.database {
+            // Dedup: the same .kicad_pcb can only back one DB record.
+            if let Some(existing) = database.find_project_by_pcb_path(&pcb_file_path)? {
+                return Err(ProjectDatabaseError::DatabaseWrite(format!(
+                    "Project '{}' is already imported (ID: {}). Open it from the Projects tab instead.",
+                    existing.metadata.name, existing.metadata.id
+                )));
+            }
+
             let project_id = generate_project_id();
             let now = Utc::now();
 
@@ -148,6 +177,7 @@ impl ProjectManagerState {
                 metadata: metadata.clone(),
                 bom_components,
                 notes: String::new(),
+                releases: Vec::new(),
                 hierarchy: None, // Will be loaded on demand
             };
             
@@ -260,84 +290,11 @@ impl ProjectManagerState {
         }
     }
 
-    /// Create a new KiCad project from scratch
-    pub fn create_new_kicad_project_from_scratch(
-        &mut self,
-        name: String,
-        description: String,
-        tags: Vec<String>,
-    ) -> Result<String, ProjectDatabaseError> {
-        use kicad_project::{NewKicadProjectInfo, create_kicad_project};
-        use kicad_global_libs::setup_kiverse_globally;
-
-        // Setup KiVerse in global KiCad configuration if requested
-        if self.include_kiverse || self.include_atlantix_resistors {
-            let kiverse_path_option = if self.kiverse_path.exists() {
-                Some(self.kiverse_path.clone())
-            } else {
-                None
-            };
-
-            // Try to setup global libraries, but don't fail if it doesn't work
-            if let Err(e) = setup_kiverse_globally(kiverse_path_option) {
-                eprintln!("Warning: Failed to setup KiVerse globally: {}", e);
-                // Continue anyway - the project will still be created
-            }
-        }
-
-        // Create project info
-        let mut project_info = NewKicadProjectInfo::new(name.clone(), self.new_kicad_project_location.clone());
-        project_info.author = self.new_kicad_project_author.clone();
-        project_info.description = description.clone();
-        project_info.company = self.new_kicad_project_company.clone();
-        project_info.include_kiverse = false;  // Don't create local library tables
-        project_info.include_atlantix_resistors = false;  // Don't create local library tables
-        project_info.kiverse_path = Some(self.kiverse_path.clone());
-
-        // Create the KiCad project files
-        let _project_dir = create_kicad_project(&project_info)
-            .map_err(|e| ProjectDatabaseError::DatabaseWrite(format!("Failed to create KiCad project: {}", e)))?;
-
-        // Now add to our project database
-        let pcb_file_path = project_info.pcb_file_path();
-
-        if let Some(ref database) = self.database {
-            let project_id = generate_project_id();
-            let now = Utc::now();
-
-            let metadata = ProjectMetadata {
-                id: project_id.clone(),
-                name,
-                description,
-                pcb_file_path,
-                created_at: now,
-                last_modified: now,
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                tags,
-                parent_id: self.new_project_parent_id.clone(),
-            };
-
-            let project_data = ProjectData {
-                metadata: metadata.clone(),
-                bom_components: Vec::new(),
-                notes: String::new(),
-                hierarchy: None, // Will be loaded on demand
-            };
-
-            database.save_project(&project_data)?;
-            self.project_list = database.list_projects()?;
-            self.current_project = Some(project_data);
-
-            // Update recent project names
-            self.update_recent_project_names();
-
-            Ok(project_id)
-        } else {
-            Err(ProjectDatabaseError::DatabaseRead("Database not initialized".to_string()))
-        }
-    }
-
-    /// Reset create dialog (clears project-specific fields only, keeps user preferences)
+    /// Reset the import form. Clears transient form state AND
+    /// `last_picked_pro_path` — without the latter, re-picking the same
+    /// .kicad_pro after a successful import would be skipped by the
+    /// "already processed" guard, leaving the form empty and producing
+    /// the "Project name cannot be empty" error.
     pub fn reset_create_dialog(&mut self) {
         self.show_create_dialog = false;
         self.new_project_name.clear();
@@ -345,14 +302,12 @@ impl ProjectManagerState {
         self.new_project_tags.clear();
         self.new_project_pcb_path = None;
         self.new_project_parent_id = None;
-        // Note: We keep author, company, location, and library preferences
-        // so the user doesn't have to re-enter them each time
+        self.last_picked_pro_path = None;
     }
 
-    /// Reset all fields including user preferences (for cancel action)
+    /// Reset all fields (parity wrapper for call sites that distinguished
+    /// between "cancel" and "reset"; behaviour is identical now).
     pub fn cancel_create_dialog(&mut self) {
         self.reset_create_dialog();
-        // Could optionally clear user fields here if desired
-        // For now, we keep them to save typing
     }
 }

@@ -4,7 +4,7 @@ use crate::project_manager::database::ProjectMetadata;
 use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
 use egui_mobius_reactive::Dynamic;
 use std::collections::HashMap;
-use egui_ltreeview::{TreeView, Action};
+use egui_ltreeview::{TreeView, Action, NodeBuilder};
 
 /// Right-click intents on a project row, deposited into egui memory by the
 /// context-menu closure and dispatched after `TreeView::show` returns.
@@ -34,14 +34,10 @@ pub fn show_projects_panel<'a>(
 
     // Initialize project manager state if not already done
     if app.project_manager_state.is_none() {
-        let mut state = ProjectManagerState::with_config(&app.project_manager.config);
-
-        // Initialize database
-        let db_path = app.config_path.join("projects.db");
-        if let Err(e) = state.initialize_database(&db_path) {
+        let mut state = ProjectManagerState::with_config(&app.services.config);
+        if let Err(e) = state.initialize_database(&app.services.project_db) {
             logger.log_error(&format!("Failed to initialize project database: {}", e));
         }
-
         app.project_manager_state = Some(state);
     }
 
@@ -78,7 +74,7 @@ pub fn show_projects_panel<'a>(
 
                 // Save BOM to current project
                 if ui.button("💾 Save BOM").clicked() {
-                    if let Some(ref bom_state) = app.bom_state {
+                    if let Some(ref bom_state) = app.bom_panel.state {
                         let components: Vec<crate::project_manager::bom::BomComponent> = bom_state.entries.iter().cloned().map(Into::into).collect();
                         if let Err(e) = manager_state.update_project_bom(components) {
                             manager_state.last_error = Some(format!("Failed to save BOM: {}", e));
@@ -137,316 +133,107 @@ pub fn show_projects_panel<'a>(
 
             let selected_project_id = manager_state.selected_project_id.clone();
 
-            // Two-column layout: tree view on left, details on right
-            ui.columns(2, |columns| {
-                // Left column: Tree view
-                columns[0].vertical(|ui| {
-                    ui.heading("Projects");
-                    ui.separator();
+            // Full-width tree (right-pane details moved to a modal opened via
+            // right-click → Update, or double-click on a project to load it).
+            ui.heading("Projects");
+            ui.add_space(6.0);
 
-                    egui::ScrollArea::vertical()
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            let (_response, actions) = TreeView::new(ui.make_persistent_id("projects_tree"))
-                                .fallback_context_menu(|ui, selected| {
-                                    // `selected` is ltreeview's current selection (last left-clicked node).
-                                    // Derive the project id from it (handles "proj_123:sheet_0" node ids).
-                                    let project_id_opt: Option<String> = selected.first().map(|s: &String| {
-                                        if let Some((head, _)) = s.split_once(':') {
-                                            head.to_string()
-                                        } else {
-                                            s.clone()
-                                        }
-                                    });
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    let (_response, actions) = TreeView::new(ui.make_persistent_id("projects_tree"))
+                        .fallback_context_menu(|ui, selected| {
+                            // Derive project id from selection. Rev-node ids look
+                            // like "proj_X:rev:rev_01" — we want "proj_X".
+                            let sel_id: Option<String> = selected.first().cloned();
+                            let project_id_opt: Option<String> = sel_id.as_deref().map(|s| {
+                                s.split_once(':').map(|(head, _)| head.to_string()).unwrap_or_else(|| s.to_string())
+                            });
+                            let is_release_node = sel_id.as_deref().map(|s| s.contains(":rev:")).unwrap_or(false);
 
-                                    if let Some(project_id) = project_id_opt {
-                                        ui.label(egui::RichText::new("Selected project").small().weak());
-                                        if ui.button("📂 Open Project").clicked() {
-                                            set_project_intent(ui.ctx(), "open", &project_id);
-                                            ui.close();
-                                        }
-                                        if ui.button("Update Project").clicked() {
-                                            set_project_intent(ui.ctx(), "update", &project_id);
-                                            ui.close();
-                                        }
-                                        if ui.button("Delete Project").clicked() {
-                                            set_project_intent(ui.ctx(), "delete", &project_id);
-                                            ui.close();
-                                        }
-                                        ui.separator();
-                                        if ui.button("➕ New Child Project").clicked() {
-                                            set_project_intent(ui.ctx(), "new_child", &project_id);
-                                            ui.close();
-                                        }
-                                    }
-
-                                    if ui.button("➕ New Project").clicked() {
-                                        set_project_intent(ui.ctx(), "new", "");
+                            if is_release_node {
+                                if let Some(sel) = sel_id {
+                                    ui.label(egui::RichText::new("Selected release").small().weak());
+                                    if ui.button("📂 Open release folder").clicked() {
+                                        // Intent carries the full "proj_X:rev:rev_01" id so the
+                                        // dispatcher can look up the release by tag.
+                                        set_project_intent(ui.ctx(), "open_release", &sel);
                                         ui.close();
                                     }
-                                })
-                                .show(ui, |builder| {
-                                    // Get root projects
-                                    let root_projects: Vec<_> = manager_state.project_list
-                                        .iter()
-                                        .filter(|p| p.parent_id.is_none())
-                                        .collect();
-
-                                    for project in root_projects {
-                                        show_tree_node_builder(
-                                            builder,
-                                            project,
-                                            &tree_structure,
-                                            &projects_by_id,
-                                            &current_project_id,
-                                            &selected_project_id,
-                                            &manager_state.project_hierarchies,
-                                        );
+                                    if ui.button("🔄 Regenerate Release").clicked() {
+                                        set_project_intent(ui.ctx(), "regen_release", &sel);
+                                        ui.close();
                                     }
-                                });
-
-                            // Handle tree view actions
-                            for action in actions {
-                                match action {
-                                    Action::SetSelected(selected_ids) => {
-                                        if let Some(first_id) = selected_ids.first() {
-                                            // Extract the actual project ID (handles file nodes like "proj_123:sheet_0")
-                                            let project_id = if first_id.contains(':') {
-                                                first_id.split(':').next().unwrap_or(first_id).to_string()
-                                            } else {
-                                                first_id.clone()
-                                            };
-                                            // Set selected project
-                                            manager_state.selected_project_id = Some(project_id);
-                                        }
-                                    }
-                                    _ => {}
+                                }
+                            } else if let Some(project_id) = project_id_opt {
+                                ui.label(egui::RichText::new("Selected project").small().weak());
+                                if ui.button("📂 Open Project").clicked() {
+                                    set_project_intent(ui.ctx(), "open", &project_id);
+                                    ui.close();
+                                }
+                                if ui.button("✎ Update Project…").clicked() {
+                                    set_project_intent(ui.ctx(), "update", &project_id);
+                                    ui.close();
+                                }
+                                if ui.button("🗑 Delete Project").clicked() {
+                                    set_project_intent(ui.ctx(), "delete", &project_id);
+                                    ui.close();
+                                }
+                                ui.separator();
+                                if ui.button("➕ New Child Project").clicked() {
+                                    set_project_intent(ui.ctx(), "new_child", &project_id);
+                                    ui.close();
                                 }
                             }
+                        })
+                        .show(ui, |builder| {
+                            let root_projects: Vec<_> = manager_state.project_list
+                                .iter()
+                                .filter(|p| p.parent_id.is_none())
+                                .collect();
+                            for project in root_projects {
+                                show_tree_node_builder(
+                                    builder,
+                                    project,
+                                    &tree_structure,
+                                    &projects_by_id,
+                                    &current_project_id,
+                                    &selected_project_id,
+                                    &manager_state.project_hierarchies,
+                                    &manager_state.project_releases,
+                                );
+                            }
                         });
-                });
 
-                // Right column: Project details
-                columns[1].vertical(|ui| {
-                    ui.heading("Project Details");
-                    ui.separator();
-
-                    if let Some(ref selected_id) = manager_state.selected_project_id {
-                        if let Some(project) = manager_state.project_list.iter().find(|p| &p.id == selected_id) {
-                            // Check if we've already warned about missing pedigree for this project
-                            let warned_id = egui::Id::new(format!("pedigree_warned_{}", selected_id));
-                            let already_warned = ui.ctx().memory(|mem| {
-                                mem.data.get_temp::<bool>(warned_id).unwrap_or(false)
-                            });
-
-                            // Try to read metadata from .kicad_pro file
-                            let kicad_metadata = crate::project_manager::kicad_metadata::get_kicad_pro_path(&project.pcb_file_path)
-                                .and_then(|pro_path| {
-                                    if pro_path.exists() {
-                                        match crate::project_manager::kicad_metadata::read_kicad_metadata(&pro_path) {
-                                            Ok(metadata) => {
-                                                // Check for missing pedigree fields - only warn once per project
-                                                if !already_warned {
-                                                    let mut missing_fields = Vec::new();
-                                                    if metadata.author.is_none() {
-                                                        missing_fields.push("Author");
-                                                    }
-                                                    if metadata.company.is_none() {
-                                                        missing_fields.push("Company");
-                                                    }
-
-                                                    if !missing_fields.is_empty() {
-                                                        logger.log_warning(&format!("Missing pedigree information in .kicad_pro: {}", missing_fields.join(", ")));
-                                                        // Mark as warned
-                                                        ui.ctx().memory_mut(|mem| {
-                                                            mem.data.insert_temp(warned_id, true);
-                                                        });
-                                                    }
-                                                }
-
-                                                Some(metadata)
-                                            }
-                                            Err(_) => None
-                                        }
-                                    } else {
-                                        None
+                    for action in actions {
+                        match action {
+                            Action::SetSelected(selected_ids) => {
+                                if let Some(first_id) = selected_ids.first() {
+                                    let project_id = first_id.split_once(':')
+                                        .map(|(head, _)| head.to_string())
+                                        .unwrap_or_else(|| first_id.clone());
+                                    manager_state.selected_project_id = Some(project_id);
+                                }
+                            }
+                            Action::Activate(activate) => {
+                                // Double-click on a project node → load.
+                                // Activate.selected is Vec<NodeId>; NodeId is String here.
+                                if let Some(first_id) = activate.selected.first() {
+                                    let project_id = first_id.split_once(':')
+                                        .map(|(head, _)| head.to_string())
+                                        .unwrap_or_else(|| first_id.clone());
+                                    // Only trigger "open" if this is actually a known project id
+                                    // (ignore activation attempts on file/rev nodes).
+                                    if manager_state.project_list.iter().any(|p| p.id == project_id) {
+                                        set_project_intent(ui.ctx(), "open", &project_id);
                                     }
-                                });
-
-                            egui::ScrollArea::vertical()
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| {
-                                    // Project metadata
-                                    // Editable fields stored in memory
-                                    let name_id = egui::Id::new(format!("edit_name_{}", selected_id));
-                                    let tags_id = egui::Id::new(format!("edit_tags_{}", selected_id));
-
-                                    let mut temp_name = ui.ctx().memory(|mem| {
-                                        mem.data.get_temp::<String>(name_id)
-                                            .unwrap_or_else(|| project.name.clone())
-                                    });
-
-                                    let mut temp_tags = ui.ctx().memory(|mem| {
-                                        mem.data.get_temp::<String>(tags_id)
-                                            .unwrap_or_else(|| project.tags.join(", "))
-                                    });
-
-                                    egui::Grid::new("project_details_grid")
-                                        .num_columns(2)
-                                        .spacing([10.0, 5.0])
-                                        .striped(true)
-                                        .show(ui, |ui| {
-                                            ui.label(egui::RichText::new("Name:").strong());
-                                            ui.text_edit_singleline(&mut temp_name);
-                                            ui.end_row();
-
-                                            // Show Author from .kicad_pro if available
-                                            if let Some(ref metadata) = kicad_metadata {
-                                                if let Some(ref author) = metadata.author {
-                                                    ui.label(egui::RichText::new("Author:").strong());
-                                                    ui.label(author);
-                                                    ui.end_row();
-                                                }
-
-                                                if let Some(ref company) = metadata.company {
-                                                    ui.label(egui::RichText::new("Company:").strong());
-                                                    ui.label(company);
-                                                    ui.end_row();
-                                                }
-                                            }
-
-                                            ui.label(egui::RichText::new("Created:").strong());
-                                            ui.label(project.created_at.format("%Y-%m-%d %H:%M").to_string());
-                                            ui.end_row();
-
-                                            ui.label(egui::RichText::new("Last Modified:").strong());
-                                            ui.label(project.last_modified.format("%Y-%m-%d %H:%M").to_string());
-                                            ui.end_row();
-
-                                            // Show date from .kicad_pro if available
-                                            if let Some(ref metadata) = kicad_metadata {
-                                                if let Some(ref date) = metadata.date {
-                                                    ui.label(egui::RichText::new("Project Date:").strong());
-                                                    ui.label(date);
-                                                    ui.end_row();
-                                                }
-                                            }
-
-                                            ui.label(egui::RichText::new("Tags:").strong());
-                                            ui.text_edit_singleline(&mut temp_tags);
-                                            ui.end_row();
-                                        });
-
-                                    // Store edited values back to memory
-                                    ui.ctx().memory_mut(|mem| {
-                                        mem.data.insert_temp(name_id, temp_name.clone());
-                                        mem.data.insert_temp(tags_id, temp_tags.clone());
-                                    });
-
-                                    ui.add_space(15.0);
-
-                                    // Description section
-                                    ui.separator();
-                                    ui.label(egui::RichText::new("Description").strong().size(14.0));
-                                    ui.add_space(5.0);
-
-                                    // Get available height for description area (fill remaining space)
-                                    let available_height = ui.available_height() - 80.0; // Leave room for buttons
-
-                                    egui::Frame::NONE
-                                        .fill(ui.visuals().extreme_bg_color)
-                                        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
-                                        .inner_margin(egui::Margin::same(10))
-                                        .show(ui, |ui| {
-                                            ui.set_height(available_height.max(200.0));
-
-                                            // Use description from .kicad_pro if available, otherwise from database
-                                            let source_description = kicad_metadata.as_ref()
-                                                .and_then(|m| m.description.clone())
-                                                .unwrap_or_else(|| project.description.clone());
-
-                                            // Get or initialize the description buffer for this project
-                                            let description_id = egui::Id::new(format!("description_buffer_{}", selected_id));
-                                            let init_id = egui::Id::new(format!("description_initialized_{}", selected_id));
-
-                                            let mut temp_description = ui.ctx().memory_mut(|mem| {
-                                                // Check if we've initialized this project's description
-                                                let initialized = mem.data.get_temp::<bool>(init_id).unwrap_or(false);
-
-                                                if !initialized {
-                                                    // First time - initialize from source
-                                                    mem.data.insert_temp(init_id, true);
-                                                    mem.data.insert_temp(description_id, source_description.clone());
-                                                    source_description.clone()
-                                                } else {
-                                                    // Already initialized - use stored value
-                                                    mem.data.get_temp::<String>(description_id)
-                                                        .unwrap_or_else(|| source_description.clone())
-                                                }
-                                            });
-
-                                            // Create terminal-style text area (like Vescript FPGA Manager)
-                                            let text_edit_id = egui::Id::new(format!("description_edit_{}", selected_id));
-
-                                            let output = egui::TextEdit::multiline(&mut temp_description)
-                                                .id(text_edit_id)
-                                                .text_color(egui::Color32::GREEN)
-                                                .font(egui::TextStyle::Monospace)
-                                                .interactive(true)
-                                                .desired_rows(15)
-                                                .desired_width(f32::INFINITY)
-                                                .hint_text("Enter project description...")
-                                                .frame(false)  // Remove the frame/border
-                                                .show(ui);
-
-                                            // Store the current text in memory
-                                            ui.ctx().memory_mut(|mem| {
-                                                mem.data.insert_temp(description_id, temp_description.clone());
-                                            });
-
-                                            let response = output.response;
-
-                                            // Only save on focus lost (not on every keystroke)
-                                            if response.lost_focus() && temp_description != source_description {
-                                                ui.ctx().memory_mut(|mem| {
-                                                    mem.data.insert_temp(
-                                                        egui::Id::new("edit_description"),
-                                                        (selected_id.clone(), temp_description.clone())
-                                                    );
-                                                });
-                                            }
-                                        });
-
-                                    ui.add_space(15.0);
-
-                                    // Action buttons
-                                    ui.horizontal(|ui| {
-                                        if ui.button("📂 Load Project").clicked() {
-                                            ui.ctx().memory_mut(|mem| {
-                                                mem.data.insert_temp(egui::Id::new("load_project"), selected_id.clone());
-                                            });
-                                        }
-
-                                        if ui.button("💾 Save Project").clicked() {
-                                            ui.ctx().memory_mut(|mem| {
-                                                mem.data.insert_temp(egui::Id::new("save_project"), (selected_id.clone(), temp_name.clone(), temp_tags.clone()));
-                                            });
-                                        }
-
-                                        if ui.button("🗑️ Delete Project").clicked() {
-                                            manager_state.show_delete_confirmation = Some(selected_id.clone());
-                                        }
-                                    });
-                                });
+                                }
+                            }
+                            _ => {}
                         }
-                    } else {
-                        ui.vertical_centered(|ui| {
-                            ui.add_space(50.0);
-                            ui.label("Select a project to view details");
-                        });
                     }
                 });
-            });
+
         }
 
         // Dispatch right-click context menu intent
@@ -470,10 +257,34 @@ pub fn show_projects_panel<'a>(
                     });
                 }
                 "update" => {
-                    // Select the project — right-hand details panel already
-                    // exposes the editable fields + Save button.
+                    // Open the project-edit modal (rendered in app.rs).
+                    // The dispatcher up in app.rs/update() picks this up via
+                    // memory key "open_project_edit_modal".
                     manager_state.selected_project_id = Some(project_id.clone());
-                    logger.log_info("Edit project fields in the right panel, then click Save Project.");
+                    ui.ctx().memory_mut(|mem| {
+                        mem.data.insert_temp(
+                            egui::Id::new("open_project_edit_modal"),
+                            project_id.clone(),
+                        );
+                    });
+                }
+                "open_release" => {
+                    // project_id here is actually "proj_X:rev:rev_01".
+                    ui.ctx().memory_mut(|mem| {
+                        mem.data.insert_temp(
+                            egui::Id::new("open_release_intent"),
+                            project_id.clone(),
+                        );
+                    });
+                }
+                "regen_release" => {
+                    // Handed off to the Gerber Viewer ribbon's open_regenerate_release_modal.
+                    ui.ctx().memory_mut(|mem| {
+                        mem.data.insert_temp(
+                            egui::Id::new("regen_release_intent"),
+                            project_id.clone(),
+                        );
+                    });
                 }
                 "delete" => {
                     manager_state.show_delete_confirmation = Some(project_id.clone());
@@ -492,94 +303,9 @@ pub fn show_projects_panel<'a>(
             }
         }
 
-        // Handle save project action (name, tags, description)
-        let save_info = ui.ctx().memory(|mem| {
-            mem.data.get_temp::<(String, String, String)>(egui::Id::new("save_project"))
-        });
-
-        if let Some((project_id, new_name, new_tags_str)) = save_info {
-            ui.ctx().memory_mut(|mem| {
-                mem.data.remove::<(String, String, String)>(egui::Id::new("save_project"));
-            });
-
-            // Parse tags
-            let new_tags: Vec<String> = new_tags_str
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
-
-            // Get the current description from memory — must match the key used
-            // when writing the edit buffer above (description_buffer_{id}).
-            let description_id = egui::Id::new(format!("description_buffer_{}", project_id));
-            let new_description = ui.ctx().memory(|mem| {
-                mem.data.get_temp::<String>(description_id)
-                    .unwrap_or_else(|| {
-                        manager_state.project_list.iter()
-                            .find(|p| p.id == project_id)
-                            .map(|p| p.description.clone())
-                            .unwrap_or_default()
-                    })
-            });
-
-            if let Err(e) = manager_state.update_project(&project_id, new_name.clone(), new_description.clone(), new_tags.clone()) {
-                manager_state.last_error = Some(format!("Failed to save project: {}", e));
-            } else {
-                logger.log_info(&format!("Saved project: {}", new_name));
-
-                // Try to update the .kicad_pro file if it exists
-                if let Some(project) = manager_state.project_list.iter().find(|p| p.id == project_id) {
-                    let kicad_pro_path = crate::project_manager::kicad_metadata::get_kicad_pro_path(&project.pcb_file_path);
-                    if let Some(pro_path) = kicad_pro_path {
-                        if pro_path.exists() {
-                            // Try to update the description in the .kicad_pro file
-                            if let Err(e) = update_kicad_description(&pro_path, &new_description) {
-                                logger.log_warning(&format!("Could not update .kicad_pro description: {}", e));
-                            } else {
-                                logger.log_info("Updated description in .kicad_pro file");
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Handle description edit action (legacy - now handled by save_project)
-        let edit_info = ui.ctx().memory(|mem| {
-            mem.data.get_temp::<(String, String)>(egui::Id::new("edit_description"))
-        });
-
-        if let Some((project_id, new_description)) = edit_info {
-            ui.ctx().memory_mut(|mem| {
-                mem.data.remove::<(String, String)>(egui::Id::new("edit_description"));
-            });
-
-            // Update the project description in the database
-            if let Some(project) = manager_state.project_list.iter().find(|p| p.id == project_id) {
-                let tags = project.tags.clone();
-                let name = project.name.clone();
-                let pcb_file_path = project.pcb_file_path.clone();
-
-                if let Err(e) = manager_state.update_project(&project_id, name.clone(), new_description.clone(), tags) {
-                    manager_state.last_error = Some(format!("Failed to update description: {}", e));
-                } else {
-                    logger.log_info(&format!("Updated description for project: {}", name));
-
-                    // Also try to update the .kicad_pro file if it exists
-                    let kicad_pro_path = crate::project_manager::kicad_metadata::get_kicad_pro_path(&pcb_file_path);
-                    if let Some(pro_path) = kicad_pro_path {
-                        if pro_path.exists() {
-                            // Try to update the description in the .kicad_pro file
-                            if let Err(e) = update_kicad_description(&pro_path, &new_description) {
-                                logger.log_warning(&format!("Could not update .kicad_pro description: {}", e));
-                            } else {
-                                logger.log_info("Updated description in .kicad_pro file");
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        // (save_project and edit_description memory-key handlers removed —
+        // the Project Edit modal in app.rs now owns the save path and calls
+        // manager_state.update_project() + update_kicad_description() directly.)
 
         // Handle delete confirmation
         if let Some(ref project_id) = manager_state.show_delete_confirmation {
@@ -638,13 +364,13 @@ pub fn show_projects_panel<'a>(
                 // Successfully loaded project data, now restore the project state
                 if let Some(ref project) = manager_state.current_project {
                     // 1. Set the PCB file path in the project manager
-                    app.project_manager.state = crate::project::ProjectState::PcbSelected {
-                        pcb_path: project.metadata.pcb_file_path.clone()
-                    };
+                    app.services.project_state.set(crate::project::ProjectState::PcbSelected {
+                        pcb_path: project.metadata.pcb_file_path.clone(),
+                    });
 
                     // 2. Restore BOM components if available
                     if !project.bom_components.is_empty() {
-                        if let Some(ref mut bom_state) = app.bom_state {
+                        if let Some(ref mut bom_state) = app.bom_panel.state {
                             bom_state.entries = project.bom_components.iter().map(|c| {
                                 crate::bom::BomEntry {
                                     item: c.item_number.parse().unwrap_or(0),
@@ -678,8 +404,9 @@ pub fn show_projects_panel<'a>(
     }
 }
 
-/// Helper function to update description in .kicad_pro file
-fn update_kicad_description(kicad_pro_path: &std::path::Path, new_description: &str) -> Result<(), Box<dyn std::error::Error>> {
+/// Helper function to update description in .kicad_pro file.
+/// Called by the Project Edit modal (app.rs) on Save.
+pub fn update_kicad_description(kicad_pro_path: &std::path::Path, new_description: &str) -> Result<(), Box<dyn std::error::Error>> {
     use serde_json::Value;
 
     // Read the existing .kicad_pro file
@@ -733,7 +460,9 @@ fn build_tree_structure(projects: &[ProjectMetadata]) -> HashMap<String, TreeNod
     tree
 }
 
-/// Recursively show tree nodes using builder pattern
+/// Recursively show tree nodes using builder pattern.
+/// Project nodes are `activatable(true)` so double-click → Load.
+/// Under each project: schematic → sheets, pcb, and `outputs/` with rev leaves.
 fn show_tree_node_builder(
     builder: &mut egui_ltreeview::TreeViewBuilder<String>,
     project: &ProjectMetadata,
@@ -742,6 +471,7 @@ fn show_tree_node_builder(
     current_project_id: &Option<String>,
     selected_project_id: &Option<String>,
     project_hierarchies: &HashMap<String, crate::project_manager::kicad_hierarchy::ProjectHierarchy>,
+    project_releases: &HashMap<String, Vec<crate::release::Release>>,
 ) {
     let is_current = current_project_id
         .as_ref()
@@ -753,13 +483,11 @@ fn show_tree_node_builder(
         .map(|id| id == &project.id)
         .unwrap_or(false);
 
-    // Get directory path
     let dir_path = project.pcb_file_path
         .parent()
         .and_then(|p| p.to_str())
         .unwrap_or("");
 
-    // Create label with path if selected
     let label_text = if is_selected && !dir_path.is_empty() {
         format!("{} ({})", project.name, dir_path)
     } else {
@@ -772,23 +500,33 @@ fn show_tree_node_builder(
         egui::RichText::new(&label_text)
     };
 
-    // Check if this project has child projects
     let has_child_projects = tree_structure
         .get(&project.id)
         .map(|node| !node.children.is_empty())
         .unwrap_or(false);
 
-    // Check if we have KiCad hierarchy for this project
     let has_kicad_hierarchy = project_hierarchies
         .get(&project.id)
         .map(|h| h.root_schematic.is_some() || h.pcb_file.is_some() || !h.sheets.is_empty())
         .unwrap_or(false);
 
-    // Show as directory if it has children or KiCad files
-    if has_child_projects || has_kicad_hierarchy {
-        builder.dir(project.id.clone(), label);
+    let has_releases = project_releases
+        .get(&project.id)
+        .map(|r| !r.is_empty())
+        .unwrap_or(false);
 
-        // Show child projects first
+    // Project row is always rendered as a directory if it has any children to
+    // expand, otherwise as an activatable leaf.
+    let has_any_children = has_child_projects || has_kicad_hierarchy || has_releases;
+
+    if has_any_children {
+        builder.node(
+            NodeBuilder::dir(project.id.clone())
+                .label(label)
+                .activatable(true),
+        );
+
+        // Child projects first (by parent_id hierarchy).
         if let Some(node) = tree_structure.get(&project.id) {
             for child_id in &node.children {
                 if let Some(child_project) = projects_by_id.get(child_id) {
@@ -800,44 +538,53 @@ fn show_tree_node_builder(
                         current_project_id,
                         selected_project_id,
                         project_hierarchies,
+                        project_releases,
                     );
                 }
             }
         }
 
-        // Show KiCad hierarchy files
+        // KiCad files: schematic (+ sheets) and pcb.
         if let Some(hierarchy) = project_hierarchies.get(&project.id) {
-            // Show root schematic with sub-sheets as children
             if let Some(ref root_sch) = hierarchy.root_schematic {
                 let file_name = root_sch.file_name().and_then(|f| f.to_str()).unwrap_or("Unknown");
-
-                // If there are sub-sheets, show root schematic as expandable directory
                 if !hierarchy.sheets.is_empty() {
                     builder.dir(format!("{}:sch_root", project.id), egui::RichText::new(format!("📄 {}", file_name)));
-
-                    // Show hierarchical sheets as children of root schematic
                     for (idx, sheet) in hierarchy.sheets.iter().enumerate() {
                         show_hierarchical_sheet_node(builder, sheet, &format!("{}:sheet_{}", project.id, idx));
                     }
-
                     builder.close_dir();
                 } else {
-                    // No sub-sheets, just show as leaf
                     builder.leaf(format!("{}:sch_root", project.id), egui::RichText::new(format!("📄 {}", file_name)));
                 }
             }
-
-            // Show PCB file
             if let Some(ref pcb) = hierarchy.pcb_file {
                 let file_name = pcb.file_name().and_then(|f| f.to_str()).unwrap_or("Unknown");
                 builder.leaf(format!("{}:pcb", project.id), egui::RichText::new(format!("🔧 {}", file_name)));
             }
         }
 
+        // outputs/ subtree — one leaf per release.
+        if has_releases {
+            builder.dir(format!("{}:outputs", project.id), egui::RichText::new("📁 outputs"));
+            if let Some(releases) = project_releases.get(&project.id) {
+                for rel in releases {
+                    builder.leaf(
+                        format!("{}:rev:{}", project.id, rel.tag),
+                        egui::RichText::new(format!("📦 {}", rel.tag)),
+                    );
+                }
+            }
+            builder.close_dir();
+        }
+
         builder.close_dir();
     } else {
-        // Leaf node (no children, no KiCad hierarchy)
-        builder.leaf(project.id.clone(), label);
+        builder.node(
+            NodeBuilder::leaf(project.id.clone())
+                .label(label)
+                .activatable(true),
+        );
     }
 }
 

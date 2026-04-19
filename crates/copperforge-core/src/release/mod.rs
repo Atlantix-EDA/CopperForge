@@ -1,39 +1,317 @@
 //! Release management — tag and track gerber fabrication releases.
 //!
-//! Each release is a snapshot of gerber/drill files for a specific
-//! fabrication run, e.g. "pcbway_01June2025_release".
-//!
-//! Future: ReleaseManager will handle creating tagged releases,
-//! archiving gerber sets, and tracking fabrication history.
+//! A release is a point-in-time snapshot of everything needed to send the
+//! PCB out for fabrication: gerbers, drill files, and an optional
+//! RELEASE_NOTES.md, bundled into a single `.zip` under
+//! `<project_dir>/outputs/<rev_name>/`.
 
-use std::path::PathBuf;
+use std::fs::File;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 
-/// A tagged fabrication release.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+use chrono::{DateTime, Local, Utc};
+use serde::{Deserialize, Serialize};
+use zip::write::SimpleFileOptions;
+use zip::ZipWriter;
+
+use crate::event_logger::ReactiveEventLogger;
+
+/// A tagged fabrication release. Persisted under `ProjectData.releases`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Release {
-    /// Human-readable tag, e.g. "pcbway_01June2025_release"
+    /// User-chosen rev tag, e.g. "rev_01" or "rev_01a".
     pub tag: String,
-    /// When the release was created
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    /// Path to the archived gerber/drill package
+    /// When the release was created.
+    pub created_at: DateTime<Utc>,
+    /// Path to the archived gerber/drill package (`<project>/outputs/<tag>/<name>.zip`).
     pub archive_path: PathBuf,
-    /// Which vendor this release targets (if any)
-    pub vendor: Option<String>,
-    /// Notes about this release
-    pub notes: String,
+    /// Path to the RELEASE_NOTES.md file (always created next to the zip).
+    pub notes_path: PathBuf,
+    /// Short "what this board is about" description (from the modal).
+    pub description: String,
+    /// User-provided changes-from-previous-version text (markdown).
+    pub changes: String,
+    /// Detected KiCad version at release time.
+    pub kicad_version: Option<String>,
+    /// Git commit hash at release time, if the project dir is inside a repo.
+    pub git_hash: Option<String>,
+    /// Whether the zip filename includes the date (e.g. `_18Apr2026`).
+    pub include_date_in_name: bool,
+    /// Whether RELEASE_NOTES.md was bundled into the zip.
+    pub include_notes_in_zip: bool,
 }
 
-/// Manages fabrication releases for a project.
-#[derive(Default)]
-pub struct ReleaseManager {
-    pub releases: Vec<Release>,
+/// Input collected from the Release modal.
+pub struct ReleaseRequest {
+    pub rev_tag: String,
+    pub description: String,
+    pub changes: String,
+    pub include_date_in_name: bool,
+    pub include_notes_in_zip: bool,
 }
 
-impl ReleaseManager {
-    pub fn new() -> Self { Self::default() }
+/// Where source artifacts are found; supplied by the caller after a normal
+/// Generate+Load has produced gerbers.
+pub struct ReleaseSources<'a> {
+    pub pcb_path: &'a Path,
+    pub gerber_dir: &'a Path,
+    pub kicad_cli: std::process::Command,
+    pub kicad_version: Option<String>,
+    pub os_description: String,
+}
 
-    // TODO: create_release(tag, gerber_dir, vendor) -> Result<Release>
-    // TODO: list_releases() -> &[Release]
-    // TODO: load_from_project(project_path) -> Self
-    // TODO: save_to_project(project_path) -> Result<()>
+/// Result of a create-release operation.
+pub struct ReleaseOutcome {
+    pub release: Release,
+}
+
+/// Create a release on disk: `<project_dir>/outputs/<rev_tag>/` containing
+/// - `<project>_<rev>[_<DDMMMYYYY>].zip` (gerbers + drill [+ notes if opted in])
+/// - `RELEASE_NOTES.md` (always written next to the zip)
+///
+/// Returns the `Release` metadata; the caller is responsible for appending
+/// it to the project's DB record.
+pub fn create_release(
+    req: &ReleaseRequest,
+    sources: ReleaseSources<'_>,
+    logger: &ReactiveEventLogger,
+) -> Result<ReleaseOutcome, String> {
+    let project_dir = sources
+        .pcb_path
+        .parent()
+        .ok_or_else(|| "PCB path has no parent directory".to_string())?;
+
+    let project_stem = sources
+        .pcb_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("project");
+
+    let outputs_root = project_dir.join("outputs");
+    let rev_dir = outputs_root.join(&req.rev_tag);
+    std::fs::create_dir_all(&rev_dir)
+        .map_err(|e| format!("Failed to create release dir {}: {}", rev_dir.display(), e))?;
+
+    logger.log_info(&format!("Release dir: {}", rev_dir.display()));
+
+    // 1. Export drill files (gerbers are already in sources.gerber_dir).
+    let drill_dir = rev_dir.join("drill_staging");
+    std::fs::create_dir_all(&drill_dir)
+        .map_err(|e| format!("Failed to create drill staging dir: {}", e))?;
+    export_drill(sources.kicad_cli, sources.pcb_path, &drill_dir, logger)?;
+
+    // 2. Resolve git commit (optional).
+    let git_hash = git_head_short(project_dir);
+    if let Some(ref h) = git_hash {
+        logger.log_info(&format!("Git commit: {}", h));
+    }
+
+    let now_utc = Utc::now();
+    let now_local = Local::now();
+    let date_stamp = now_local.format("%d%b%Y").to_string();
+
+    // 3. Zip filename.
+    let zip_name = if req.include_date_in_name {
+        format!("{}_{}_{}.zip", project_stem, req.rev_tag, date_stamp)
+    } else {
+        format!("{}_{}.zip", project_stem, req.rev_tag)
+    };
+    let zip_path = rev_dir.join(&zip_name);
+
+    // 4. Write RELEASE_NOTES.md next to the zip.
+    let notes_path = rev_dir.join("RELEASE_NOTES.md");
+    let notes_markdown = build_release_notes(
+        project_stem,
+        &req.rev_tag,
+        &req.description,
+        &req.changes,
+        &now_local.format("%Y-%m-%d %H:%M:%S %Z").to_string(),
+        sources.kicad_version.as_deref(),
+        &sources.os_description,
+        git_hash.as_deref(),
+    );
+    std::fs::write(&notes_path, &notes_markdown)
+        .map_err(|e| format!("Failed to write RELEASE_NOTES.md: {}", e))?;
+
+    // 5. Build the archive.
+    let notes_for_zip = if req.include_notes_in_zip {
+        Some((notes_path.as_path(), "RELEASE_NOTES.md"))
+    } else {
+        None
+    };
+    write_release_zip(&zip_path, sources.gerber_dir, &drill_dir, notes_for_zip)
+        .map_err(|e| format!("Failed to build zip: {}", e))?;
+
+    // 6. Clean up drill staging (its contents are in the zip now).
+    let _ = std::fs::remove_dir_all(&drill_dir);
+
+    logger.log_info(&format!("Release archive: {}", zip_path.display()));
+
+    let release = Release {
+        tag: req.rev_tag.clone(),
+        created_at: now_utc,
+        archive_path: zip_path,
+        notes_path,
+        description: req.description.clone(),
+        changes: req.changes.clone(),
+        kicad_version: sources.kicad_version,
+        git_hash,
+        include_date_in_name: req.include_date_in_name,
+        include_notes_in_zip: req.include_notes_in_zip,
+    };
+
+    Ok(ReleaseOutcome { release })
+}
+
+/// Suggest the next rev tag based on the project's existing releases.
+/// e.g. ["rev_01"] → "rev_02"; [] → "rev_01"; anything unrecognized → "rev_01".
+pub fn suggest_next_rev_tag(existing: &[Release]) -> String {
+    let mut highest: u32 = 0;
+    for r in existing {
+        if let Some(num_str) = r.tag.strip_prefix("rev_") {
+            // Take leading digits only, tolerate suffixes like "_01a".
+            let digits: String = num_str.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if let Ok(n) = digits.parse::<u32>() {
+                highest = highest.max(n);
+            }
+        }
+    }
+    format!("rev_{:02}", highest + 1)
+}
+
+// ── internals ────────────────────────────────────────────────────────────
+
+fn export_drill(
+    mut cmd: std::process::Command,
+    pcb_path: &Path,
+    drill_dir: &Path,
+    logger: &ReactiveEventLogger,
+) -> Result<(), String> {
+    let output = cmd
+        .arg("pcb")
+        .arg("export")
+        .arg("drill")
+        .arg("--output")
+        .arg(drill_dir)
+        .arg(pcb_path)
+        .output()
+        .map_err(|e| format!("kicad-cli drill export failed to spawn: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("kicad-cli drill export failed: {}", stderr.trim()));
+    }
+    let listed: Vec<_> = std::fs::read_dir(drill_dir)
+        .map_err(|e| format!("Failed to read drill dir: {}", e))?
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    logger.log_info(&format!("Drill files: {}", listed.join(", ")));
+    Ok(())
+}
+
+fn git_head_short(project_dir: &Path) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .current_dir(project_dir)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() { None } else { Some(s) }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_release_notes(
+    project: &str,
+    rev_tag: &str,
+    description: &str,
+    changes: &str,
+    when: &str,
+    kicad_version: Option<&str>,
+    os_description: &str,
+    git_hash: Option<&str>,
+) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("# {} — {}\n\n", project, rev_tag));
+    out.push_str(&format!("**Released:** {}\n\n", when));
+    out.push_str(&format!(
+        "**KiCad version:** {}\n\n",
+        kicad_version.unwrap_or("(not detected)")
+    ));
+    out.push_str(&format!("**Host OS:** {}\n\n", os_description));
+    out.push_str(&format!(
+        "**Git commit:** {}\n\n",
+        git_hash.unwrap_or("(not in a git repository)")
+    ));
+    out.push_str("## Description\n\n");
+    if description.trim().is_empty() {
+        out.push_str("_(none provided)_\n\n");
+    } else {
+        out.push_str(description.trim());
+        out.push_str("\n\n");
+    }
+    out.push_str("## Changes from previous version\n\n");
+    if changes.trim().is_empty() {
+        out.push_str("_(none provided)_\n\n");
+    } else {
+        out.push_str(changes.trim());
+        out.push_str("\n\n");
+    }
+    out
+}
+
+fn write_release_zip(
+    zip_path: &Path,
+    gerber_dir: &Path,
+    drill_dir: &Path,
+    notes: Option<(&Path, &str)>,
+) -> std::io::Result<()> {
+    let file = File::create(zip_path)?;
+    let mut zw = ZipWriter::new(file);
+    let opts: SimpleFileOptions = SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+
+    // Gerbers
+    for entry in std::fs::read_dir(gerber_dir)? {
+        let path = entry?.path();
+        if path.is_file() {
+            add_to_zip(&mut zw, &path, None, opts)?;
+        }
+    }
+
+    // Drills
+    for entry in std::fs::read_dir(drill_dir)? {
+        let path = entry?.path();
+        if path.is_file() {
+            add_to_zip(&mut zw, &path, None, opts)?;
+        }
+    }
+
+    // Notes
+    if let Some((notes_path, name_in_zip)) = notes {
+        add_to_zip(&mut zw, notes_path, Some(name_in_zip), opts)?;
+    }
+
+    zw.finish()?;
+    Ok(())
+}
+
+fn add_to_zip(
+    zw: &mut ZipWriter<File>,
+    src: &Path,
+    alias: Option<&str>,
+    opts: SimpleFileOptions,
+) -> std::io::Result<()> {
+    let name = alias
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| src.file_name().unwrap().to_string_lossy().into_owned());
+    zw.start_file(name, opts)?;
+    let mut f = File::open(src)?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf)?;
+    zw.write_all(&buf)?;
+    Ok(())
 }

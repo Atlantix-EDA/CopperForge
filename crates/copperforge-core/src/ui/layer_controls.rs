@@ -16,13 +16,13 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
     // Quick controls
     ui.horizontal(|ui| {
         // All On/Off toggle
-        let visible_count = app.layer_store.visible_layers().count();
-        let total_layers = app.layer_store.layer_count();
+        let visible_count = app.services.layer_store.visible_layers().count();
+        let total_layers = app.services.layer_store.layer_count();
         let all_visible = visible_count == total_layers && total_layers > 0;
         let mut all_on = all_visible;
         if ui.checkbox(&mut all_on, "All").clicked() {
             for layer_type in LayerType::all() {
-                app.layer_store.set_visibility(layer_type, all_on);
+                app.services.layer_store.set_visibility(layer_type, all_on);
             }
             logger.log_info(if all_on { "All layers shown" } else { "All layers hidden" });
             ui.ctx().request_repaint();
@@ -32,13 +32,13 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
 
         if ui.button("Show All").clicked() {
             for layer_type in LayerType::all() {
-                app.layer_store.set_visibility(layer_type, true);
+                app.services.layer_store.set_visibility(layer_type, true);
             }
             logger.log_info("All layers shown");
         }
         if ui.button("Hide All").clicked() {
             for layer_type in LayerType::all() {
-                app.layer_store.set_visibility(layer_type, false);
+                app.services.layer_store.set_visibility(layer_type, false);
             }
             logger.log_info("All layers hidden");
         }
@@ -50,7 +50,7 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
                     LayerType::Silkscreen(Side::Bottom) | LayerType::Soldermask(Side::Bottom) | LayerType::Paste(Side::Bottom) => false,
                     LayerType::MechanicalOutline => true, // Keep outline visible
                 };
-                app.layer_store.set_visibility(layer_type, visible);
+                app.services.layer_store.set_visibility(layer_type, visible);
             }
             logger.log_info("Top layers shown");
             ui.ctx().request_repaint();
@@ -63,7 +63,7 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
                     LayerType::Silkscreen(Side::Bottom) | LayerType::Soldermask(Side::Bottom) | LayerType::Paste(Side::Bottom) => true,
                     LayerType::MechanicalOutline => true, // Keep outline visible
                 };
-                app.layer_store.set_visibility(layer_type, visible);
+                app.services.layer_store.set_visibility(layer_type, visible);
             }
             logger.log_info("Bottom layers shown");
             ui.ctx().request_repaint();
@@ -74,7 +74,7 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
                     LayerType::Silkscreen(_) | LayerType::MechanicalOutline => true,
                     _ => false, // Hide copper, soldermask, and paste layers
                 };
-                app.layer_store.set_visibility(layer_type, visible);
+                app.services.layer_store.set_visibility(layer_type, visible);
             }
             logger.log_info("Assembly layers shown (silkscreen + outline)");
             ui.ctx().request_repaint();
@@ -92,7 +92,7 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
 
     for layer_type in LayerType::all() {
         // Get layer data from layer_store
-        if let Some(layer) = app.layer_store.find(layer_type) {
+        if let Some(layer) = app.services.layer_store.find(layer_type) {
             let was_visible = layer.visible;
             let current_color = layer.color;
 
@@ -172,19 +172,19 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
 
     // Apply visibility changes
     for (layer_type, visible) in visibility_changes {
-        app.layer_store.set_visibility(layer_type, visible);
+        app.services.layer_store.set_visibility(layer_type, visible);
     }
 
     // Apply color changes
     for (layer_type, color) in color_changes {
-        app.layer_store.set_color(layer_type, color);
+        app.services.layer_store.set_color(layer_type, color);
     }
 
     // Handle deferred actions after the UI loop
     if let Some(target_layer) = show_only_layer {
         for layer_type_iter in LayerType::all() {
             let visible = layer_type_iter == target_layer;
-            app.layer_store.set_visibility(layer_type_iter, visible);
+            app.services.layer_store.set_visibility(layer_type_iter, visible);
         }
         logger.log_info(&format!("Showing only {} layer", target_layer.display_name()));
     }
@@ -199,7 +199,7 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
     }
 
     // Show unassigned gerbers section if any exist
-    if app.layer_store.has_unassigned() {
+    if app.services.layer_store.has_unassigned() {
         ui.add_space(8.0);
         ui.separator();
         ui.heading("Unassigned Gerber Files");
@@ -208,13 +208,13 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
 
         let mut assignments_to_make = Vec::new();
 
-        for unassigned in app.layer_store.unassigned.clone() {
+        for unassigned in app.services.layer_store.unassigned.clone() {
             ui.horizontal(|ui| {
                 ui.label(&unassigned.filename);
                 ui.add_space(10.0);
 
                 // Create dropdown for layer type selection
-                let layer_assignments = app.layer_store.assignments.clone();
+                let layer_assignments = app.services.layer_store.assignments.clone();
                 let current_selection = layer_assignments.get(&unassigned.filename)
                     .copied()
                     .unwrap_or(LayerType::Copper(1)); // Default selection
@@ -224,7 +224,7 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
                     .show_ui(ui, |ui| {
                         for layer_type in LayerType::all() {
                             // Check if this layer type is already assigned to another file
-                            let already_assigned = app.layer_store.find(layer_type).is_some();
+                            let already_assigned = app.services.layer_store.find(layer_type).is_some();
 
                             if already_assigned {
                                 ui.add_enabled(false, egui::Button::new(format!("✓ {} (assigned)", layer_type.display_name())));
@@ -238,10 +238,10 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
 
         // Apply assignments
         for (filename, layer_type) in assignments_to_make {
-            match app.layer_store.assign_gerber(&filename, layer_type) {
+            match app.services.layer_store.assign_gerber(&filename, layer_type) {
                 Ok(_) => {
                     logger.log_info(&format!("Assigned {} to {:?}", filename, layer_type));
-                    app.needs_initial_view = true;
+                    app.services.needs_initial_view = true;
                 }
                 Err(e) => {
                     logger.log_error(&format!("Failed to assign {}: {}", filename, e));
@@ -249,10 +249,10 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
             }
         }
 
-        if app.layer_store.has_unassigned() {
+        if app.services.layer_store.has_unassigned() {
             ui.add_space(8.0);
             if ui.button("Auto-detect All").clicked() {
-                let newly_assigned = app.layer_store.auto_assign();
+                let newly_assigned = app.services.layer_store.auto_assign();
 
                 if newly_assigned.is_empty() {
                     logger.log_warning("Could not auto-detect any remaining files");
@@ -260,7 +260,7 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
                     for (filename, layer_type) in newly_assigned {
                         logger.log_info(&format!("Auto-detected {} as {:?}", filename, layer_type));
                     }
-                    app.needs_initial_view = true;
+                    app.services.needs_initial_view = true;
                 }
             }
         }

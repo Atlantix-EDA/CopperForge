@@ -13,9 +13,9 @@ use crate::theme::TokyoNight;
 citizen_panel!(LoggerPanel, "logger");
 
 impl LoggerPanel {
-    pub fn show(&self, ui: &mut egui::Ui, app: &mut crate::CopperForgeApp) {
-        let state = app.logger_state.get();
-        let colors = app.log_colors.get();
+    pub fn show(&self, ui: &mut egui::Ui, services: &mut crate::services::SharedServices) {
+        let state = services.logger_state.get();
+        let colors = services.log_colors.get();
 
         let frame = egui::Frame::new()
             .fill(TokyoNight::BG_DARK)
@@ -35,7 +35,7 @@ impl LoggerPanel {
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.small_button("Clear").clicked() {
-                        app.logger_state.lock().clear_logs();
+                        services.logger_state.lock().clear_logs();
                     }
                 });
             });
