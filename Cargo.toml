@@ -26,7 +26,7 @@ env_logger.workspace = true
 log.workspace = true
 
 [workspace.package]
-version = "0.2.1"
+version = "0.4.0"
 edition = "2024"
 authors = ["James Bonanno <atlantix-eda@proton.me>"]
 
