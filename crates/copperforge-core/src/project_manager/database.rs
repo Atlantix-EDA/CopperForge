@@ -1,17 +1,32 @@
-use serde::{Serialize, Deserialize};
+//! Project database — embedded KV store backing the CopperForge project list.
+//!
+//! Switched from sled (~40 transitive crates) to redb (~5) for simpler,
+//! lighter storage. Behaviour preserved: one table keyed by
+//! `project:<id>` for full `ProjectData` records plus a single
+//! `index:projects` entry holding the ordered `Vec<String>` of project ids.
+
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
 use chrono::{DateTime, Utc};
+use redb::{Database, TableDefinition};
+use serde::{Deserialize, Serialize};
+
 use crate::project_manager::bom::BomComponent;
 use crate::project_manager::kicad_hierarchy::ProjectHierarchy;
 
+const PROJECTS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("projects");
+const INDEX_KEY: &str = "index:projects";
+
 /// Database manager for project storage.
-/// `Clone` is derived because `sled::Db` is internally Arc-backed — clones
-/// share the same underlying DB handle without re-acquiring the sled
-/// directory lock. This lets `ProjectManagerState` hold its own handle on
-/// the same DB that `SharedServices.project_db` opened at startup.
+///
+/// `Clone` shares the underlying redb handle via `Arc` — safe because
+/// redb serializes writes internally and supports concurrent reads.
+/// This is the reason multiple app-level components (SharedServices +
+/// ProjectManagerState) can each hold their own handle.
 #[derive(Clone)]
 pub struct ProjectDatabase {
-    db: sled::Db,
+    db: Arc<Database>,
 }
 
 /// Old project metadata format (before parent_id was added)
@@ -46,9 +61,8 @@ pub struct ProjectMetadata {
     pub last_modified: DateTime<Utc>,
     pub version: String,
     pub tags: Vec<String>,
-    /// Optional parent project ID for hierarchical organization
-    /// None means this is a root-level project
-    /// Default to None for backward compatibility with old database entries
+    /// Optional parent project ID for hierarchical organization.
+    /// None means this is a root-level project.
     #[serde(default)]
     pub parent_id: Option<String>,
 }
@@ -63,224 +77,226 @@ pub struct ProjectData {
     /// Release workflow. `#[serde(default)]` keeps old DB records readable.
     #[serde(default)]
     pub releases: Vec<crate::release::Release>,
-    /// Hierarchical structure of schematics and PCB files
-    /// Cached for performance, can be regenerated from disk
+    /// Hierarchical structure of schematics and PCB files.
+    /// Cached for performance, regenerable from disk.
     #[serde(skip)]
     pub hierarchy: Option<ProjectHierarchy>,
 }
 
 impl ProjectDatabase {
-    /// Create a new project database
+    /// Open (or create) the redb database at `db_path`. The parent directory
+    /// must exist. Initializes the `projects` table so reads on an empty DB
+    /// don't trip on "table not found".
     pub fn new(db_path: &Path) -> Result<Self, ProjectDatabaseError> {
-        let db = sled::open(db_path)
+        let db = Database::create(db_path)
             .map_err(|e| ProjectDatabaseError::DatabaseOpen(e.to_string()))?;
-        
-        Ok(Self { db })
+
+        // Touch the table on first open so subsequent reads don't error on
+        // a missing table definition.
+        let write_txn = db
+            .begin_write()
+            .map_err(|e| ProjectDatabaseError::DatabaseWrite(e.to_string()))?;
+        {
+            let _ = write_txn
+                .open_table(PROJECTS_TABLE)
+                .map_err(|e| ProjectDatabaseError::DatabaseWrite(e.to_string()))?;
+        }
+        write_txn
+            .commit()
+            .map_err(|e| ProjectDatabaseError::DatabaseWrite(e.to_string()))?;
+
+        Ok(Self { db: Arc::new(db) })
     }
 
-    /// Save a project to the database
+    /// Save a project (serialized via bincode) + update the ID index.
     pub fn save_project(&self, project: &ProjectData) -> Result<(), ProjectDatabaseError> {
         let key = format!("project:{}", project.metadata.id);
         let value = bincode::serialize(project)
             .map_err(|e| ProjectDatabaseError::Serialization(e.to_string()))?;
-        
-        self.db.insert(key.as_bytes(), value)
+
+        let write_txn = self.db.begin_write()
             .map_err(|e| ProjectDatabaseError::DatabaseWrite(e.to_string()))?;
-        
-        // Update index for quick lookups
+        {
+            let mut table = write_txn.open_table(PROJECTS_TABLE)
+                .map_err(|e| ProjectDatabaseError::DatabaseWrite(e.to_string()))?;
+            table.insert(key.as_str(), value.as_slice())
+                .map_err(|e| ProjectDatabaseError::DatabaseWrite(e.to_string()))?;
+        }
+        write_txn.commit()
+            .map_err(|e| ProjectDatabaseError::DatabaseWrite(e.to_string()))?;
+
         self.update_project_index(&project.metadata)?;
-        
         Ok(())
     }
 
-    /// Load a project from the database
+    /// Load a project by ID, transparently migrating pre-parent_id records.
     pub fn load_project(&self, project_id: &str) -> Result<Option<ProjectData>, ProjectDatabaseError> {
         let key = format!("project:{}", project_id);
 
-        if let Some(value) = self.db.get(key.as_bytes())
-            .map_err(|e| ProjectDatabaseError::DatabaseRead(e.to_string()))? {
+        // Copy the bytes out of the read transaction so we can drop it before
+        // save_project() (which starts a write transaction) during migration.
+        let bytes: Option<Vec<u8>> = {
+            let read_txn = self.db.begin_read()
+                .map_err(|e| ProjectDatabaseError::DatabaseRead(e.to_string()))?;
+            let table = read_txn.open_table(PROJECTS_TABLE)
+                .map_err(|e| ProjectDatabaseError::DatabaseRead(e.to_string()))?;
+            match table.get(key.as_str()).map_err(|e| ProjectDatabaseError::DatabaseRead(e.to_string()))? {
+                Some(guard) => Some(guard.value().to_vec()),
+                None => None,
+            }
+        };
 
-            // Try to deserialize with current format
-            match bincode::deserialize::<ProjectData>(&value) {
-                Ok(project) => Ok(Some(project)),
-                Err(_) => {
-                    // Try to deserialize with old format (without parent_id)
-                    match bincode::deserialize::<OldProjectData>(&value) {
-                        Ok(old_project) => {
-                            // Migrate to new format
-                            let new_project = ProjectData {
-                                metadata: ProjectMetadata {
-                                    id: old_project.metadata.id,
-                                    name: old_project.metadata.name,
-                                    description: old_project.metadata.description,
-                                    pcb_file_path: old_project.metadata.pcb_file_path,
-                                    created_at: old_project.metadata.created_at,
-                                    last_modified: old_project.metadata.last_modified,
-                                    version: old_project.metadata.version,
-                                    tags: old_project.metadata.tags,
-                                    parent_id: None, // Default to root level
-                                },
-                                bom_components: old_project.bom_components,
-                                notes: old_project.notes,
-                                releases: Vec::new(),
-                                hierarchy: None, // Will be loaded on demand
-                            };
+        let bytes = match bytes {
+            Some(b) => b,
+            None => return Ok(None),
+        };
 
-                            // Save migrated project back to database
-                            self.save_project(&new_project)?;
-
-                            Ok(Some(new_project))
-                        }
-                        Err(e) => Err(ProjectDatabaseError::Deserialization(e.to_string()))
+        match bincode::deserialize::<ProjectData>(&bytes) {
+            Ok(project) => Ok(Some(project)),
+            Err(_) => {
+                // Try the pre-parent_id format and migrate.
+                match bincode::deserialize::<OldProjectData>(&bytes) {
+                    Ok(old) => {
+                        let migrated = ProjectData {
+                            metadata: ProjectMetadata {
+                                id: old.metadata.id,
+                                name: old.metadata.name,
+                                description: old.metadata.description,
+                                pcb_file_path: old.metadata.pcb_file_path,
+                                created_at: old.metadata.created_at,
+                                last_modified: old.metadata.last_modified,
+                                version: old.metadata.version,
+                                tags: old.metadata.tags,
+                                parent_id: None,
+                            },
+                            bom_components: old.bom_components,
+                            notes: old.notes,
+                            releases: Vec::new(),
+                            hierarchy: None,
+                        };
+                        self.save_project(&migrated)?;
+                        Ok(Some(migrated))
                     }
+                    Err(e) => Err(ProjectDatabaseError::Deserialization(e.to_string())),
                 }
             }
-        } else {
-            Ok(None)
         }
     }
 
-    /// List all projects (metadata only for performance)
+    /// List all project metadata (sorted by last_modified desc).
+    /// Reads the index, then loads each project for its metadata.
+    /// Skips corrupted / missing entries rather than failing the whole list.
     pub fn list_projects(&self) -> Result<Vec<ProjectMetadata>, ProjectDatabaseError> {
-        let mut projects = Vec::new();
+        let ids = self.read_index()?;
+        let mut projects = Vec::with_capacity(ids.len());
 
-        // Use index for efficient listing
-        if let Some(index_data) = self.db.get(b"index:projects")
-            .map_err(|e| ProjectDatabaseError::DatabaseRead(e.to_string()))? {
-
-            let project_ids: Vec<String> = bincode::deserialize(&index_data)
-                .map_err(|e| ProjectDatabaseError::Deserialization(e.to_string()))?;
-
-            for project_id in project_ids {
-                // Skip corrupted projects instead of failing completely
-                match self.load_project(&project_id) {
-                    Ok(Some(project)) => {
-                        // last_modified is the DB record's own timestamp, bumped by
-                        // update_project / update_project_bom. Do NOT overwrite it
-                        // with the PCB file's filesystem mtime — that conflated two
-                        // different things and made created_at appear later than
-                        // last_modified when the PCB file predated the DB record.
-                        projects.push(project.metadata);
-                    }
-                    Ok(None) => {
-                        eprintln!("Warning: Project {} not found in database", project_id);
-                    }
-                    Err(e) => {
-                        eprintln!("Warning: Failed to load project {}: {}. Skipping corrupted entry.", project_id, e);
-                    }
-                }
+        for project_id in ids {
+            match self.load_project(&project_id) {
+                Ok(Some(project)) => projects.push(project.metadata),
+                Ok(None) => eprintln!("Warning: Project {} not found in database", project_id),
+                Err(e) => eprintln!("Warning: Failed to load project {}: {}. Skipping.", project_id, e),
             }
         }
 
-        // Sort by last modified (newest first)
         projects.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
-
         Ok(projects)
     }
 
-    /// Delete a project
     pub fn delete_project(&self, project_id: &str) -> Result<(), ProjectDatabaseError> {
         let key = format!("project:{}", project_id);
-        
-        self.db.remove(key.as_bytes())
+
+        let write_txn = self.db.begin_write()
             .map_err(|e| ProjectDatabaseError::DatabaseWrite(e.to_string()))?;
-        
-        // Remove from index
+        {
+            let mut table = write_txn.open_table(PROJECTS_TABLE)
+                .map_err(|e| ProjectDatabaseError::DatabaseWrite(e.to_string()))?;
+            table.remove(key.as_str())
+                .map_err(|e| ProjectDatabaseError::DatabaseWrite(e.to_string()))?;
+        }
+        write_txn.commit()
+            .map_err(|e| ProjectDatabaseError::DatabaseWrite(e.to_string()))?;
+
         self.remove_from_project_index(project_id)?;
-        
         Ok(())
     }
 
-    /// Search projects by name or description
     pub fn search_projects(&self, query: &str) -> Result<Vec<ProjectMetadata>, ProjectDatabaseError> {
         let all_projects = self.list_projects()?;
-        let query_lower = query.to_lowercase();
-        
-        let filtered: Vec<ProjectMetadata> = all_projects
+        let q = query.to_lowercase();
+        Ok(all_projects
             .into_iter()
-            .filter(|project| {
-                project.name.to_lowercase().contains(&query_lower) ||
-                project.description.to_lowercase().contains(&query_lower) ||
-                project.tags.iter().any(|tag| tag.to_lowercase().contains(&query_lower))
+            .filter(|p| {
+                p.name.to_lowercase().contains(&q)
+                    || p.description.to_lowercase().contains(&q)
+                    || p.tags.iter().any(|t| t.to_lowercase().contains(&q))
             })
-            .collect();
-        
-        Ok(filtered)
+            .collect())
     }
 
-    /// Find project by PCB file path
-    pub fn find_project_by_pcb_path(&self, pcb_path: &std::path::Path) -> Result<Option<ProjectData>, ProjectDatabaseError> {
-        let all_projects = self.list_projects()?;
-        
-        for project_metadata in all_projects {
-            if project_metadata.pcb_file_path == pcb_path {
-                if let Some(project_data) = self.load_project(&project_metadata.id)? {
-                    return Ok(Some(project_data));
+    pub fn find_project_by_pcb_path(&self, pcb_path: &Path) -> Result<Option<ProjectData>, ProjectDatabaseError> {
+        for meta in self.list_projects()? {
+            if meta.pcb_file_path == pcb_path {
+                if let Some(data) = self.load_project(&meta.id)? {
+                    return Ok(Some(data));
                 }
             }
         }
-        
         Ok(None)
     }
 
-    /// Update project index for quick listings
-    fn update_project_index(&self, metadata: &ProjectMetadata) -> Result<(), ProjectDatabaseError> {
-        let mut project_ids: Vec<String> = if let Some(index_data) = self.db.get(b"index:projects")
-            .map_err(|e| ProjectDatabaseError::DatabaseRead(e.to_string()))? {
-            
-            bincode::deserialize(&index_data)
-                .map_err(|e| ProjectDatabaseError::Deserialization(e.to_string()))?
-        } else {
-            Vec::new()
-        };
-        
-        // Add project ID if not already present
-        if !project_ids.contains(&metadata.id) {
-            project_ids.push(metadata.id.clone());
-        }
-        
-        let index_data = bincode::serialize(&project_ids)
-            .map_err(|e| ProjectDatabaseError::Serialization(e.to_string()))?;
-        
-        self.db.insert(b"index:projects", index_data)
-            .map_err(|e| ProjectDatabaseError::DatabaseWrite(e.to_string()))?;
-        
-        Ok(())
-    }
-
-    /// Remove project from index
-    fn remove_from_project_index(&self, project_id: &str) -> Result<(), ProjectDatabaseError> {
-        if let Some(index_data) = self.db.get(b"index:projects")
-            .map_err(|e| ProjectDatabaseError::DatabaseRead(e.to_string()))? {
-            
-            let mut project_ids: Vec<String> = bincode::deserialize(&index_data)
-                .map_err(|e| ProjectDatabaseError::Deserialization(e.to_string()))?;
-            
-            project_ids.retain(|id| id != project_id);
-            
-            let index_data = bincode::serialize(&project_ids)
-                .map_err(|e| ProjectDatabaseError::Serialization(e.to_string()))?;
-            
-            self.db.insert(b"index:projects", index_data)
-                .map_err(|e| ProjectDatabaseError::DatabaseWrite(e.to_string()))?;
-        }
-        
-        Ok(())
-    }
-
-    /// Get database statistics
     pub fn get_stats(&self) -> Result<DatabaseStats, ProjectDatabaseError> {
         let projects = self.list_projects()?;
-        let total_projects = projects.len();
-        
-        let size_on_disk = self.db.size_on_disk()
-            .map_err(|e| ProjectDatabaseError::DatabaseRead(e.to_string()))?;
-        
         Ok(DatabaseStats {
-            total_projects,
-            size_on_disk,
+            total_projects: projects.len(),
+            // redb doesn't expose an exact on-disk size cheaply; report 0
+            // (this field isn't surfaced in the UI today anyway).
+            size_on_disk: 0,
             last_accessed: Utc::now(),
         })
+    }
+
+    // ── internals ────────────────────────────────────────────────────
+
+    fn read_index(&self) -> Result<Vec<String>, ProjectDatabaseError> {
+        let read_txn = self.db.begin_read()
+            .map_err(|e| ProjectDatabaseError::DatabaseRead(e.to_string()))?;
+        let table = read_txn.open_table(PROJECTS_TABLE)
+            .map_err(|e| ProjectDatabaseError::DatabaseRead(e.to_string()))?;
+        match table.get(INDEX_KEY).map_err(|e| ProjectDatabaseError::DatabaseRead(e.to_string()))? {
+            Some(guard) => bincode::deserialize(guard.value())
+                .map_err(|e| ProjectDatabaseError::Deserialization(e.to_string())),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    fn write_index(&self, ids: &[String]) -> Result<(), ProjectDatabaseError> {
+        let bytes = bincode::serialize(ids)
+            .map_err(|e| ProjectDatabaseError::Serialization(e.to_string()))?;
+        let write_txn = self.db.begin_write()
+            .map_err(|e| ProjectDatabaseError::DatabaseWrite(e.to_string()))?;
+        {
+            let mut table = write_txn.open_table(PROJECTS_TABLE)
+                .map_err(|e| ProjectDatabaseError::DatabaseWrite(e.to_string()))?;
+            table.insert(INDEX_KEY, bytes.as_slice())
+                .map_err(|e| ProjectDatabaseError::DatabaseWrite(e.to_string()))?;
+        }
+        write_txn.commit()
+            .map_err(|e| ProjectDatabaseError::DatabaseWrite(e.to_string()))?;
+        Ok(())
+    }
+
+    fn update_project_index(&self, metadata: &ProjectMetadata) -> Result<(), ProjectDatabaseError> {
+        let mut ids = self.read_index()?;
+        if !ids.contains(&metadata.id) {
+            ids.push(metadata.id.clone());
+        }
+        self.write_index(&ids)
+    }
+
+    fn remove_from_project_index(&self, project_id: &str) -> Result<(), ProjectDatabaseError> {
+        let mut ids = self.read_index()?;
+        ids.retain(|id| id != project_id);
+        self.write_index(&ids)
     }
 }
 
@@ -297,16 +313,16 @@ pub struct DatabaseStats {
 pub enum ProjectDatabaseError {
     #[error("Failed to open database: {0}")]
     DatabaseOpen(String),
-    
+
     #[error("Failed to read from database: {0}")]
     DatabaseRead(String),
-    
+
     #[error("Failed to write to database: {0}")]
     DatabaseWrite(String),
-    
+
     #[error("Failed to serialize data: {0}")]
     Serialization(String),
-    
+
     #[error("Failed to deserialize data: {0}")]
     Deserialization(String),
 }
@@ -318,23 +334,20 @@ pub fn generate_project_id() -> String {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis();
-
     format!("proj_{}", timestamp)
 }
 
 impl ProjectData {
-    /// Load the project hierarchy from the KiCad project file
-    /// This parses the .kicad_pro file and associated schematics
+    /// Load the project hierarchy from the KiCad project file.
+    /// Parses the .kicad_pro file and associated schematics.
     pub fn load_hierarchy(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         use crate::project_manager::kicad_metadata::get_kicad_pro_path;
 
-        // Get the .kicad_pro path from the PCB path
         if let Some(kicad_pro_path) = get_kicad_pro_path(&self.metadata.pcb_file_path) {
             if kicad_pro_path.exists() {
                 self.hierarchy = Some(ProjectHierarchy::from_kicad_pro(&kicad_pro_path)?);
             }
         }
-
         Ok(())
     }
 }

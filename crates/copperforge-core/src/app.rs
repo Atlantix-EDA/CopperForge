@@ -187,7 +187,11 @@ impl CopperForgeApp {
         let (kicad_version, kicad_cli_method) = Self::probe_kicad_cli();
 
         // ── Stage 3: InitializeDb ────────────────────────────────
-        let db_path = config_path.join("projects.db");
+        // Filename changed from "projects.db" (sled dir) to "projects.redb"
+        // (single redb file) as part of the sled→redb swap. Old sled data
+        // at ~/.config/copperforge/projects.db/ is left in place and
+        // harmless; manual deletion reclaims disk space.
+        let db_path = config_path.join("projects.redb");
         let project_db = match crate::project_manager::database::ProjectDatabase::new(&db_path) {
             Ok(db) => db,
             Err(e) => panic_init(
@@ -197,7 +201,7 @@ impl CopperForgeApp {
                     &format!("Failed to open sled DB at {}", db_path.display()),
                     "Another CopperForge process may be holding a lock — close it.",
                     "Or the database is corrupted — delete the directory and restart:",
-                    "  rm -rf ~/.config/copperforge/projects.db",
+                    "  rm ~/.config/copperforge/projects.redb",
                 ],
             ),
         };

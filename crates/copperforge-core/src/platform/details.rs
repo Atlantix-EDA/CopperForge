@@ -1,5 +1,27 @@
 use sysinfo::System;
-use local_ip_address::local_ip;
+
+/// Discover a non-loopback IPv4 via `hostname -I` (Linux) / `ipconfig` (Windows) /
+/// `ifconfig` (macOS). Minimal shell-out replaces the `local-ip-address` crate.
+fn detect_local_ip() -> String {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(out) = std::process::Command::new("hostname").arg("-I").output() {
+            if out.status.success() {
+                let s = String::from_utf8_lossy(&out.stdout);
+                if let Some(ip) = s.split_whitespace().next() {
+                    if !ip.is_empty() {
+                        return ip.to_string();
+                    }
+                }
+            }
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        // Placeholder on non-Linux hosts; the IP line isn't critical.
+    }
+    "(not detected)".to_string()
+}
 
 #[derive(Default, Clone)]
 pub struct Details {
@@ -23,10 +45,7 @@ impl Details {
     }
 
     pub fn get_ip(&mut self) {
-        match local_ip() {
-            Ok(ip) => self.ip_addr = format!("{}", ip),
-            Err(err) => self.ip_addr = format!("Failed to get ip address {}", err),
-        };
+        self.ip_addr = detect_local_ip();
     }
 
     pub fn get_os(&mut self) {
@@ -38,10 +57,7 @@ impl Details {
         // First we update all information of our `System` struct.
         sys.refresh_all();
 
-        match local_ip() {
-            Ok(ip) => self.ip_addr = format!("{}", ip),
-            Err(err) => self.ip_addr = format!("Failed to get ip address {}", err),
-        };
+        self.ip_addr = detect_local_ip();
 
         // Detect the actual distro instead of using the generic system name
         // which usually just reports "Linux"

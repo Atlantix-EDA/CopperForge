@@ -32,12 +32,25 @@ authors = ["James Bonanno <atlantix-eda@proton.me>"]
 
 [workspace.dependencies]
 egui = "0.33"
-eframe = "0.33"
+# eframe features: disable `accesskit` (~10 direct + ~30 transitive crates:
+# accesskit_*, atspi, zbus, zvariant — screen-reader plumbing CopperForge
+# doesn't target). Keep glow (default OpenGL backend), default_fonts, the
+# Linux display servers (wayland + x11), and winit defaults.
+eframe = { version = "0.33", default-features = false, features = [
+    "default_fonts",
+    "glow",
+    "wayland",
+    "x11",
+] }
 egui-file-dialog = "0.12.0"
 
 # Image and graphics handling
 egui_extras = { version = "0.33", features = ["image"] } # For image loading and other utilities
-image = "0.24" # For image loading
+# Only PNG decoding/encoding is needed — quadrant export writes PNG, About
+# panel loads a PNG logo. Narrowing default-features off cuts JPEG/GIF/TIFF/
+# BMP/ICO/WebP decoders (~25 transitive crates). Bumped to 0.25 to match
+# the version egui_extras-0.33 resolves to internally so cargo unifies.
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 # Gerber and PCB handling
 gerber_viewer = "0.5.0"
@@ -63,15 +76,14 @@ serde_json = "1.0"
 sysinfo = "0.35.1"
 chrono = { version = "0.4.41", features = ["serde"] }
 chrono-tz = "0.10"
-local-ip-address = "0.6.5"
 egui_dock = {version = "0.18.0", features=["serde"]}
 
 regex = "1.10"
 once_cell = "1.19"
 
 
-# Project database
-sled = "0.34"
+# Project database (embedded pure-Rust KV store)
+redb = "2.2"
 bincode = "1.3"
 thiserror = "1.0"
 
