@@ -28,8 +28,7 @@ pub enum TabKind {
     Logger,
     Terminal,
     Shell,
-    Project,
-    Projects,  // Project database spreadsheet
+    Projects,  // Project database + tree + Import modal (replaced old Project tab)
     Settings,
     BOM,
 }
@@ -44,7 +43,6 @@ impl TabKind {
             TabKind::Logger => CitizenId::new("logger"),
             TabKind::Terminal => CitizenId::new("terminal"),
             TabKind::Shell => CitizenId::new("shell"),
-            TabKind::Project => CitizenId::new("project"),
             TabKind::Projects => CitizenId::new("projects"),
             TabKind::Settings => CitizenId::new("settings"),
             TabKind::BOM => CitizenId::new("bom"),
@@ -90,7 +88,6 @@ impl Tab {
             TabKind::Logger => "Logger".to_string(),
             TabKind::Terminal => "Terminal".to_string(),
             TabKind::Shell => "Shell".to_string(),
-            TabKind::Project => "Project".to_string(),
             TabKind::Projects => "Projects".to_string(),
             TabKind::Settings => "Settings".to_string(),
             TabKind::BOM => "BOM".to_string(),
@@ -129,10 +126,6 @@ impl Tab {
             }
             TabKind::Shell => {
                 params.app.shell_panel.show(ui, &mut params.app.services);
-            }
-            TabKind::Project => {
-                ProjectPanel::new(egui_citizen::CitizenState::default())
-                    .show(ui, params.app);
             }
             TabKind::Projects => {
                 ProjectsPanel::new(egui_citizen::CitizenState::default())

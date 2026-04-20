@@ -60,6 +60,25 @@ pub struct CopperForgeApp {
     // ── Modal states (UI ephemeral) ─────────────────────────────
     pub release_modal: Option<ReleaseModalState>,
     pub project_edit_modal: Option<ProjectEditModalState>,
+    pub project_import_modal: Option<ProjectImportModalState>,
+    /// File dialog used exclusively by the Project Import modal (kept on the
+    /// app so state survives across frames while the dialog is open).
+    pub project_import_dialog: egui_file_dialog::FileDialog,
+    pub project_import_last_picked: Option<std::path::PathBuf>,
+}
+
+/// Form state for the Project Import modal (opened from the Projects tab's
+/// top-bar "Import KiCad Project" button).
+pub struct ProjectImportModalState {
+    pub pcb_file_path: Option<std::path::PathBuf>, // derived .kicad_pcb
+    pub name: String,
+    pub description: String,
+    pub tags: String,
+    /// Read-only, auto-populated from .kicad_pro metadata.
+    pub author: Option<String>,
+    pub company: Option<String>,
+    pub missing_pedigree: Vec<&'static str>,
+    pub error: Option<String>,
 }
 
 /// Form state for the Project Edit modal (opened from the Projects tab via
@@ -187,9 +206,9 @@ impl CopperForgeApp {
         let (kicad_version, kicad_cli_method) = Self::probe_kicad_cli();
 
         // ── Stage 3: InitializeDb ────────────────────────────────
-        // Filename changed from "projects.db" (sled dir) to "projects.redb"
-        // (single redb file) as part of the sled→redb swap. Old sled data
-        // at ~/.config/copperforge/projects.db/ is left in place and
+        // Single-file redb DB; requires exclusive file-level lock so only one
+        // CopperForge instance can run at a time. Old sled directory at
+        // ~/.config/copperforge/projects.db/ (if present from pre-0.4.0) is
         // harmless; manual deletion reclaims disk space.
         let db_path = config_path.join("projects.redb");
         let project_db = match crate::project_manager::database::ProjectDatabase::new(&db_path) {
@@ -198,9 +217,12 @@ impl CopperForgeApp {
                 "InitializeDb",
                 e,
                 &[
-                    &format!("Failed to open sled DB at {}", db_path.display()),
-                    "Another CopperForge process may be holding a lock — close it.",
-                    "Or the database is corrupted — delete the directory and restart:",
+                    &format!("Failed to open redb database at {}", db_path.display()),
+                    "Another CopperForge process is holding a lock on the file.",
+                    "  pgrep copperforge       (find running instances)",
+                    "  pkill copperforge       (kill them)",
+                    "Or if no other instance is running (prior crash left a stale lock),",
+                    "delete the file and restart — any imported projects will need re-importing:",
                     "  rm ~/.config/copperforge/projects.redb",
                 ],
             ),
@@ -261,7 +283,7 @@ impl CopperForgeApp {
         let mut dispatcher = egui_citizen::Dispatcher::new();
         use egui_citizen::message::CitizenId;
         for id in [
-            "gerber_view", "view_settings", "drc", "project", "projects",
+            "gerber_view", "view_settings", "drc", "projects",
             "settings", "bom",
             "shell", "terminal", "logger",
         ] {
@@ -288,6 +310,9 @@ impl CopperForgeApp {
             project_manager_state: None,
             release_modal: None,
             project_edit_modal: None,
+            project_import_modal: None,
+            project_import_dialog: egui_file_dialog::FileDialog::new(),
+            project_import_last_picked: None,
         };
 
         let logger = ReactiveEventLogger::with_colors(&app.services.logger_state, &app.services.log_colors);
@@ -662,26 +687,26 @@ impl CopperForgeApp {
         let drc_tab = Tab::new(TabKind::DRC, SurfaceIndex::main(), NodeIndex(1));
         let view_settings_tab = Tab::new(TabKind::ViewSettings, SurfaceIndex::main(), NodeIndex(2));
 
-        let project_tab = Tab::new(TabKind::Project, SurfaceIndex::main(), NodeIndex(3));
-        let settings_tab = Tab::new(TabKind::Settings, SurfaceIndex::main(), NodeIndex(5));
+        let settings_tab = Tab::new(TabKind::Settings, SurfaceIndex::main(), NodeIndex(3));
+        let projects_tab = Tab::new(TabKind::Projects, SurfaceIndex::main(), NodeIndex(4));
 
-        let projects_tab = Tab::new(TabKind::Projects, SurfaceIndex::main(), NodeIndex(6));
-
-        let logger_tab = Tab::new(TabKind::Logger, SurfaceIndex::main(), NodeIndex(7));
-        let terminal_tab = Tab::new(TabKind::Terminal, SurfaceIndex::main(), NodeIndex(8));
-        let shell_tab = Tab::new(TabKind::Shell, SurfaceIndex::main(), NodeIndex(9));
-        let bom_tab = Tab::new(TabKind::BOM, SurfaceIndex::main(), NodeIndex(10));
+        let logger_tab = Tab::new(TabKind::Logger, SurfaceIndex::main(), NodeIndex(5));
+        let terminal_tab = Tab::new(TabKind::Terminal, SurfaceIndex::main(), NodeIndex(6));
+        let shell_tab = Tab::new(TabKind::Shell, SurfaceIndex::main(), NodeIndex(7));
+        let bom_tab = Tab::new(TabKind::BOM, SurfaceIndex::main(), NodeIndex(8));
 
         let mut dock_state = DockState::new(vec![gerber_tab]);
         let surface = dock_state.main_surface_mut();
 
+        // Projects + Settings share the left column top; there's no separate
+        // "Project" tab anymore — Import is a button inside the Projects tab.
         let [left, right] = surface.split_left(
             NodeIndex::root(),
             0.3,
-            vec![project_tab, settings_tab],
+            vec![projects_tab, settings_tab],
         );
 
-        surface.split_below(left, 0.7, vec![projects_tab]);
+        let _ = left; // no bottom split; Projects already uses the full left.
         surface.split_below(right, 0.5, vec![logger_tab, terminal_tab, shell_tab, bom_tab]);
         surface.split_right(right, 0.5, vec![drc_tab, view_settings_tab]);
         dock_state
@@ -975,6 +1000,8 @@ impl eframe::App for CopperForgeApp {
         self.handle_project_edit_open(ctx);
         self.show_project_edit_modal(ctx);
         self.handle_release_open_intent(ctx);
+        self.handle_project_import_open(ctx);
+        self.show_project_import_modal(ctx);
 
         if ctx.input(|i| i.time) % 30.0 < 0.1 {
             self.save_dock_state();
@@ -1462,6 +1489,244 @@ impl CopperForgeApp {
         match std::process::Command::new(opener).arg(rev_dir).spawn() {
             Ok(_) => logger.log_info(&format!("Opened release folder: {}", rev_dir.display())),
             Err(e) => logger.log_error(&format!("Failed to open {}: {}", rev_dir.display(), e)),
+        }
+    }
+
+    // ─── Project Import modal ──────────────────────────────────────
+
+    /// Pick up the "open_project_import_modal" memory key set by the
+    /// Projects tab's Import button click, and seed a fresh modal.
+    fn handle_project_import_open(&mut self, ctx: &egui::Context) {
+        let fire = ctx.memory(|mem| {
+            mem.data.get_temp::<bool>(egui::Id::new("open_project_import_modal")).unwrap_or(false)
+        });
+        if !fire { return; }
+        ctx.memory_mut(|mem| {
+            mem.data.remove::<bool>(egui::Id::new("open_project_import_modal"));
+        });
+        self.project_import_modal = Some(ProjectImportModalState {
+            pcb_file_path: None,
+            name: String::new(),
+            description: String::new(),
+            tags: String::new(),
+            author: None,
+            company: None,
+            missing_pedigree: Vec::new(),
+            error: None,
+        });
+        self.project_import_last_picked = None;
+    }
+
+    fn show_project_import_modal(&mut self, ctx: &egui::Context) {
+        if self.project_import_modal.is_none() { return; }
+
+        // Poll the file dialog first so auto-population runs this frame.
+        if let Some(pro_path) = self.project_import_dialog.update(ctx).picked() {
+            let pro_path = pro_path.to_path_buf();
+            if self.project_import_last_picked.as_ref() != Some(&pro_path) {
+                self.project_import_last_picked = Some(pro_path.clone());
+                if let Some(ref mut m) = self.project_import_modal {
+                    m.pcb_file_path = Some(pro_path.with_extension("kicad_pcb"));
+
+                    // Auto-fill pedigree.
+                    let mut missing: Vec<&'static str> = Vec::new();
+                    match crate::project_manager::kicad_metadata::read_kicad_metadata(&pro_path) {
+                        Ok(meta) => {
+                            if meta.author.is_none() { missing.push("Author"); }
+                            if meta.company.is_none() { missing.push("Company"); }
+                            m.author = meta.author;
+                            m.company = meta.company;
+                            if let Some(desc) = meta.description {
+                                if m.description.is_empty() { m.description = desc; }
+                            }
+                        }
+                        Err(_) => {
+                            missing.push("Author");
+                            missing.push("Company");
+                        }
+                    }
+                    if m.name.is_empty() {
+                        if let Some(stem) = pro_path.file_stem() {
+                            m.name = stem.to_string_lossy().into_owned();
+                        }
+                    }
+                    m.missing_pedigree = missing;
+                    m.error = None;
+                }
+            }
+        }
+
+        let mut close = false;
+        let mut trigger_import = false;
+
+        egui::Window::new("📥 Import KiCad Project")
+            .collapsible(false)
+            .resizable(true)
+            .default_size(egui::vec2(560.0, 480.0))
+            .default_pos(egui::pos2(
+                ctx.content_rect().center().x - 280.0,
+                ctx.content_rect().center().y - 240.0,
+            ))
+            .show(ctx, |ui| {
+                let modal = self.project_import_modal.as_mut().unwrap();
+
+                // File picker row
+                ui.horizontal(|ui| {
+                    ui.label("KiCad Project File (.kicad_pro):");
+                    if ui.button("Browse...").clicked() {
+                        use std::sync::Arc;
+                        use std::mem;
+                        use egui_file_dialog::FileDialog;
+                        let dialog = mem::replace(&mut self.project_import_dialog, FileDialog::new());
+                        let mut dialog = dialog
+                            .add_file_filter("KiCad Project", Arc::new(|path: &std::path::Path| {
+                                path.extension().and_then(|e| e.to_str()).map(|e| e == "kicad_pro").unwrap_or(false)
+                            }))
+                            .default_file_filter("KiCad Project");
+                        if let Some(ref dir) = self.services.config.preferred_projects_directory {
+                            dialog = dialog.initial_directory(dir.clone());
+                        }
+                        self.project_import_dialog = dialog;
+                        self.project_import_dialog.pick_file();
+                    }
+                });
+
+                let picked_label = modal.pcb_file_path.as_ref()
+                    .map(|p| p.with_extension("kicad_pro").file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "Unknown file".into()))
+                    .unwrap_or_else(|| "No KiCad project file selected".into());
+                ui.label(egui::RichText::new(&picked_label).small().monospace());
+
+                ui.add_space(10.0);
+
+                // Pedigree (read-only)
+                egui::Grid::new("import_pedigree_grid")
+                    .num_columns(2)
+                    .spacing([12.0, 6.0])
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new("Author:").strong());
+                        ui.label(modal.author.as_deref().unwrap_or("(not set in .kicad_pro)"));
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("Company:").strong());
+                        ui.label(modal.company.as_deref().unwrap_or("(not set in .kicad_pro)"));
+                        ui.end_row();
+                    });
+
+                if !modal.missing_pedigree.is_empty() {
+                    ui.add_space(4.0);
+                    ui.colored_label(
+                        egui::Color32::from_rgb(230, 200, 120),
+                        format!("⚠ Missing: {} — set in KiCad → Project Properties.", modal.missing_pedigree.join(", "))
+                    );
+                }
+
+                ui.add_space(10.0);
+                ui.label(egui::RichText::new("Editable fields").strong());
+                egui::Grid::new("import_edit_grid")
+                    .num_columns(2)
+                    .spacing([12.0, 6.0])
+                    .show(ui, |ui| {
+                        ui.label("Name:");
+                        ui.text_edit_singleline(&mut modal.name);
+                        ui.end_row();
+                        ui.label("Tags:");
+                        ui.text_edit_singleline(&mut modal.tags);
+                        ui.end_row();
+                    });
+
+                ui.add_space(6.0);
+                ui.label("Description:");
+                ui.add(egui::TextEdit::multiline(&mut modal.description)
+                    .desired_width(f32::INFINITY)
+                    .desired_rows(4));
+
+                if let Some(ref err) = modal.error {
+                    ui.add_space(6.0);
+                    ui.colored_label(egui::Color32::from_rgb(245, 120, 140), err);
+                }
+
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    if ui.button("📥 Import").clicked() { trigger_import = true; }
+                    if ui.button("Cancel").clicked() { close = true; }
+                });
+            });
+
+        if trigger_import {
+            self.execute_project_import();
+        }
+        if close {
+            self.project_import_modal = None;
+            self.project_import_last_picked = None;
+        }
+    }
+
+    fn execute_project_import(&mut self) {
+        let (pcb_path, name, description, tags_str) = match self.project_import_modal.as_ref() {
+            Some(m) => (m.pcb_file_path.clone(), m.name.clone(), m.description.clone(), m.tags.clone()),
+            None => return,
+        };
+        if name.trim().is_empty() {
+            if let Some(ref mut m) = self.project_import_modal {
+                m.error = Some("Name cannot be empty".into());
+            }
+            return;
+        }
+        let pcb_path = match pcb_path {
+            Some(p) => p,
+            None => {
+                if let Some(ref mut m) = self.project_import_modal {
+                    m.error = Some("Pick a .kicad_pro file first".into());
+                }
+                return;
+            }
+        };
+        let tags: Vec<String> = tags_str
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        let logger_state = self.services.logger_state.clone();
+        let log_colors = self.services.log_colors.clone();
+        let logger = ReactiveEventLogger::with_colors(&logger_state, &log_colors);
+
+        let bom_components: Vec<crate::project_manager::bom::BomComponent> =
+            if let Some(ref bom_state) = self.bom_panel.state {
+                bom_state.entries.iter().cloned().map(Into::into).collect()
+            } else {
+                Vec::new()
+            };
+
+        // Ensure ProjectManagerState is initialized so create_project can persist.
+        if self.project_manager_state.is_none() {
+            let mut state = project_manager::ProjectManagerState::with_config(&self.services.config);
+            if let Err(e) = state.initialize_database(&self.services.project_db) {
+                logger.log_error(&format!("Failed to initialize project database: {}", e));
+            }
+            self.project_manager_state = Some(state);
+        }
+
+        let result = self.project_manager_state.as_mut().unwrap().create_project(
+            name.clone(),
+            description,
+            pcb_path,
+            tags,
+            bom_components,
+        );
+        match result {
+            Ok(id) => {
+                logger.log_info(&format!("Imported project: {} (ID: {})", name, id));
+                self.project_import_modal = None;
+                self.project_import_last_picked = None;
+            }
+            Err(e) => {
+                if let Some(ref mut m) = self.project_import_modal {
+                    m.error = Some(format!("Import failed: {}", e));
+                }
+            }
         }
     }
 }
