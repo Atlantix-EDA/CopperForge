@@ -10,6 +10,12 @@ pub enum LayerType {
     Soldermask(Side),
     Paste(Side),
     MechanicalOutline,
+    /// Drill holes exported by `kicad-cli pcb export drill --format gerber`.
+    /// Visible from both top and bottom; always drawn on top of copper.
+    Drill,
+    /// KiCad 10 via-plugging layers (via filling / tenting). Side-specific,
+    /// exported as `<project>-plugging-front.gbr` / `...-back.gbr`.
+    ViaPlugging(Side),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -32,6 +38,8 @@ impl LayerType {
             Self::Soldermask(Side::Top), Self::Soldermask(Side::Bottom),
             Self::Paste(Side::Top), Self::Paste(Side::Bottom),
             Self::MechanicalOutline,
+            Self::Drill,
+            Self::ViaPlugging(Side::Top), Self::ViaPlugging(Side::Bottom),
         ]
     }
 
@@ -42,6 +50,8 @@ impl LayerType {
             Self::Soldermask(Side::Top), Self::Soldermask(Side::Bottom),
             Self::Paste(Side::Top), Self::Paste(Side::Bottom),
             Self::MechanicalOutline,
+            Self::Drill,
+            Self::ViaPlugging(Side::Top), Self::ViaPlugging(Side::Bottom),
         ]
     }
 
@@ -52,6 +62,8 @@ impl LayerType {
             Self::Soldermask(Side::Top), Self::Soldermask(Side::Bottom),
             Self::Paste(Side::Top), Self::Paste(Side::Bottom),
             Self::MechanicalOutline,
+            Self::Drill,
+            Self::ViaPlugging(Side::Top), Self::ViaPlugging(Side::Bottom),
         ]);
         layers
     }
@@ -70,6 +82,9 @@ impl LayerType {
             Self::Paste(Side::Top) => "Top Paste".into(),
             Self::Paste(Side::Bottom) => "Bottom Paste".into(),
             Self::MechanicalOutline => "Mechanical Outline".into(),
+            Self::Drill => "Drill Holes".into(),
+            Self::ViaPlugging(Side::Top) => "Top Via Plugging".into(),
+            Self::ViaPlugging(Side::Bottom) => "Bottom Via Plugging".into(),
         }
     }
 
@@ -97,6 +112,11 @@ impl LayerType {
             Self::Paste(Side::Top) => Color32::from_rgba_premultiplied(192, 192, 192, 200),
             Self::Paste(Side::Bottom) => Color32::from_rgba_premultiplied(128, 128, 128, 200),
             Self::MechanicalOutline => Color32::from_rgba_premultiplied(255, 255, 0, 250),
+            // Drill holes drawn nearly opaque dark to punch through copper.
+            Self::Drill => Color32::from_rgba_premultiplied(20, 20, 20, 240),
+            // Via plugging — muted cyan/magenta to distinguish top/bottom.
+            Self::ViaPlugging(Side::Top) => Color32::from_rgba_premultiplied(0, 180, 200, 160),
+            Self::ViaPlugging(Side::Bottom) => Color32::from_rgba_premultiplied(200, 0, 180, 160),
         }
     }
 
@@ -107,6 +127,10 @@ impl LayerType {
             Self::Silkscreen(Side::Top) | Self::Soldermask(Side::Top) | Self::Paste(Side::Top) => showing_top,
             Self::Silkscreen(Side::Bottom) | Self::Soldermask(Side::Bottom) | Self::Paste(Side::Bottom) => !showing_top,
             Self::MechanicalOutline => true,
+            // Holes punch through the board — always visible from either side.
+            Self::Drill => true,
+            Self::ViaPlugging(Side::Top) => showing_top,
+            Self::ViaPlugging(Side::Bottom) => !showing_top,
         }
     }
 
@@ -114,13 +138,23 @@ impl LayerType {
     pub fn copper_layer_number(&self) -> Option<u8> { match self { Self::Copper(n) => Some(*n), _ => None } }
 
     pub fn is_top(&self) -> bool {
-        matches!(self, Self::Copper(1) | Self::Silkscreen(Side::Top) | Self::Soldermask(Side::Top) | Self::Paste(Side::Top))
+        matches!(
+            self,
+            Self::Copper(1)
+                | Self::Silkscreen(Side::Top)
+                | Self::Soldermask(Side::Top)
+                | Self::Paste(Side::Top)
+                | Self::ViaPlugging(Side::Top)
+        )
     }
 
     pub fn is_bottom(&self, total_copper: u8) -> bool {
         match self {
             Self::Copper(n) => *n == total_copper,
-            Self::Silkscreen(Side::Bottom) | Self::Soldermask(Side::Bottom) | Self::Paste(Side::Bottom) => true,
+            Self::Silkscreen(Side::Bottom)
+            | Self::Soldermask(Side::Bottom)
+            | Self::Paste(Side::Bottom)
+            | Self::ViaPlugging(Side::Bottom) => true,
             _ => false,
         }
     }

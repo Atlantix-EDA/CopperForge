@@ -188,6 +188,12 @@ impl DisplayManager {
             // Mechanical outline should not be displayed in quadrant view
             // (it will be rendered separately with each layer)
             LayerType::MechanicalOutline => 0.0,
+
+            // Drill stays co-located with the board; holes overlay the main view.
+            LayerType::Drill => 0.0,
+
+            // Via plugging — park off-screen in quadrant view (stencil-like).
+            LayerType::ViaPlugging(_) => -9999.0,
         };
         
         VectorOffset {

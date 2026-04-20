@@ -215,16 +215,13 @@ fn render_pcb_workflow_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
     // Generate: explicit. Disabled if no PCB is selected.
     if ui.add_enabled(has_pcb, egui::Button::new("⚙ Generate Gerbers")).clicked() {
         if let Some(pcb_path) = app.services.project_state.get().pcb_path().map(|p| p.to_path_buf()) {
-            let Some(cli) = app.kicad_cli_command() else {
+            let Some(method) = app.services.kicad_cli_method.clone() else {
                 logger.log_error("kicad-cli not found (checked PATH, Flatpak, and Snap at startup)");
                 return;
             };
-            logger.log_info(&format!(
-                "Generating gerbers via kicad-cli ({})…",
-                app.services.kicad_cli_method.as_deref().unwrap_or("?")
-            ));
+            logger.log_info(&format!("Generating gerbers + drill via kicad-cli ({})…", method));
             app.services.project_state.set(ProjectState::GeneratingGerbers { pcb_path: pcb_path.clone() });
-            if let Some(output_dir) = gerber_ops::generate_gerbers_from_pcb(&pcb_path, cli, &logger) {
+            if let Some(output_dir) = gerber_ops::generate_gerbers_from_pcb(&pcb_path, &method, &logger) {
                 app.services.project_state.set(ProjectState::GerbersGenerated { pcb_path, gerber_dir: output_dir });
             } else {
                 app.services.project_state.set(ProjectState::PcbSelected { pcb_path });
@@ -412,22 +409,21 @@ fn render_layer_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
         use crate::layer_store::{LayerType, Side};
         for layer_type in LayerType::all() {
             let visible = match layer_type {
-                LayerType::Copper(1) |
-                LayerType::Silkscreen(Side::Top) |
-                LayerType::Soldermask(Side::Top) |
-                LayerType::Paste(Side::Top) => {
+                LayerType::Copper(1)
+                | LayerType::Silkscreen(Side::Top)
+                | LayerType::Soldermask(Side::Top)
+                | LayerType::Paste(Side::Top)
+                | LayerType::ViaPlugging(Side::Top) => {
                     app.services.display_manager.showing_top
-                },
-                LayerType::Copper(_) => {
+                }
+                LayerType::Copper(_) => !app.services.display_manager.showing_top,
+                LayerType::Silkscreen(Side::Bottom)
+                | LayerType::Soldermask(Side::Bottom)
+                | LayerType::Paste(Side::Bottom)
+                | LayerType::ViaPlugging(Side::Bottom) => {
                     !app.services.display_manager.showing_top
-                },
-                LayerType::Silkscreen(Side::Bottom) |
-                LayerType::Soldermask(Side::Bottom) |
-                LayerType::Paste(Side::Bottom) => {
-                    !app.services.display_manager.showing_top
-                },
-                LayerType::MechanicalOutline => {
-                    // Leave outline visibility unchanged
+                }
+                LayerType::MechanicalOutline | LayerType::Drill => {
                     app.services.layer_store.get_visibility(layer_type)
                 }
             };

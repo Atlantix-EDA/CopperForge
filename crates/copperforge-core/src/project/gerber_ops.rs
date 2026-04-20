@@ -8,13 +8,17 @@ use std::path::{Path, PathBuf};
 use crate::event_logger::ReactiveEventLogger;
 use crate::CopperForgeApp;
 
-/// Invoke `kicad-cli pcb export gerbers` on `pcb_path`, writing output to a
-/// `gerber_output/` directory next to the PCB file. Returns the output
-/// directory on success. The caller supplies a pre-built `kicad-cli` Command
-/// (see `CopperForgeApp::kicad_cli_command`) so we don't re-probe the sandbox.
+/// Invoke `kicad-cli pcb export gerbers` (main copper/silk/mask/paste/edge-cuts),
+/// then a second pass `kicad-cli pcb export drill --format gerber` so the drill
+/// holes show up as a regular gerber layer in the 2D viewer. Output lands in a
+/// single `gerber_output/` directory next to the PCB file.
+///
+/// Returns the output directory on success. The caller supplies the discovered
+/// kicad-cli `method` string ("path" / "flatpak" / "snap") so we can build two
+/// Commands without re-probing the sandbox.
 pub fn generate_gerbers_from_pcb(
     pcb_path: &Path,
-    mut cmd: std::process::Command,
+    kicad_cli_method: &str,
     logger: &ReactiveEventLogger,
 ) -> Option<PathBuf> {
     let output_dir = pcb_path.parent()
@@ -28,6 +32,8 @@ pub fn generate_gerbers_from_pcb(
 
     logger.log_info(&format!("Output directory: {}", output_dir.display()));
 
+    // ── Pass 1: main gerbers ───────────────────────────────────────
+    let mut cmd = CopperForgeApp::build_kicad_cli_command(kicad_cli_method);
     let output = cmd
         .arg("pcb")
         .arg("export")
@@ -42,7 +48,7 @@ pub fn generate_gerbers_from_pcb(
 
     match output {
         Ok(result) if result.status.success() => {
-            logger.log_info("Gerbers generated successfully!");
+            logger.log_info("Gerbers generated.");
             if let Ok(entries) = std::fs::read_dir(&output_dir) {
                 for entry in entries.flatten() {
                     if entry.path().extension().is_some_and(|e| e == "gbr") {
@@ -50,20 +56,48 @@ pub fn generate_gerbers_from_pcb(
                     }
                 }
             }
-            Some(output_dir)
         }
         Ok(result) => {
             logger.log_error("Failed to generate gerbers");
             if let Ok(stderr) = String::from_utf8(result.stderr) {
-                logger.log_error(&format!("Error: {}", stderr));
+                logger.log_error(&format!("Error: {}", stderr.trim()));
             }
-            None
+            return None;
         }
         Err(e) => {
             logger.log_error(&format!("Failed to run kicad-cli: {}", e));
-            None
+            return None;
         }
     }
+
+    // ── Pass 2: drill → gerber ─────────────────────────────────────
+    let mut drill_cmd = CopperForgeApp::build_kicad_cli_command(kicad_cli_method);
+    let drill_out = drill_cmd
+        .arg("pcb")
+        .arg("export")
+        .arg("drill")
+        .arg("--format")
+        .arg("gerber")
+        .arg("--output")
+        .arg(&output_dir)
+        .arg(pcb_path)
+        .output();
+
+    match drill_out {
+        Ok(r) if r.status.success() => {
+            logger.log_info("Drill holes exported as gerber.");
+        }
+        Ok(r) => {
+            // Non-fatal — the main gerbers still shipped.
+            let stderr = String::from_utf8_lossy(&r.stderr);
+            logger.log_warning(&format!("Drill-gerber export failed (viewer won't show holes): {}", stderr.trim()));
+        }
+        Err(e) => {
+            logger.log_warning(&format!("Drill-gerber export failed to spawn: {}", e));
+        }
+    }
+
+    Some(output_dir)
 }
 
 /// Load gerber files from `gerber_dir` into the app's layer store.

@@ -45,10 +45,18 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
         if ui.button("TOP").clicked() {
             for layer_type in LayerType::all() {
                 let visible = match layer_type {
-                    LayerType::Copper(1) | LayerType::Silkscreen(Side::Top) | LayerType::Soldermask(Side::Top) | LayerType::Paste(Side::Top) => true,
-                    LayerType::Copper(_) => false,  // All other copper layers (inner/bottom)
-                    LayerType::Silkscreen(Side::Bottom) | LayerType::Soldermask(Side::Bottom) | LayerType::Paste(Side::Bottom) => false,
-                    LayerType::MechanicalOutline => true, // Keep outline visible
+                    LayerType::Copper(1)
+                    | LayerType::Silkscreen(Side::Top)
+                    | LayerType::Soldermask(Side::Top)
+                    | LayerType::Paste(Side::Top)
+                    | LayerType::ViaPlugging(Side::Top) => true,
+                    LayerType::Copper(_) => false,
+                    LayerType::Silkscreen(Side::Bottom)
+                    | LayerType::Soldermask(Side::Bottom)
+                    | LayerType::Paste(Side::Bottom)
+                    | LayerType::ViaPlugging(Side::Bottom) => false,
+                    LayerType::MechanicalOutline => true,
+                    LayerType::Drill => true,
                 };
                 app.services.layer_store.set_visibility(layer_type, visible);
             }
@@ -58,10 +66,18 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
         if ui.button("BOTTOM").clicked() {
             for layer_type in LayerType::all() {
                 let visible = match layer_type {
-                    LayerType::Copper(1) | LayerType::Silkscreen(Side::Top) | LayerType::Soldermask(Side::Top) | LayerType::Paste(Side::Top) => false,
-                    LayerType::Copper(_) => true,  // All other copper layers (inner/bottom)
-                    LayerType::Silkscreen(Side::Bottom) | LayerType::Soldermask(Side::Bottom) | LayerType::Paste(Side::Bottom) => true,
-                    LayerType::MechanicalOutline => true, // Keep outline visible
+                    LayerType::Copper(1)
+                    | LayerType::Silkscreen(Side::Top)
+                    | LayerType::Soldermask(Side::Top)
+                    | LayerType::Paste(Side::Top)
+                    | LayerType::ViaPlugging(Side::Top) => false,
+                    LayerType::Copper(_) => true,
+                    LayerType::Silkscreen(Side::Bottom)
+                    | LayerType::Soldermask(Side::Bottom)
+                    | LayerType::Paste(Side::Bottom)
+                    | LayerType::ViaPlugging(Side::Bottom) => true,
+                    LayerType::MechanicalOutline => true,
+                    LayerType::Drill => true,
                 };
                 app.services.layer_store.set_visibility(layer_type, visible);
             }

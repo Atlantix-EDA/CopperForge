@@ -527,7 +527,7 @@ impl CopperForgeApp {
         self.services.kicad_cli_method.as_deref().map(Self::build_kicad_cli_command)
     }
 
-    fn build_kicad_cli_command(method: &str) -> std::process::Command {
+    pub fn build_kicad_cli_command(method: &str) -> std::process::Command {
         use std::process::Command;
         match method {
             "flatpak" => {
@@ -745,16 +745,18 @@ impl eframe::App for CopperForgeApp {
                             LayerType::Copper(1)
                             | LayerType::Silkscreen(Side::Top)
                             | LayerType::Soldermask(Side::Top)
-                            | LayerType::Paste(Side::Top) => {
+                            | LayerType::Paste(Side::Top)
+                            | LayerType::ViaPlugging(Side::Top) => {
                                 self.services.display_manager.showing_top
                             }
                             LayerType::Copper(_) => !self.services.display_manager.showing_top,
                             LayerType::Silkscreen(Side::Bottom)
                             | LayerType::Soldermask(Side::Bottom)
-                            | LayerType::Paste(Side::Bottom) => {
+                            | LayerType::Paste(Side::Bottom)
+                            | LayerType::ViaPlugging(Side::Bottom) => {
                                 !self.services.display_manager.showing_top
                             }
-                            LayerType::MechanicalOutline => {
+                            LayerType::MechanicalOutline | LayerType::Drill => {
                                 self.services.layer_store.get_visibility(layer_type)
                             }
                         };

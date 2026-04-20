@@ -98,6 +98,30 @@ impl LayerDetector {
             r"(?i)\.gko$", r"(?i)\.gm1$",
         ].into_iter().map(|s| Regex::new(s).unwrap()).collect());
 
+        // Via plugging (KiCad 10 via filling / tenting layers).
+        p.insert(LayerType::ViaPlugging(Side::Top), vec![
+            r"(?i)[-_\.]plugging[-_\.]?front\.gbr$",
+            r"(?i)[-_\.]plugging[-_\.]?top\.gbr$",
+            r"(?i)[-_\.]F[-_\.]?Plugging\.gbr$",
+        ].into_iter().map(|s| Regex::new(s).unwrap()).collect());
+
+        p.insert(LayerType::ViaPlugging(Side::Bottom), vec![
+            r"(?i)[-_\.]plugging[-_\.]?back\.gbr$",
+            r"(?i)[-_\.]plugging[-_\.]?bottom\.gbr$",
+            r"(?i)[-_\.]B[-_\.]?Plugging\.gbr$",
+        ].into_iter().map(|s| Regex::new(s).unwrap()).collect());
+
+        // Drill holes exported as gerber (kicad-cli pcb export drill --format gerber).
+        // KiCad splits drill output by default into plated (PTH) and non-plated (NPTH)
+        // through-holes; both land in the same `LayerType::Drill` bucket. KiCad 10's
+        // --no-protel-ext naming is similar: "<project>-PTH-drl.gbr" etc.
+        p.insert(LayerType::Drill, vec![
+            r"(?i)[-_\.](?:PTH|NPTH)[-_\.]?drl\.gbr$",   // *-PTH-drl.gbr, *-NPTH-drl.gbr
+            r"(?i)[-_\.]drill\.gbr$",                    // merged drill file
+            r"(?i)-Drill[- ]?Holes\.gbr$",               // KiCad 10 --no-protel-ext
+            r"(?i)\.gdrl$",                              // some CAM tools
+        ].into_iter().map(|s| Regex::new(s).unwrap()).collect());
+
         Self { patterns: p }
     }
 

@@ -351,6 +351,9 @@ impl LayerStore {
 
 fn z_order_for(layer_type: LayerType) -> i32 {
     match layer_type {
+        // Drill on top so holes punch through everything else visually.
+        LayerType::Drill => 100,
+        LayerType::ViaPlugging(Side::Top) => 95,
         LayerType::Paste(Side::Top) => 90,
         LayerType::Silkscreen(Side::Top) => 80,
         LayerType::Soldermask(Side::Top) => 70,
@@ -359,6 +362,7 @@ fn z_order_for(layer_type: LayerType) -> i32 {
         LayerType::Soldermask(Side::Bottom) => 40,
         LayerType::Silkscreen(Side::Bottom) => 30,
         LayerType::Paste(Side::Bottom) => 20,
+        LayerType::ViaPlugging(Side::Bottom) => 15,
         LayerType::MechanicalOutline => 10,
     }
 }
@@ -370,6 +374,9 @@ fn quadrant_offset_for(layer_type: LayerType, spacing: f64) -> VectorOffset {
         LayerType::Soldermask(_) => spacing * 2.0,
         LayerType::Paste(_) => -9999.0,
         LayerType::MechanicalOutline => 0.0,
+        // Drill + plugging stay co-located with the board in quadrant view.
+        LayerType::Drill => 0.0,
+        LayerType::ViaPlugging(_) => -9999.0,
     };
     VectorOffset { x, y: 0.0 }
 }
