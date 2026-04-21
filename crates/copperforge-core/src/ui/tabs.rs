@@ -25,6 +25,7 @@ pub enum TabKind {
     ViewSettings,
     DRC,
     GerberView,
+    GerberView3d,
     Logger,
     Terminal,
     Shell,
@@ -40,6 +41,7 @@ impl TabKind {
             TabKind::ViewSettings => CitizenId::new("view_settings"),
             TabKind::DRC => CitizenId::new("drc"),
             TabKind::GerberView => CitizenId::new("gerber_view"),
+            TabKind::GerberView3d => CitizenId::new("gerber_view_3d"),
             TabKind::Logger => CitizenId::new("logger"),
             TabKind::Terminal => CitizenId::new("terminal"),
             TabKind::Shell => CitizenId::new("shell"),
@@ -85,6 +87,7 @@ impl Tab {
             TabKind::ViewSettings => "View Settings".to_string(),
             TabKind::DRC => "DRC".to_string(),
             TabKind::GerberView => "Gerber View".to_string(),
+            TabKind::GerberView3d => "Gerber View 3D".to_string(),
             TabKind::Logger => "Logger".to_string(),
             TabKind::Terminal => "Terminal".to_string(),
             TabKind::Shell => "Shell".to_string(),
@@ -117,6 +120,10 @@ impl Tab {
             }
             TabKind::GerberView => {
                 self.render_gerber_view(ui, params.app);
+            }
+            TabKind::GerberView3d => {
+                let gl = params.app.gl_context.clone();
+                params.app.gerber_view_3d_panel.show(ui, gl.as_ref());
             }
             TabKind::Logger => {
                 params.app.logger_panel.show(ui, &mut params.app.services);

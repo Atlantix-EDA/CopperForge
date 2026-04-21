@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, sync::Arc};
 
 use eframe::emath::{Rect, Vec2};
 use egui::Pos2;
@@ -53,6 +53,13 @@ pub struct CopperForgeApp {
     pub terminal_panel: crate::panels::TerminalPanel,
     pub shell_panel: crate::panels::ShellPanel,
     pub logger_panel: crate::panels::LoggerPanel,
+    pub gerber_view_3d_panel: crate::panels::GerberView3dPanel,
+
+    // ── Render backend handles ────────────────────────────────
+    /// Cached OpenGL context (from eframe's glow backend). Stashed on the
+    /// first `update()` call so 3D panels can reach it without threading
+    /// `&mut eframe::Frame` through `TabViewer`.
+    pub gl_context: Option<Arc<glow::Context>>,
 
     // ── Panel-owned state (for panels not yet citizen-persisted) ─
     pub project_manager_state: Option<project_manager::ProjectManagerState>,
@@ -307,6 +314,8 @@ impl CopperForgeApp {
             terminal_panel: crate::panels::TerminalPanel::new(egui_citizen::CitizenState::default()),
             shell_panel: crate::panels::ShellPanel::new(egui_citizen::CitizenState::default()),
             logger_panel: crate::panels::LoggerPanel::new(egui_citizen::CitizenState::default()),
+            gerber_view_3d_panel: crate::panels::GerberView3dPanel::new(egui_citizen::CitizenState::default()),
+            gl_context: None,
             project_manager_state: None,
             release_modal: None,
             project_edit_modal: None,
@@ -650,6 +659,22 @@ impl CopperForgeApp {
             if let Ok(json) = fs::read_to_string(&config_path) {
                 match serde_json::from_str::<DockState<Tab>>(&json) {
                     Ok(dock_state) => {
+                        // Migration: if the saved layout predates a newer TabKind
+                        // variant, reset so the default layout reinstates it.
+                        // Update this list whenever a tab is added that users
+                        // with an older config wouldn't otherwise see.
+                        let required: &[TabKind] = &[TabKind::GerberView3d];
+                        let missing = required.iter().any(|needed| {
+                            !dock_state
+                                .iter_all_tabs()
+                                .any(|(_, tab)| std::mem::discriminant(&tab.kind)
+                                    == std::mem::discriminant(needed))
+                        });
+                        if missing {
+                            eprintln!("dock_state.json is missing a newer tab — resetting to defaults");
+                            fs::remove_file(&config_path).ok();
+                            return None;
+                        }
                         return Some(dock_state);
                     }
                     Err(e) => {
@@ -684,6 +709,7 @@ impl CopperForgeApp {
         }
 
         let gerber_tab = Tab::new(TabKind::GerberView, SurfaceIndex::main(), NodeIndex(0));
+        let gerber_3d_tab = Tab::new(TabKind::GerberView3d, SurfaceIndex::main(), NodeIndex(0));
         let drc_tab = Tab::new(TabKind::DRC, SurfaceIndex::main(), NodeIndex(1));
         let view_settings_tab = Tab::new(TabKind::ViewSettings, SurfaceIndex::main(), NodeIndex(2));
 
@@ -695,7 +721,8 @@ impl CopperForgeApp {
         let shell_tab = Tab::new(TabKind::Shell, SurfaceIndex::main(), NodeIndex(7));
         let bom_tab = Tab::new(TabKind::BOM, SurfaceIndex::main(), NodeIndex(8));
 
-        let mut dock_state = DockState::new(vec![gerber_tab]);
+        // Gerber 2D + 3D share the main pane as sibling tabs.
+        let mut dock_state = DockState::new(vec![gerber_tab, gerber_3d_tab]);
         let surface = dock_state.main_surface_mut();
 
         // Projects + Settings share the left column top; there's no separate
@@ -715,6 +742,12 @@ impl CopperForgeApp {
 
 impl eframe::App for CopperForgeApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Cache the glow context once — it lives for the app's lifetime, so
+        // subsequent frames skip this. Panels reach it via `app.gl_context`.
+        if self.gl_context.is_none() {
+            self.gl_context = _frame.gl().cloned();
+        }
+
         let show_system_info_clicked = ctx.memory(|mem| {
             mem.data.get_temp::<bool>(egui::Id::new("show_system_info")).unwrap_or(false)
         });

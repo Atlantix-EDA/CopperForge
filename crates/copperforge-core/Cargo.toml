@@ -19,6 +19,11 @@ gerber_types = { workspace = true }
 gerber_parser = { workspace = true }
 nalgebra = { workspace = true }
 
+# 3D renderer
+glow = { workspace = true }
+egui_glow = { workspace = true }
+bytemuck = { workspace = true }
+
 # Egui Mobius framework
 egui_mobius_reactive = { workspace = true }
 

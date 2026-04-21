@@ -58,6 +58,11 @@ gerber_types = { package = "gerber-types", version = "0.7.0" }
 gerber_parser = "0.4.0"
 nalgebra = "0.34"
 
+# 3D renderer (Phase 1: glow-based axes gizmo; see develop/task3d-plan.md)
+glow = "0.16"
+egui_glow = { version = "0.33", default-features = false }
+bytemuck = "1.23"
+
 # Egui Mobius framework
 egui_mobius_reactive = { version = "0.3.0-alpha.33" }
 

@@ -455,6 +455,7 @@ name = "copperforge-core"
 version = "0.5.0"
 dependencies = [
  "bincode",
+ "bytemuck",
  "chrono",
  "chrono-tz",
  "dirs",
@@ -464,12 +465,14 @@ dependencies = [
  "egui_citizen",
  "egui_dock",
  "egui_extras",
+ "egui_glow",
  "egui_ltreeview",
  "egui_mobius_reactive",
  "env_logger",
  "gerber-types",
  "gerber_parser",
  "gerber_viewer",
+ "glow",
  "image",
  "kiparse",
  "log",
