@@ -194,6 +194,9 @@ impl DisplayManager {
 
             // Via plugging — park off-screen in quadrant view (stencil-like).
             LayerType::ViaPlugging(_) => -9999.0,
+
+            // User layers — annotations/notes, not part of the board-visual stackup.
+            LayerType::UserLayer(_) => -9999.0,
         };
         
         VectorOffset {

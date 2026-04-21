@@ -119,3 +119,27 @@ pub fn get_kicad_pro_path(pcb_path: &Path) -> Option<std::path::PathBuf> {
 
     Some(parent.join(format!("{}.kicad_pro", stem.to_string_lossy())))
 }
+
+/// Parse the `(layers ...)` block of a .kicad_pcb file and return the
+/// KiCad 10 canonical names for each User.N slot (e.g. `User.1` →
+/// "M1 Board Outline", `User.20` → "Top 3D Body"). These are KiCad 10's
+/// defined convention for the user-layer slots, stored in the PCB by KiCad
+/// itself — they are not names the engineer typed in.
+///
+/// Each line looks like `(N "User.X" user "M1 Board Outline")`. The formal
+/// name is the 4th token when present; rows without it are skipped.
+pub fn read_user_layer_names(
+    pcb_path: &Path,
+) -> Result<std::collections::HashMap<u8, String>, Box<dyn std::error::Error>> {
+    use regex::Regex;
+    let content = std::fs::read_to_string(pcb_path)?;
+    let re = Regex::new(r#"\(\s*\d+\s+"User\.(\d+)"\s+user\s+"([^"]+)"\s*\)"#)?;
+    let mut map = std::collections::HashMap::new();
+    for caps in re.captures_iter(&content) {
+        let idx: u8 = caps[1].parse().unwrap_or(0);
+        if (1..=45).contains(&idx) {
+            map.insert(idx, caps[2].to_string());
+        }
+    }
+    Ok(map)
+}

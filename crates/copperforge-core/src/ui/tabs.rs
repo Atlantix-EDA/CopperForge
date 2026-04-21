@@ -241,7 +241,7 @@ fn render_pcb_workflow_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
             app.services.project_state.get().gerber_dir().map(|p| p.to_path_buf()),
         ) {
             app.services.project_state.set(ProjectState::LoadingGerbers { pcb_path: pcb_path.clone(), gerber_dir: gerber_dir.clone() });
-            gerber_ops::load_gerbers_into_viewer(app, &gerber_dir, &logger);
+            gerber_ops::load_gerbers_into_viewer(app, &pcb_path, &gerber_dir, &logger);
             let last_modified = std::fs::metadata(&pcb_path)
                 .and_then(|m| m.modified())
                 .unwrap_or(std::time::SystemTime::now());
@@ -423,7 +423,7 @@ fn render_layer_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
                 | LayerType::ViaPlugging(Side::Bottom) => {
                     !app.services.display_manager.showing_top
                 }
-                LayerType::MechanicalOutline | LayerType::Drill => {
+                LayerType::MechanicalOutline | LayerType::Drill | LayerType::UserLayer(_) => {
                     app.services.layer_store.get_visibility(layer_type)
                 }
             };

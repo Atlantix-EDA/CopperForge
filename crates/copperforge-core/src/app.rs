@@ -756,7 +756,9 @@ impl eframe::App for CopperForgeApp {
                             | LayerType::ViaPlugging(Side::Bottom) => {
                                 !self.services.display_manager.showing_top
                             }
-                            LayerType::MechanicalOutline | LayerType::Drill => {
+                            LayerType::MechanicalOutline
+                            | LayerType::Drill
+                            | LayerType::UserLayer(_) => {
                                 self.services.layer_store.get_visibility(layer_type)
                             }
                         };

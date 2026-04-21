@@ -43,6 +43,11 @@ pub struct LayerStore {
     pub coordinates_dirty: bool,
     pub zoom: ZoomState,
     pub units: UnitsState,
+    /// KiCad 10 canonical names for each User.N slot, parsed from the
+    /// `(layers ...)` block of the .kicad_pcb (e.g. 1 → "M1 Board Outline",
+    /// 20 → "Top 3D Body"). These are KiCad's defined convention, not names
+    /// the engineer typed in. Populated when a project loads.
+    pub user_layer_names: HashMap<u8, String>,
 }
 
 /// Zoom/view tracking (was ZoomResource).
@@ -109,7 +114,23 @@ impl Default for LayerStore {
             coordinates_dirty: false,
             zoom: ZoomState::default(),
             units: UnitsState::default(),
+            user_layer_names: HashMap::new(),
         }
+    }
+}
+
+impl LayerStore {
+    /// Formal display name for a layer. For `UserLayer(n)` slots this
+    /// prefers the KiCad 10 canonical name parsed from the loaded
+    /// `.kicad_pcb` (e.g. "M1 Board Outline", "Top 3D Body"), falling
+    /// back to the generic `display_name()` when no PCB is loaded.
+    pub fn display_name(&self, layer_type: LayerType) -> String {
+        if let LayerType::UserLayer(n) = layer_type {
+            if let Some(name) = self.user_layer_names.get(&n) {
+                return name.clone();
+            }
+        }
+        layer_type.display_name()
     }
 }
 
@@ -182,6 +203,7 @@ impl LayerStore {
         self.layers.clear();
         self.unassigned.clear();
         self.assignments.clear();
+        self.user_layer_names.clear();
     }
 }
 
@@ -199,7 +221,7 @@ impl LayerStore {
     }
 
     pub fn detect_layer_type(&self, filename: &str) -> Option<LayerType> {
-        self.detector.detect_layer_type(filename)
+        self.detector.detect_layer_type_with_names(filename, &self.user_layer_names)
     }
 
     /// Assign an unassigned gerber to a layer type.
@@ -222,7 +244,7 @@ impl LayerStore {
         let mut assigned = Vec::new();
         let candidates: Vec<(String, LayerType)> = self.unassigned.iter()
             .filter_map(|ug| {
-                let detected = self.detector.detect_layer_type(&ug.filename)?;
+                let detected = self.detector.detect_layer_type_with_names(&ug.filename, &self.user_layer_names)?;
                 if self.find(detected).is_none() { Some((ug.filename.clone(), detected)) } else { None }
             })
             .collect();
@@ -255,7 +277,7 @@ impl LayerStore {
             let doc = match parse(BufReader::new(content.as_bytes())) { Ok(d) => d, Err(_) => continue };
             let gerber_layer = GerberLayer::new(doc.into_commands());
 
-            if let Some(detected) = self.detector.detect_layer_type(&filename) {
+            if let Some(detected) = self.detector.detect_layer_type_with_names(&filename, &self.user_layer_names) {
                 if self.find(detected).is_none() && !self.assignments.values().any(|t| *t == detected) {
                     self.add_layer(detected, gerber_layer, Some(path.clone()), true);
                     self.add_assignment(filename, detected);
@@ -364,6 +386,9 @@ fn z_order_for(layer_type: LayerType) -> i32 {
         LayerType::Paste(Side::Bottom) => 20,
         LayerType::ViaPlugging(Side::Bottom) => 15,
         LayerType::MechanicalOutline => 10,
+        // User layers as documentation overlay — below silk, above mask.
+        // Higher-index user layers drawn on top of lower so M12 > M1.
+        LayerType::UserLayer(n) => 5 + (n as i32),
     }
 }
 
@@ -377,6 +402,8 @@ fn quadrant_offset_for(layer_type: LayerType, spacing: f64) -> VectorOffset {
         // Drill + plugging stay co-located with the board in quadrant view.
         LayerType::Drill => 0.0,
         LayerType::ViaPlugging(_) => -9999.0,
+        // User layers park off-screen in quadrant view (annotations, not board-visual).
+        LayerType::UserLayer(_) => -9999.0,
     };
     VectorOffset { x, y: 0.0 }
 }

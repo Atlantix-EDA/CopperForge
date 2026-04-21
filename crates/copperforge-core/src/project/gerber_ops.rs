@@ -33,6 +33,18 @@ pub fn generate_gerbers_from_pcb(
     logger.log_info(&format!("Output directory: {}", output_dir.display()));
 
     // ── Pass 1: main gerbers ───────────────────────────────────────
+    // Include all 45 KiCad user-layer slots (User.1..User.45). kicad-cli
+    // silently skips slots that aren't defined in the board — boards that
+    // use M1/M2/M10/M11/M12 etc. get those exported; others aren't affected.
+    let user_layers: String = (1..=45)
+        .map(|n| format!("User.{}", n))
+        .collect::<Vec<_>>()
+        .join(",");
+    let layers_arg = format!(
+        "F.Cu,B.Cu,F.SilkS,B.SilkS,F.Mask,B.Mask,Edge.Cuts,F.Paste,B.Paste,{}",
+        user_layers
+    );
+
     let mut cmd = CopperForgeApp::build_kicad_cli_command(kicad_cli_method);
     let output = cmd
         .arg("pcb")
@@ -41,7 +53,7 @@ pub fn generate_gerbers_from_pcb(
         .arg("--output")
         .arg(&output_dir)
         .arg("--layers")
-        .arg("F.Cu,B.Cu,F.SilkS,B.SilkS,F.Mask,B.Mask,Edge.Cuts,F.Paste,B.Paste")
+        .arg(&layers_arg)
         .arg("--no-protel-ext")
         .arg(pcb_path)
         .output();
@@ -100,10 +112,30 @@ pub fn generate_gerbers_from_pcb(
     Some(output_dir)
 }
 
-/// Load gerber files from `gerber_dir` into the app's layer store.
-pub fn load_gerbers_into_viewer(app: &mut CopperForgeApp, gerber_dir: &Path, logger: &ReactiveEventLogger) {
+/// Load gerber files from `gerber_dir` into the app's layer store. The
+/// `pcb_path` is read to pull the KiCad 10 canonical names for User.N
+/// slots out of the `.kicad_pcb` (e.g. "M1 Board Outline", "Top 3D Body")
+/// so the View Settings panel shows KiCad's own labels.
+pub fn load_gerbers_into_viewer(
+    app: &mut CopperForgeApp,
+    pcb_path: &Path,
+    gerber_dir: &Path,
+    logger: &ReactiveEventLogger,
+) {
     logger.log_info("Clearing existing gerber layers...");
     app.services.layer_store.clear_all();
+
+    match crate::project_manager::kicad_metadata::read_user_layer_names(pcb_path) {
+        Ok(names) => {
+            if !names.is_empty() {
+                logger.log_info(&format!("Parsed {} formal user-layer name(s) from .kicad_pcb", names.len()));
+            }
+            app.services.layer_store.user_layer_names = names;
+        }
+        Err(e) => {
+            logger.log_warning(&format!("Could not parse user-layer names from PCB: {}", e));
+        }
+    }
 
     match app.services.layer_store.load_from_directory(gerber_dir) {
         Ok((loaded_count, unassigned_count)) => {

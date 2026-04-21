@@ -57,6 +57,8 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
                     | LayerType::ViaPlugging(Side::Bottom) => false,
                     LayerType::MechanicalOutline => true,
                     LayerType::Drill => true,
+                    // User-layer visibility left unchanged on side presets.
+                    LayerType::UserLayer(_) => app.services.layer_store.get_visibility(layer_type),
                 };
                 app.services.layer_store.set_visibility(layer_type, visible);
             }
@@ -78,6 +80,7 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
                     | LayerType::ViaPlugging(Side::Bottom) => true,
                     LayerType::MechanicalOutline => true,
                     LayerType::Drill => true,
+                    LayerType::UserLayer(_) => app.services.layer_store.get_visibility(layer_type),
                 };
                 app.services.layer_store.set_visibility(layer_type, visible);
             }
@@ -141,7 +144,7 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
                 });
 
                 if show_picker {
-                    egui::Window::new(format!("Color for {}", layer_type.display_name()))
+                    egui::Window::new(format!("Color for {}", app.services.layer_store.display_name(layer_type)))
                         .id(egui::Id::new(format!("color_window_{:?}", layer_type)))
                         .collapsible(false)
                         .resizable(false)
@@ -174,11 +177,12 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
                         });
                 }
 
-                ui.label(layer_type.display_name());
+                let label_text = app.services.layer_store.display_name(layer_type);
+                ui.label(&label_text);
 
                 if current_visible != was_visible {
                     logger.log_info(&format!("{} layer {}",
-                        layer_type.display_name(),
+                        label_text,
                         if current_visible { "shown" } else { "hidden" }
                     ));
                 }
@@ -202,7 +206,7 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
             let visible = layer_type_iter == target_layer;
             app.services.layer_store.set_visibility(layer_type_iter, visible);
         }
-        logger.log_info(&format!("Showing only {} layer", target_layer.display_name()));
+        logger.log_info(&format!("Showing only {} layer", app.services.layer_store.display_name(target_layer)));
     }
 
     if let Some(target_layer) = toggle_color_picker {
@@ -235,16 +239,18 @@ pub fn show_layers_panel<'a>(    ui: &mut egui::Ui,
                     .copied()
                     .unwrap_or(LayerType::Copper(1)); // Default selection
 
+                let selected_text = app.services.layer_store.display_name(current_selection);
                 egui::ComboBox::from_id_salt(&unassigned.filename)
-                    .selected_text(current_selection.display_name())
+                    .selected_text(selected_text)
                     .show_ui(ui, |ui| {
                         for layer_type in LayerType::all() {
                             // Check if this layer type is already assigned to another file
                             let already_assigned = app.services.layer_store.find(layer_type).is_some();
+                            let name = app.services.layer_store.display_name(layer_type);
 
                             if already_assigned {
-                                ui.add_enabled(false, egui::Button::new(format!("✓ {} (assigned)", layer_type.display_name())));
-                            } else if ui.selectable_value(&mut assignments_to_make, vec![(unassigned.filename.clone(), layer_type)], layer_type.display_name()).clicked() {
+                                ui.add_enabled(false, egui::Button::new(format!("✓ {} (assigned)", name)));
+                            } else if ui.selectable_value(&mut assignments_to_make, vec![(unassigned.filename.clone(), layer_type)], name).clicked() {
                                 assignments_to_make.push((unassigned.filename.clone(), layer_type));
                             }
                         }
