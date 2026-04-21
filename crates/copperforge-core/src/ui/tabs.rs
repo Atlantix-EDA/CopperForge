@@ -28,8 +28,7 @@ pub enum TabKind {
     Logger,
     Terminal,
     Shell,
-    Project,
-    Projects,  // Project database spreadsheet
+    Projects,  // Project database + tree + Import modal (replaced old Project tab)
     Settings,
     BOM,
 }
@@ -44,7 +43,6 @@ impl TabKind {
             TabKind::Logger => CitizenId::new("logger"),
             TabKind::Terminal => CitizenId::new("terminal"),
             TabKind::Shell => CitizenId::new("shell"),
-            TabKind::Project => CitizenId::new("project"),
             TabKind::Projects => CitizenId::new("projects"),
             TabKind::Settings => CitizenId::new("settings"),
             TabKind::BOM => CitizenId::new("bom"),
@@ -90,7 +88,6 @@ impl Tab {
             TabKind::Logger => "Logger".to_string(),
             TabKind::Terminal => "Terminal".to_string(),
             TabKind::Shell => "Shell".to_string(),
-            TabKind::Project => "Project".to_string(),
             TabKind::Projects => "Projects".to_string(),
             TabKind::Settings => "Settings".to_string(),
             TabKind::BOM => "BOM".to_string(),
@@ -129,10 +126,6 @@ impl Tab {
             }
             TabKind::Shell => {
                 params.app.shell_panel.show(ui, &mut params.app.services);
-            }
-            TabKind::Project => {
-                ProjectPanel::new(egui_citizen::CitizenState::default())
-                    .show(ui, params.app);
             }
             TabKind::Projects => {
                 ProjectsPanel::new(egui_citizen::CitizenState::default())
@@ -222,16 +215,13 @@ fn render_pcb_workflow_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
     // Generate: explicit. Disabled if no PCB is selected.
     if ui.add_enabled(has_pcb, egui::Button::new("⚙ Generate Gerbers")).clicked() {
         if let Some(pcb_path) = app.services.project_state.get().pcb_path().map(|p| p.to_path_buf()) {
-            let Some(cli) = app.kicad_cli_command() else {
+            let Some(method) = app.services.kicad_cli_method.clone() else {
                 logger.log_error("kicad-cli not found (checked PATH, Flatpak, and Snap at startup)");
                 return;
             };
-            logger.log_info(&format!(
-                "Generating gerbers via kicad-cli ({})…",
-                app.services.kicad_cli_method.as_deref().unwrap_or("?")
-            ));
+            logger.log_info(&format!("Generating gerbers + drill via kicad-cli ({})…", method));
             app.services.project_state.set(ProjectState::GeneratingGerbers { pcb_path: pcb_path.clone() });
-            if let Some(output_dir) = gerber_ops::generate_gerbers_from_pcb(&pcb_path, cli, &logger) {
+            if let Some(output_dir) = gerber_ops::generate_gerbers_from_pcb(&pcb_path, &method, &logger) {
                 app.services.project_state.set(ProjectState::GerbersGenerated { pcb_path, gerber_dir: output_dir });
             } else {
                 app.services.project_state.set(ProjectState::PcbSelected { pcb_path });
@@ -251,7 +241,7 @@ fn render_pcb_workflow_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
             app.services.project_state.get().gerber_dir().map(|p| p.to_path_buf()),
         ) {
             app.services.project_state.set(ProjectState::LoadingGerbers { pcb_path: pcb_path.clone(), gerber_dir: gerber_dir.clone() });
-            gerber_ops::load_gerbers_into_viewer(app, &gerber_dir, &logger);
+            gerber_ops::load_gerbers_into_viewer(app, &pcb_path, &gerber_dir, &logger);
             let last_modified = std::fs::metadata(&pcb_path)
                 .and_then(|m| m.modified())
                 .unwrap_or(std::time::SystemTime::now());
@@ -419,22 +409,21 @@ fn render_layer_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
         use crate::layer_store::{LayerType, Side};
         for layer_type in LayerType::all() {
             let visible = match layer_type {
-                LayerType::Copper(1) |
-                LayerType::Silkscreen(Side::Top) |
-                LayerType::Soldermask(Side::Top) |
-                LayerType::Paste(Side::Top) => {
+                LayerType::Copper(1)
+                | LayerType::Silkscreen(Side::Top)
+                | LayerType::Soldermask(Side::Top)
+                | LayerType::Paste(Side::Top)
+                | LayerType::ViaPlugging(Side::Top) => {
                     app.services.display_manager.showing_top
-                },
-                LayerType::Copper(_) => {
+                }
+                LayerType::Copper(_) => !app.services.display_manager.showing_top,
+                LayerType::Silkscreen(Side::Bottom)
+                | LayerType::Soldermask(Side::Bottom)
+                | LayerType::Paste(Side::Bottom)
+                | LayerType::ViaPlugging(Side::Bottom) => {
                     !app.services.display_manager.showing_top
-                },
-                LayerType::Silkscreen(Side::Bottom) |
-                LayerType::Soldermask(Side::Bottom) |
-                LayerType::Paste(Side::Bottom) => {
-                    !app.services.display_manager.showing_top
-                },
-                LayerType::MechanicalOutline => {
-                    // Leave outline visibility unchanged
+                }
+                LayerType::MechanicalOutline | LayerType::Drill | LayerType::UserLayer(_) => {
                     app.services.layer_store.get_visibility(layer_type)
                 }
             };

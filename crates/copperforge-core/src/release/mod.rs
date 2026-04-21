@@ -100,10 +100,19 @@ pub fn create_release(
         .map_err(|e| format!("Failed to create drill staging dir: {}", e))?;
     export_drill(sources.kicad_cli, sources.pcb_path, &drill_dir, logger)?;
 
-    // 2. Resolve git commit (optional).
+    // 2. Resolve git commit (optional). A `-dirty` suffix means the project
+    //    directory has uncommitted or untracked files — the hash alone does
+    //    not identify the files that went into this release.
     let git_hash = git_head_short(project_dir);
     if let Some(ref h) = git_hash {
         logger.log_info(&format!("Git commit: {}", h));
+        if h.ends_with("-dirty") {
+            logger.log_warning(
+                "Working tree is dirty — release contains uncommitted or untracked \
+                 files. Commit your changes before releasing to make the git hash \
+                 authoritative.",
+            );
+        }
     }
 
     let now_utc = Utc::now();
@@ -219,8 +228,29 @@ fn git_head_short(project_dir: &Path) -> Option<String> {
     if !out.status.success() {
         return None;
     }
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if s.is_empty() { None } else { Some(s) }
+    let mut s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() {
+        return None;
+    }
+    if git_tree_dirty(project_dir) {
+        s.push_str("-dirty");
+    }
+    Some(s)
+}
+
+/// Are there tracked-but-uncommitted or untracked files *within the project
+/// directory*? The pathspec (`--  .`) scopes the check so that unrelated edits
+/// elsewhere in the repo don't flag this release as dirty. Gitignored files
+/// are correctly excluded by `git status --porcelain`.
+fn git_tree_dirty(project_dir: &Path) -> bool {
+    match std::process::Command::new("git")
+        .args(["status", "--porcelain", "--", "."])
+        .current_dir(project_dir)
+        .output()
+    {
+        Ok(o) if o.status.success() => !o.stdout.is_empty(),
+        _ => false,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -242,10 +272,19 @@ fn build_release_notes(
         kicad_version.unwrap_or("(not detected)")
     ));
     out.push_str(&format!("**Host OS:** {}\n\n", os_description));
-    out.push_str(&format!(
-        "**Git commit:** {}\n\n",
-        git_hash.unwrap_or("(not in a git repository)")
-    ));
+    match git_hash {
+        None => out.push_str("**Git commit:** (not in a git repository)\n\n"),
+        Some(h) if h.ends_with("-dirty") => {
+            let clean = h.trim_end_matches("-dirty");
+            out.push_str(&format!(
+                "**Git commit:** `{}` ⚠ working tree dirty — \
+                 release contains uncommitted or untracked files \
+                 not represented by this hash\n\n",
+                clean
+            ));
+        }
+        Some(h) => out.push_str(&format!("**Git commit:** `{}`\n\n", h)),
+    }
     out.push_str("## Description\n\n");
     if description.trim().is_empty() {
         out.push_str("_(none provided)_\n\n");

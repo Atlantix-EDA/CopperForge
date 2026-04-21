@@ -17,6 +17,7 @@ CopperForge sits alongside KiCad and owns the manufacturing-backend
 workflow: taking a finished PCB, generating fabrication outputs, tagging
 a release, and tracking every revision you send to a fab.
 
+
 ![alt text](assets/media/KiForge_usage.gif)
 
 - **Release packaging** — one click cuts `<project>/outputs/<rev>/<name>_<rev>[_<date>].zip`
@@ -30,14 +31,7 @@ a release, and tracking every revision you send to a fab.
   (no live IPC to KiCad needed).
 - **Project database** — embedded [redb](https://github.com/cberner/redb)
   store tracks imported projects, BOM snapshots, and release history.
-  Projects tab shows a tree: project → schematic (with sub-sheets) →
-  pcb → `outputs/rev_NN`. Double-click loads; right-click opens a
-  modal for edit/delete.
-- **DRC overlay** — basic design-rule-check visualization on loaded
-  gerber layers.
-- **Shell / Terminal / Logger panels** — in-app command shell
-  (`help`, `ver`, `info`, `status`, `env`, `new-project <name>`, OS passthrough
-  via `sh <cmd>` or `!<cmd>`), a bash terminal, and a structured event log.
+- **Shell / Terminal / Logger panels** — in-app command shell, a bash terminal, and a structured event log.
 
 Built with Rust + [egui](https://github.com/emilk/egui). Uses the
 [egui-citizen](https://github.com/saturn77/egui-citizen) framework for

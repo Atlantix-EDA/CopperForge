@@ -10,6 +10,16 @@ pub enum LayerType {
     Soldermask(Side),
     Paste(Side),
     MechanicalOutline,
+    /// Drill holes exported by `kicad-cli pcb export drill --format gerber`.
+    /// Visible from both top and bottom; always drawn on top of copper.
+    Drill,
+    /// KiCad 10 via-plugging layers (via filling / tenting). Side-specific,
+    /// exported as `<project>-plugging-front.gbr` / `...-back.gbr`.
+    ViaPlugging(Side),
+    /// KiCad user-defined layer (User.1..User.45). Boards often name these
+    /// `M1 Board Outline`, `M10 Fab Notes`, `M12 Stackup`, etc. — the `u8`
+    /// is the canonical KiCad user-layer index. Side-agnostic.
+    UserLayer(u8),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -32,6 +42,8 @@ impl LayerType {
             Self::Soldermask(Side::Top), Self::Soldermask(Side::Bottom),
             Self::Paste(Side::Top), Self::Paste(Side::Bottom),
             Self::MechanicalOutline,
+            Self::Drill,
+            Self::ViaPlugging(Side::Top), Self::ViaPlugging(Side::Bottom),
         ]
     }
 
@@ -42,6 +54,8 @@ impl LayerType {
             Self::Soldermask(Side::Top), Self::Soldermask(Side::Bottom),
             Self::Paste(Side::Top), Self::Paste(Side::Bottom),
             Self::MechanicalOutline,
+            Self::Drill,
+            Self::ViaPlugging(Side::Top), Self::ViaPlugging(Side::Bottom),
         ]
     }
 
@@ -52,11 +66,20 @@ impl LayerType {
             Self::Soldermask(Side::Top), Self::Soldermask(Side::Bottom),
             Self::Paste(Side::Top), Self::Paste(Side::Bottom),
             Self::MechanicalOutline,
+            Self::Drill,
+            Self::ViaPlugging(Side::Top), Self::ViaPlugging(Side::Bottom),
         ]);
         layers
     }
 
-    pub fn all() -> Vec<Self> { Self::standard_2_layer() }
+    /// Every layer type the UI should be aware of. Includes all 45 KiCad
+    /// user-layer slots; unused ones are filtered out by the View Settings
+    /// panel via `layer_store.find(layer_type)`.
+    pub fn all() -> Vec<Self> {
+        let mut v = Self::standard_2_layer();
+        v.extend((1..=45).map(Self::UserLayer));
+        v
+    }
 
     pub fn display_name(&self) -> String {
         match self {
@@ -70,6 +93,10 @@ impl LayerType {
             Self::Paste(Side::Top) => "Top Paste".into(),
             Self::Paste(Side::Bottom) => "Bottom Paste".into(),
             Self::MechanicalOutline => "Mechanical Outline".into(),
+            Self::Drill => "Drill Holes".into(),
+            Self::ViaPlugging(Side::Top) => "Top Via Plugging".into(),
+            Self::ViaPlugging(Side::Bottom) => "Bottom Via Plugging".into(),
+            Self::UserLayer(n) => format!("User.{} (M{})", n, n),
         }
     }
 
@@ -97,6 +124,23 @@ impl LayerType {
             Self::Paste(Side::Top) => Color32::from_rgba_premultiplied(192, 192, 192, 200),
             Self::Paste(Side::Bottom) => Color32::from_rgba_premultiplied(128, 128, 128, 200),
             Self::MechanicalOutline => Color32::from_rgba_premultiplied(255, 255, 0, 250),
+            // Drill holes drawn nearly opaque dark to punch through copper.
+            Self::Drill => Color32::from_rgba_premultiplied(20, 20, 20, 240),
+            // Via plugging — muted cyan/magenta to distinguish top/bottom.
+            Self::ViaPlugging(Side::Top) => Color32::from_rgba_premultiplied(0, 180, 200, 160),
+            Self::ViaPlugging(Side::Bottom) => Color32::from_rgba_premultiplied(200, 0, 180, 160),
+            // User layers get hue-rotated distinct colors per index so the
+            // eye can distinguish M1/M2/M10/M11/M12 at a glance.
+            Self::UserLayer(n) => {
+                let hue = ((*n as f32) * 47.0) % 360.0; // 47° steps visit all 45 slots distinctly
+                let (r, g, b) = hsv_to_rgb(hue, 0.55, 0.85);
+                Color32::from_rgba_premultiplied(
+                    (r * 255.0) as u8,
+                    (g * 255.0) as u8,
+                    (b * 255.0) as u8,
+                    180,
+                )
+            }
         }
     }
 
@@ -107,6 +151,12 @@ impl LayerType {
             Self::Silkscreen(Side::Top) | Self::Soldermask(Side::Top) | Self::Paste(Side::Top) => showing_top,
             Self::Silkscreen(Side::Bottom) | Self::Soldermask(Side::Bottom) | Self::Paste(Side::Bottom) => !showing_top,
             Self::MechanicalOutline => true,
+            // Holes punch through the board — always visible from either side.
+            Self::Drill => true,
+            Self::ViaPlugging(Side::Top) => showing_top,
+            Self::ViaPlugging(Side::Bottom) => !showing_top,
+            // User layers are typically annotation/documentation — show on both sides.
+            Self::UserLayer(_) => true,
         }
     }
 
@@ -114,13 +164,23 @@ impl LayerType {
     pub fn copper_layer_number(&self) -> Option<u8> { match self { Self::Copper(n) => Some(*n), _ => None } }
 
     pub fn is_top(&self) -> bool {
-        matches!(self, Self::Copper(1) | Self::Silkscreen(Side::Top) | Self::Soldermask(Side::Top) | Self::Paste(Side::Top))
+        matches!(
+            self,
+            Self::Copper(1)
+                | Self::Silkscreen(Side::Top)
+                | Self::Soldermask(Side::Top)
+                | Self::Paste(Side::Top)
+                | Self::ViaPlugging(Side::Top)
+        )
     }
 
     pub fn is_bottom(&self, total_copper: u8) -> bool {
         match self {
             Self::Copper(n) => *n == total_copper,
-            Self::Silkscreen(Side::Bottom) | Self::Soldermask(Side::Bottom) | Self::Paste(Side::Bottom) => true,
+            Self::Silkscreen(Side::Bottom)
+            | Self::Soldermask(Side::Bottom)
+            | Self::Paste(Side::Bottom)
+            | Self::ViaPlugging(Side::Bottom) => true,
             _ => false,
         }
     }

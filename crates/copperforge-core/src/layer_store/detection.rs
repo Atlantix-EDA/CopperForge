@@ -98,13 +98,89 @@ impl LayerDetector {
             r"(?i)\.gko$", r"(?i)\.gm1$",
         ].into_iter().map(|s| Regex::new(s).unwrap()).collect());
 
+        // Via plugging (KiCad 10 via filling / tenting layers).
+        p.insert(LayerType::ViaPlugging(Side::Top), vec![
+            r"(?i)[-_\.]plugging[-_\.]?front\.gbr$",
+            r"(?i)[-_\.]plugging[-_\.]?top\.gbr$",
+            r"(?i)[-_\.]F[-_\.]?Plugging\.gbr$",
+        ].into_iter().map(|s| Regex::new(s).unwrap()).collect());
+
+        p.insert(LayerType::ViaPlugging(Side::Bottom), vec![
+            r"(?i)[-_\.]plugging[-_\.]?back\.gbr$",
+            r"(?i)[-_\.]plugging[-_\.]?bottom\.gbr$",
+            r"(?i)[-_\.]B[-_\.]?Plugging\.gbr$",
+        ].into_iter().map(|s| Regex::new(s).unwrap()).collect());
+
+        // Drill holes exported as gerber (kicad-cli pcb export drill --format gerber).
+        // KiCad splits drill output by default into plated (PTH) and non-plated (NPTH)
+        // through-holes; both land in the same `LayerType::Drill` bucket. KiCad 10's
+        // --no-protel-ext naming is similar: "<project>-PTH-drl.gbr" etc.
+        p.insert(LayerType::Drill, vec![
+            r"(?i)[-_\.](?:PTH|NPTH)[-_\.]?drl\.gbr$",   // *-PTH-drl.gbr, *-NPTH-drl.gbr
+            r"(?i)[-_\.]drill\.gbr$",                    // merged drill file
+            r"(?i)-Drill[- ]?Holes\.gbr$",               // KiCad 10 --no-protel-ext
+            r"(?i)\.gdrl$",                              // some CAM tools
+        ].into_iter().map(|s| Regex::new(s).unwrap()).collect());
+
         Self { patterns: p }
     }
 
     pub fn detect_layer_type(&self, filename: &str) -> Option<LayerType> {
+        self.detect_layer_type_with_names(filename, &HashMap::new())
+    }
+
+    /// Like [`detect_layer_type`], but also matches against the KiCad 10
+    /// canonical names for User.N slots ("Top 3D Body", "Capping",
+    /// "Filling", etc). kicad-cli writes `<project>-<LayerName>.gbr`, so
+    /// for slots whose name isn't an `Mn` token the filename is the only
+    /// way back to the slot — this pass reconnects those.
+    pub fn detect_layer_type_with_names(
+        &self,
+        filename: &str,
+        user_names: &HashMap<u8, String>,
+    ) -> Option<LayerType> {
         for (layer_type, patterns) in &self.patterns {
             for pattern in patterns {
                 if pattern.is_match(filename) { return Some(*layer_type); }
+            }
+        }
+
+        // Name-map pass — kicad-cli writes `<project>-<LayerName>.gbr` so if
+        // the filename ends in `-<UserLayerName>.gbr` we can bind it back to
+        // its slot. Iterate longest-first so "Top 3D Body" wins over "Top".
+        if !user_names.is_empty() {
+            let mut by_len: Vec<(&u8, &String)> = user_names.iter().collect();
+            by_len.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+            for (idx, name) in by_len {
+                let suffix = format!("-{}.gbr", name);
+                if filename.eq_ignore_ascii_case(&suffix)
+                    || filename.to_ascii_lowercase().ends_with(&suffix.to_ascii_lowercase())
+                {
+                    return Some(LayerType::UserLayer(*idx));
+                }
+            }
+        }
+
+        // Fallback: KiCad user layers named Mn or User.n or User_n.
+        // Capture the index so a single fallback handles all 45 slots.
+        static USER_LAYER_PATTERNS: once_cell::sync::Lazy<[Regex; 3]> =
+            once_cell::sync::Lazy::new(|| [
+                // "<project>-M12 Stackup.gbr", "-M1_Board_Outline.gbr", "-M10.gbr"
+                Regex::new(r"(?i)[-_\.]M(\d+)(?:[ _-][^.]*)?\.gbr$").unwrap(),
+                // "<project>-User_1.gbr" / "-User_12 Notes.gbr"
+                Regex::new(r"(?i)[-_\.]User[_](\d+)(?:[ _-][^.]*)?\.gbr$").unwrap(),
+                // KiCad canonical "-User.N.gbr" style
+                Regex::new(r"(?i)[-_\.]User\.(\d+)\.gbr$").unwrap(),
+            ]);
+        for re in USER_LAYER_PATTERNS.iter() {
+            if let Some(caps) = re.captures(filename) {
+                if let Some(n_str) = caps.get(1) {
+                    if let Ok(n) = n_str.as_str().parse::<u8>() {
+                        if (1..=45).contains(&n) {
+                            return Some(LayerType::UserLayer(n));
+                        }
+                    }
+                }
             }
         }
         None

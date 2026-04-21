@@ -253,6 +253,18 @@ impl PngExporter {
             LayerType::MechanicalOutline => {
                 // This is handled separately
             }
+            LayerType::Drill => {
+                // Drill holes render via the gerber path in the live viewer;
+                // the PNG quadrant export doesn't surface them individually.
+            }
+            LayerType::ViaPlugging(_) => {
+                // Via plugging is KiCad-specific manufacturing data; not
+                // rendered in the PNG quadrant export.
+            }
+            LayerType::UserLayer(_) => {
+                // User layers (M1/M2/M10/M11/M12, etc.) are documentation —
+                // not part of the quadrant-stack PNG export.
+            }
         }
     }
     

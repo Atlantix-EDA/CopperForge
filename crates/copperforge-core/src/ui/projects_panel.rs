@@ -53,6 +53,14 @@ pub fn show_projects_panel<'a>(
         // Top controls
         ui.horizontal(|ui| {
             // Search
+            if ui.button("📥 Import KiCad Project…").clicked() {
+                ui.ctx().memory_mut(|mem| {
+                    mem.data.insert_temp(egui::Id::new("open_project_import_modal"), true);
+                });
+            }
+
+            ui.separator();
+
             ui.label("🔍 Search:");
             let search_changed = ui.text_edit_singleline(&mut manager_state.search_query).changed();
 
@@ -93,10 +101,9 @@ pub fn show_projects_panel<'a>(
         // Project tree view
         if manager_state.project_list.is_empty() {
             ui.vertical_centered(|ui| {
-                ui.add_space(50.0);
-                ui.label("No projects found. Create your first project in the Project tab!");
-                ui.add_space(10.0);
-                ui.label("💡 Use the Project tab to create new KiCad projects");
+                ui.add_space(30.0);
+                ui.label("No projects imported yet.");
+                ui.label(egui::RichText::new("Click 📥 Import KiCad Project… above, or use the Shell's `new-project <name>` command.").small().italics());
             });
         } else {
             // Load hierarchies for all projects (if not already loaded)
@@ -290,14 +297,16 @@ pub fn show_projects_panel<'a>(
                     manager_state.show_delete_confirmation = Some(project_id.clone());
                 }
                 "new" => {
-                    manager_state.new_project_parent_id = None;
-                    manager_state.show_create_dialog = true;
-                    logger.log_info("New Project — open the Project Manager tab to complete the create dialog.");
+                    // Route to the Project Import modal at app level.
+                    ui.ctx().memory_mut(|mem| {
+                        mem.data.insert_temp(egui::Id::new("open_project_import_modal"), true);
+                    });
                 }
                 "new_child" => {
                     manager_state.new_project_parent_id = Some(project_id.clone());
-                    manager_state.show_create_dialog = true;
-                    logger.log_info("New Child Project — open the Project Manager tab to complete the create dialog.");
+                    ui.ctx().memory_mut(|mem| {
+                        mem.data.insert_temp(egui::Id::new("open_project_import_modal"), true);
+                    });
                 }
                 _ => {}
             }
