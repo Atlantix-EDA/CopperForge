@@ -51,7 +51,6 @@ pub struct CopperForgeApp {
     /// per frame in tabs.rs since they have nothing to carry.
     pub bom_panel: crate::panels::BomPanel,
     pub terminal_panel: crate::panels::TerminalPanel,
-    pub shell_panel: crate::panels::ShellPanel,
     pub logger_panel: crate::panels::LoggerPanel,
     pub gerber_view_3d_panel: crate::panels::GerberView3dPanel,
 
@@ -292,7 +291,7 @@ impl CopperForgeApp {
         for id in [
             "gerber_view", "view_settings", "drc", "projects",
             "settings", "bom",
-            "shell", "terminal", "logger",
+            "terminal", "logger",
         ] {
             dispatcher.register(CitizenId::new(id));
         }
@@ -312,7 +311,6 @@ impl CopperForgeApp {
             last_picked_projects_directory: None,
             bom_panel: crate::panels::BomPanel::new(egui_citizen::CitizenState::default()),
             terminal_panel: crate::panels::TerminalPanel::new(egui_citizen::CitizenState::default()),
-            shell_panel: crate::panels::ShellPanel::new(egui_citizen::CitizenState::default()),
             logger_panel: crate::panels::LoggerPanel::new(egui_citizen::CitizenState::default()),
             gerber_view_3d_panel: crate::panels::GerberView3dPanel::new(egui_citizen::CitizenState::default()),
             gl_context: None,
@@ -718,8 +716,7 @@ impl CopperForgeApp {
 
         let logger_tab = Tab::new(TabKind::Logger, SurfaceIndex::main(), NodeIndex(5));
         let terminal_tab = Tab::new(TabKind::Terminal, SurfaceIndex::main(), NodeIndex(6));
-        let shell_tab = Tab::new(TabKind::Shell, SurfaceIndex::main(), NodeIndex(7));
-        let bom_tab = Tab::new(TabKind::BOM, SurfaceIndex::main(), NodeIndex(8));
+        let bom_tab = Tab::new(TabKind::BOM, SurfaceIndex::main(), NodeIndex(7));
 
         // Gerber 2D + 3D share the main pane as sibling tabs.
         let mut dock_state = DockState::new(vec![gerber_tab, gerber_3d_tab]);
@@ -734,7 +731,7 @@ impl CopperForgeApp {
         );
 
         let _ = left; // no bottom split; Projects already uses the full left.
-        surface.split_below(right, 0.5, vec![logger_tab, terminal_tab, shell_tab, bom_tab]);
+        surface.split_below(right, 0.5, vec![logger_tab, terminal_tab, bom_tab]);
         surface.split_right(right, 0.5, vec![drc_tab, view_settings_tab]);
         dock_state
     }

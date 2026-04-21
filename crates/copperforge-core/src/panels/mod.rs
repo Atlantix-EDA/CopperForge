@@ -9,7 +9,6 @@ mod projects;
 mod bom;
 mod gerber_view;
 mod gerber_view_3d;
-mod shell;
 mod terminal;
 mod logger;
 
@@ -20,7 +19,6 @@ pub use projects::ProjectsPanel;
 pub use bom::BomPanel;
 pub use gerber_view::GerberViewPanel;
 pub use gerber_view_3d::GerberView3dPanel;
-pub use shell::ShellPanel;
 pub use terminal::TerminalPanel;
 pub use logger::LoggerPanel;
 
