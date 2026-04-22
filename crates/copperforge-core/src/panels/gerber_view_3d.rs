@@ -122,6 +122,13 @@ impl GerberView3dPanel {
     ) {
         ui.horizontal(|ui| {
             ui.add_space(6.0);
+            if ui.button("Reset View")
+                .on_hover_text("Restore default tilt and fit the board to the viewport (double-click the canvas does the same).")
+                .clicked()
+            {
+                self.reset_view(board_outline);
+            }
+            ui.add_space(12.0);
             ui.label("Grid:");
 
             // What step is Auto resolving to right now — used for the
@@ -194,6 +201,10 @@ impl GerberView3dPanel {
 
         if response.dragged_by(egui::PointerButton::Primary) {
             self.camera.orbit(response.drag_delta());
+        }
+        // Double-click anywhere on the canvas to restore the default view.
+        if response.double_clicked_by(egui::PointerButton::Primary) {
+            self.reset_view(board_outline);
         }
         if response.hovered() {
             let scroll = ui.input(|i| i.raw_scroll_delta.y);
@@ -309,6 +320,19 @@ impl GerberView3dPanel {
         });
 
         ui.ctx().request_repaint();
+    }
+}
+
+impl GerberView3dPanel {
+    /// Restore the default tilt and re-fit the board (if any) to the
+    /// viewport. Bound to the ribbon button + double-click on the canvas.
+    fn reset_view(&mut self, board_outline: Option<&OutlineData>) {
+        self.camera.reset_top_down();
+        if let Some(outline) = board_outline {
+            let w = (outline.bbox.max.x - outline.bbox.min.x) as f32;
+            let h = (outline.bbox.max.y - outline.bbox.min.y) as f32;
+            self.camera.fit_to_bbox(w, h);
+        }
     }
 }
 

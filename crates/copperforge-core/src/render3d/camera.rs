@@ -59,4 +59,12 @@ impl Camera {
         let dist = radius / 30f32.to_radians().tan() * 1.25;
         self.zoom = dist.clamp(0.3, 500.0);
     }
+
+    /// Reset to the default tilted top-down orientation (the same view the
+    /// panel opens in). Leaves zoom alone so the caller can follow up with
+    /// `fit_to_bbox` to also re-frame the board if they want.
+    pub fn reset_top_down(&mut self) {
+        let tilt = UnitQuaternion::from_axis_angle(&Vector3::x_axis(), -55f32.to_radians());
+        self.rotation = tilt;
+    }
 }
