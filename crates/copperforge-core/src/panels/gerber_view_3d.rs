@@ -79,7 +79,7 @@ impl GerberView3dPanel {
                     let unlit = UnlitProgram::new(gl);
 
                     let mut axes = ColoredMesh::new(gl, glow::LINES);
-                    axes.upload(gl, &axes_vertices(3.0));
+                    axes.upload(gl, &axes_vertices(3.0, 0.001));
 
                     let mut grid = ColoredMesh::new(gl, glow::LINES);
                     grid.upload(gl, &grid_vertices(5.0, 1.0, [0.28, 0.30, 0.35]));
