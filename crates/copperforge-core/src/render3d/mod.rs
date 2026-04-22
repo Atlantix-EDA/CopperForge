@@ -45,6 +45,6 @@ pub mod grid;
 pub mod mesh;
 pub mod renderer;
 
-pub use camera::{unproject_to_z0, Camera};
+pub use camera::{project, unproject_to_z0, Camera};
 pub use mesh::ColoredMesh;
 pub use renderer::UnlitProgram;

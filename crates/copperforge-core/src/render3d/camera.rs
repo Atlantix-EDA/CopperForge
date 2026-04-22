@@ -76,6 +76,22 @@ impl Camera {
     }
 }
 
+/// Project a world-space point through `mvp` into the egui screen rect.
+/// Returns `None` if the point is behind the camera. Used by the HUD layer
+/// to paint axis labels at the tip of each axis line.
+pub fn project(mvp: &Matrix4<f32>, viewport: egui::Rect, world: Vector3<f32>) -> Option<egui::Pos2> {
+    let clip = mvp * Vector4::new(world.x, world.y, world.z, 1.0);
+    if clip.w <= 0.0 {
+        return None;
+    }
+    let ndc_x = clip.x / clip.w;
+    let ndc_y = clip.y / clip.w;
+    // NDC y is up, egui y is down — flip.
+    let sx = viewport.center().x + ndc_x * viewport.width() * 0.5;
+    let sy = viewport.center().y - ndc_y * viewport.height() * 0.5;
+    Some(egui::Pos2::new(sx, sy))
+}
+
 /// Un-project a screen pixel onto the Z=0 world plane. Shoots a ray from
 /// the near clip plane to the far clip plane through the pixel and
 /// intersects it with the board plane — works for any camera orientation,

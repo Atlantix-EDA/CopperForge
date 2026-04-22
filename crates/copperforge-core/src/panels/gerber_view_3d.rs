@@ -5,7 +5,8 @@ use glow::HasContext as _;
 
 use crate::gerber_geom::OutlineData;
 use crate::render3d::{
-    axes::axes_vertices, grid::grid_vertices, unproject_to_z0, Camera, ColoredMesh, UnlitProgram,
+    axes::axes_vertices, grid::grid_vertices, project, unproject_to_z0, Camera, ColoredMesh,
+    UnlitProgram,
 };
 use nalgebra::Vector3;
 
@@ -63,6 +64,14 @@ pub struct GerberView3dPanel {
     /// Z=0 plane and retarget + rescale the camera to frame the selection.
     zoom_box_start: Option<egui::Pos2>,
     zoom_box_current: Option<egui::Pos2>,
+    /// Ground grid visibility. Toggled by the ribbon button + `G` hotkey
+    /// (when pointer is over the canvas, so typing G in other panels
+    /// doesn't flip it).
+    show_grid: bool,
+    /// Current axis-gizmo length (mm). Scales with the loaded board so the
+    /// gizmo reads as a meaningful reference rather than a microscopic
+    /// stub on large boards or a board-swamping monster on small ones.
+    axes_len: f32,
 }
 
 struct GpuResources {
@@ -89,6 +98,8 @@ impl GerberView3dPanel {
             last_units_mils: false,
             zoom_box_start: None,
             zoom_box_current: None,
+            show_grid: true,
+            axes_len: 3.0,
         }
     }
 
@@ -129,6 +140,9 @@ impl GerberView3dPanel {
         units_mils: bool,
     ) {
         ui.horizontal(|ui| {
+            ui.add_space(6.0);
+            ui.toggle_value(&mut self.show_grid, "Grid")
+                .on_hover_text("Toggle ground grid (G when cursor is over the 3D view)");
             ui.add_space(6.0);
             if ui.button("Reset View")
                 .on_hover_text("Restore default tilt and fit the board to the viewport (double-click the canvas does the same).")
@@ -233,6 +247,12 @@ impl GerberView3dPanel {
             if scroll.abs() > 0.0 {
                 self.camera.zoom_by(1.0 + scroll * 0.001);
             }
+            // `G` toggles grid only when the pointer is over this view, so
+            // typing G in another panel (e.g. the Terminal) doesn't flip
+            // the grid under the user.
+            if ui.input(|i| i.key_pressed(egui::Key::G)) {
+                self.show_grid = !self.show_grid;
+            }
         }
 
         let Some(gl) = gl else {
@@ -279,9 +299,20 @@ impl GerberView3dPanel {
                 g.board_ready = true;
                 self.last_board_dim = Some((w, h));
                 self.camera.fit_to_bbox(w, h);
+                // Scale the axes gizmo to ~15 % of the board's largest
+                // dimension so it reads as a meaningful reference instead
+                // of a microscopic stub or a board-swamping monster.
+                self.axes_len = (w.max(h) * 0.15).max(3.0);
+                unsafe {
+                    g.axes.upload(gl, &axes_vertices(self.axes_len, 0.001));
+                }
             } else if let Ok(mut g) = gpu.lock() {
                 g.board_ready = false;
                 self.last_board_dim = None;
+                self.axes_len = 3.0;
+                unsafe {
+                    g.axes.upload(gl, &axes_vertices(self.axes_len, 0.001));
+                }
             }
             self.last_had_outline = has_outline;
             self.last_uploaded_grid_step_mm = None;
@@ -351,6 +382,7 @@ impl GerberView3dPanel {
             self.zoom_box_current = None;
         }
 
+        let show_grid = self.show_grid;
         let callback = egui_glow::CallbackFn::new(move |_info, painter| {
             let gl = painter.gl();
             let Ok(g) = gpu.lock() else { return };
@@ -363,8 +395,10 @@ impl GerberView3dPanel {
                 if g.board_ready {
                     g.board.draw(gl);
                 }
-                gl.line_width(1.0);
-                g.grid.draw(gl);
+                if show_grid {
+                    gl.line_width(1.0);
+                    g.grid.draw(gl);
+                }
                 gl.line_width(2.5);
                 g.axes.draw(gl);
                 gl.depth_mask(false);
@@ -375,6 +409,42 @@ impl GerberView3dPanel {
             rect,
             callback: Arc::new(callback),
         });
+
+        // ── HUD: XYZ labels just past each axis tip ───────────────
+        // For each axis we project the origin and the tip, then push the
+        // label a fixed screen-space distance *past* the tip along the
+        // origin→tip direction so the letter never sits on top of the
+        // coloured line it's labelling.
+        let l = self.axes_len;
+        let label_offset_px = 14.0_f32;
+        let axes = [
+            (Vector3::new(l, 0.0, 0.0), "X", egui::Color32::from_rgb(255, 90, 90)),
+            (Vector3::new(0.0, l, 0.0), "Y", egui::Color32::from_rgb(90, 220, 90)),
+            (Vector3::new(0.0, 0.0, l), "Z", egui::Color32::from_rgb(110, 150, 255)),
+        ];
+        let font = egui::FontId::monospace(13.0);
+        let origin_screen = project(&mvp, rect, Vector3::zeros());
+        for (end, text, color) in axes {
+            let Some(tip) = project(&mvp, rect, end) else { continue };
+            let pos = match origin_screen {
+                Some(origin) => {
+                    let dir = tip - origin;
+                    let len = (dir.x * dir.x + dir.y * dir.y).sqrt();
+                    if len > 0.5 {
+                        egui::Pos2::new(
+                            tip.x + dir.x / len * label_offset_px,
+                            tip.y + dir.y / len * label_offset_px,
+                        )
+                    } else {
+                        tip
+                    }
+                }
+                None => tip,
+            };
+            if rect.contains(pos) {
+                ui.painter().text(pos, egui::Align2::CENTER_CENTER, text, font.clone(), color);
+            }
+        }
 
         // ── Right-drag zoom-box overlay ───────────────────────────
         if let (Some(s), Some(e)) = (self.zoom_box_start, self.zoom_box_current) {

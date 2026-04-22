@@ -1,6 +1,6 @@
 // CopperForge Functional Description Document
 // Document version (SEMVER)
-#let doc-version = "v0.2.0"
+#let doc-version = "v0.3.0"
 
 #let inset-size = 11pt
 
@@ -156,6 +156,7 @@
   ),
   [0.1.0], [Initial draft — gerber-direct pipeline architecture, block diagram, Phase 3 scope], [22 Apr 2026], [JB],
   [0.2.0], [Single-parse architecture: 2D via `gerber_viewer` reframed as legacy bypass, not a parallel pipeline. Roadmap extended with explicit retirement phase.], [22 Apr 2026], [JB],
+  [0.3.0], [Added Section 4 "Viewer 3D Features" documenting grid, zoom-to-region, flip, measure, hotkeys, and the 3D gizmo. Stage 6 updated: centered-at-origin world transform.], [22 Apr 2026], [JB],
 )
 
 #pagebreak()
@@ -374,9 +375,9 @@ Implementation: `lyon::tessellation::FillTessellator` with `FillRule::EvenOdd`. 
 
 Input: mesh in gerber-native coordinates (origin wherever the EDA tool placed it; Y conventionally points down in gerber coordinate system).
 
-Output: mesh in world coordinates where the board's lower-left corner sits at `(0, 0)` and Y points up (matching a top-down 3D camera).
+Output: mesh in world coordinates where the board's *center* sits at `(0, 0)` and Y points up (matching a top-down 3D camera).
 
-Implementation: `x' = x − bbox.min.x; y' = bbox.max.y − y`, applied inline at the end of the tessellation stage. The gerber-tool's arbitrary origin (e.g. alpha_filter board's `(2995, 0)` lower-left) disappears here; the 3D scene is always framed relative to the board itself.
+Implementation: `x' = x − bbox.center.x; y' = bbox.center.y − y`, applied inline at the end of the tessellation stage. The gerber-tool's arbitrary origin (e.g. alpha_filter board's `(2995, 0)` lower-left) disappears here; the 3D scene is always framed relative to the board itself. Centering at the board's centroid (rather than its lower-left corner) means the default orbit camera — which looks at the world origin — frames the board without needing a pan target, and zoom-to-region / auto-fit math stays symmetric.
 
 == Stage 7: GPU Upload and Render <stage-render>
 
@@ -389,7 +390,78 @@ Implementation: `crate::render3d::ColoredMesh::upload()` uploads the mesh into a
 #pagebreak()
 
 // ============================================================
-// SECTION 4: ROADMAP
+// SECTION 4: VIEWER 3D FEATURES
+// ============================================================
+
+= Viewer 3D Features <viewer-features>
+
+The 3D viewer panel (`crate::panels::gerber_view_3d`) hosts a ribbon + canvas that surfaces the interactive features described in this section. Features are written down here so the UX surface of the 3D view has a single reference independent of the code that happens to implement it today.
+
+Each subsection names its current status: *implemented* (ships on the current branch), *planned* (roadmap item, not yet wired), or *partial* (partially working; follow-up work enumerated inline).
+
+== Ground Grid <viewer-grid>
+
+_Status: implemented._
+
+A line-primitive XY grid at `Z = 0`, intended to give spatial context and a size reference. The grid re-sizes and re-steps whenever a new board loads.
+
+- *Step selection.* A ribbon `ComboBox` offers `Auto` plus a natural-step list in the active display unit: 20 / 50 / 100 / 250 / 500 / 1000 mils under mils mode, or 0.1 / 0.25 / 0.5 / 1 / 2.5 / 5 / 10 / 25 / 50 / 100 mm under mm mode. `Auto` picks the step yielding ~20 cells across the board's largest dimension, in whichever unit is active.
+- *Unit persistence.* Manual picks are stored in mm so toggling the display unit doesn't drift the world-space grid; the ribbon label translates on the fly.
+- *Visibility toggle.* Toggle button in the ribbon labelled `Grid`; also bound to the `G` hotkey when the pointer is over the 3D canvas. Hiding the grid leaves the axes gizmo and the board visible.
+- *Extent.* Grid half-extent is `max(board_max_dim × 0.75, step × 3)` — comfortably past the board edges so the board corners sit well inside the grid rather than flush with its border.
+
+== Zoom to Region <viewer-zoom>
+
+_Status: implemented._
+
+Right-mouse-drag on the canvas draws a yellow selection rectangle. On release, the camera pans and zooms so the selection fills the viewport.
+
+- The two screen-space corners of the selection are un-projected onto the `Z = 0` world plane via `render3d::unproject_to_z0(mvp_inverse, rect, pixel)`. That function shoots a ray from the near clip plane to the far clip plane through the given screen pixel and intersects it with the board plane, so the pan target is correct under any camera tilt — not just top-down.
+- Camera `target` (the orbit pivot) is set to the midpoint of the un-projected box; zoom is sized from the box's larger dimension via the same `fit_to_bbox` used for auto-fit on load.
+- Sub-8-pixel drags are rejected as accidental clicks.
+
+== Flip <viewer-flip>
+
+_Status: planned._
+
+A one-keystroke flip between viewing the top and bottom of the board. Intended binding: `F` hotkey (cursor over canvas). Implementation will add a 180° yaw to `camera.rotation` about the world Y axis, leaving `target` and `zoom` untouched so the framed region stays the same — just viewed from the opposite side.
+
+== Measure <viewer-measure>
+
+_Status: planned._
+
+3D ruler tool for reading distances between two points on the board. Intended interaction: click to place the first endpoint, drag or click again to place the second; a measurement line + distance label appear in the active display unit (mm or mils). Endpoints will be un-projected to `Z = 0` using the same helper zoom-to-region uses, so the ruler lives on the board plane and reads physical distances regardless of camera tilt. Parallel to the 2D-gerber ruler feature already in `SharedServices` (see `ruler_start` / `ruler_end`).
+
+== Hotkeys <viewer-hotkeys>
+
+Hotkeys only fire when the 3D canvas has pointer hover; typing the same key in another panel (Terminal, Settings, etc.) does not affect the 3D view. This is the same scoping rule the ribbon toggles use.
+
+#table(
+  columns: (auto, 1fr, auto),
+  align: (center, left, center),
+  table.header([*Key*], [*Action*], [*Status*]),
+  [`G`], [Toggle ground grid visibility], [Implemented],
+  [Double-click left], [Restore default view + fit to board], [Implemented],
+  [`F`], [Flip top/bottom view], [Planned (see #ref(<viewer-flip>))],
+  [`R`], [Rotate board 90° in-plane], [Planned],
+  [`M`], [Enter measure mode (see #ref(<viewer-measure>))], [Planned],
+  [Mouse wheel], [Zoom in / out], [Implemented],
+  [Left-drag], [Orbit camera], [Implemented],
+  [Right-drag], [Zoom to region (see #ref(<viewer-zoom>))], [Implemented],
+)
+
+== 3D Gizmo <viewer-gizmo>
+
+_Status: implemented._
+
+A line-primitive axis triad at world origin — red `X`, green `Y`, blue `Z` — lifted a hair above the grid plane (`z_base = 0.001`) so the axis lines win the depth test over the grid centerlines. Axis length scales with the loaded board: `axes_len = max(max_dim × 0.15, 3.0)` mm, so a 30 mm board shows a 4.5 mm gizmo and a 300 mm board shows a 45 mm gizmo — always readable as a reference but never swamping the view.
+
+HUD labels (`X`, `Y`, `Z`) are painted as egui 2D text in the matching axis colours at each tip. For each axis, the origin and tip are projected to screen space via `render3d::project(mvp, rect, world)`; the label is pushed a fixed 14-pixel offset past the tip along the on-screen origin→tip direction, so the letter never sits on top of the coloured line. When an axis points directly at (or away from) the camera, the projection degenerates and the label is drawn at the tip instead.
+
+#pagebreak()
+
+// ============================================================
+// SECTION 5: ROADMAP
 // ============================================================
 
 = Phased Rollout <roadmap>
@@ -429,7 +501,7 @@ The step-by-step development plan for the 3D viewer lives in `develop/task3d-pla
 #pagebreak()
 
 // ============================================================
-// SECTION 5: REFERENCES
+// SECTION 6: REFERENCES
 // ============================================================
 
 = References <references>
