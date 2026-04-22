@@ -17,6 +17,7 @@ image = { workspace = true }
 gerber_viewer = { workspace = true }
 gerber_types = { workspace = true }
 gerber_parser = { workspace = true }
+lyon = { workspace = true }
 nalgebra = { workspace = true }
 
 # 3D renderer

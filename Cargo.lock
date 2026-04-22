@@ -517,6 +517,7 @@ dependencies = [
  "image",
  "kiparse",
  "log",
+ "lyon",
  "nalgebra",
  "once_cell",
  "redb",
