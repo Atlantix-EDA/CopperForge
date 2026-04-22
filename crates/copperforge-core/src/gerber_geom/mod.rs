@@ -490,20 +490,25 @@ fn tessellate(
     }
 
     // World-space transform: translate so the board's *center* lands at
-    // (0, 0), Y-flip around the center so a top-down 3D view matches the
-    // 2D viewer's orientation. The gerber's original origin (e.g.
-    // alpha_filter's (2995, 0) lower-left) disappears here — the 3D scene
-    // is always framed relative to the board itself, not the exporting
-    // tool's origin.
+    // (0, 0). Gerber coordinates are Y-up per the spec (RS-274X §4.2.3),
+    // matching the 3D world's Y-up convention, so no Y-flip is needed —
+    // just center.
     //
-    // Centering (vs lower-left at origin) is what makes the default orbit
-    // camera frame the board correctly without needing a pan target: the
-    // camera already looks at world-origin.
+    // (An earlier version of this code Y-flipped, based on a mistaken
+    // assumption that gerber was Y-down. That left the board rendering
+    // upside-down relative to the 2D gerber view — invisible on the
+    // rectangular outline alone because a rectangle is symmetric about
+    // its X-axis centerline, but the bug surfaced the moment asymmetric
+    // copper content rendered on top.)
+    //
+    // The gerber's original origin (e.g. alpha_filter's (2995, 0) lower-
+    // left) disappears here — the 3D scene is always framed relative to
+    // the board itself, not the exporting tool's origin.
     let cx = ((bbox.min.x + bbox.max.x) * 0.5) as f32;
     let cy = ((bbox.min.y + bbox.max.y) * 0.5) as f32;
     for v in &mut geometry.vertices {
         v[0] -= cx;
-        v[1] = cy - v[1];
+        v[1] -= cy;
     }
 
     Some((geometry.vertices, geometry.indices))

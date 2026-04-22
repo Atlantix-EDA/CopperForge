@@ -477,14 +477,14 @@ fn tessellate(
     }
 
     // World transform — identical to the outline's (Stage 6 of the FDD
-    // pipeline): shift by bbox center, Y-flip around it. Using the
-    // *outline's* bbox here is what locks copper alignment to the board
-    // mesh vertex-for-vertex.
+    // pipeline): shift by bbox center (no Y-flip; gerber is Y-up per spec
+    // §4.2.3, same as 3D world). Using the *outline's* bbox here is what
+    // locks copper alignment to the board mesh vertex-for-vertex.
     let cx = ((outline_bbox.min.x + outline_bbox.max.x) * 0.5) as f32;
     let cy = ((outline_bbox.min.y + outline_bbox.max.y) * 0.5) as f32;
     for v in &mut geometry.vertices {
         v[0] -= cx;
-        v[1] = cy - v[1];
+        v[1] -= cy;
     }
 
     Some((geometry.vertices, geometry.indices))
