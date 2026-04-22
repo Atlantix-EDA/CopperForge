@@ -1,6 +1,6 @@
 // CopperForge Functional Description Document
 // Document version (SEMVER)
-#let doc-version = "v0.3.2"
+#let doc-version = "v0.3.3"
 
 #let inset-size = 11pt
 
@@ -127,6 +127,8 @@
 
       - *2D geometry as intermediate representation* — the tessellated polygon data that drives the 2D canvas view is the same data the 3D extruder consumes. Rendering in two dimensions is not a separate pipeline; it is an intermediate stage of the 3D pipeline.
 
+      - *Embedded 3D, not a popout window* — the 3D view is a first-class dock panel that shares egui's OpenGL context in-process, sitting alongside the Layer Controls, Terminal, and DRC readouts in a single window. Most PCB tools spawn a separate top-level window for 3D as a workaround for cross-context GL plumbing; CopperForge sidesteps that entirely and orbits at display refresh rate on modest hardware.
+
       - *Fab truth* — because the 3D view is driven by gerbers, it shows what the fabrication house actually receives. Gerber-export bugs in the upstream EDA tool become visible in the 3D view, rather than being masked by a parallel PCB-file-direct parser.
       #par(justify: true)[
         This document specifies the CopperForge functional architecture, the gerber processing pipeline from file to rendered mesh, the 3D renderer structure, and the roadmap for extending the tool from its current KiCad-centric project workflow to true cross-vendor gerber loading.
@@ -159,6 +161,7 @@
   [0.3.0], [Added Section 4 "Viewer 3D Features" documenting grid, zoom-to-region, flip, measure, hotkeys, and the 3D gizmo. Stage 6 updated: centered-at-origin world transform.], [22 Apr 2026], [JB],
   [0.3.1], [Hotkey routing via egui_citizen: 2D vs 3D tab activation gates keys like F/R/M so they fire in the correct view. "gerber_view_3d" citizen added to the registration list; the global dispatcher reads the one-hot active flag.], [22 Apr 2026], [JB],
   [0.3.2], [F / R / M 3D hotkeys implemented: flip camera 180° Y, rotate 90° Z, modal measure tool on Z=0 plane with distance label. Added Rotate In-Plane subsection.], [22 Apr 2026], [JB],
+  [0.3.3], [Added "Embedded 3D Rendering" subsection to Motivation and a matching bullet to the Abstract: first-class dock panel, `egui_glow::CallbackFn` + `Arc<Mutex<GpuResources>>` pattern, vs the popout-window approach most other tools use.], [22 Apr 2026], [JB],
 )
 
 #pagebreak()
@@ -203,6 +206,24 @@ This has two concrete consequences for the architecture:
 + *The gerber parser is the primary geometry source.* All rendered views — 2D canvas, 3D extrusion, future DRC overlays — read geometry that originates in a gerber file. The `.kicad_pcb` parser (for project metadata) is a secondary, optional data source.
 
 + *The 2D and 3D views share the same geometry pipeline.* Polygon extraction happens once per loaded project; the 2D canvas and the 3D extruder are downstream consumers of the same intermediate representation. This eliminates the class of bugs where the two views disagree.
+
+== Embedded 3D Rendering <embedded-3d>
+
+A second architectural commitment, independent of the gerber-first decision but supporting it: the 3D view is *embedded in the main application window as a dockable tab*, not a popout window or modal dialog. KiCad, Altium, and most other PCB tools spawn a separate top-level OS window for their 3D viewer. That is a workaround for a real problem — embedding custom OpenGL inside a main application window on C++ / Qt / Electron stacks requires platform-specific context-sharing primitives (`wglShareLists`, `glXCreateContextAttribsARB`, or the equivalent in whatever abstraction the GUI framework provides), and texture / buffer handles don't cross GL contexts cleanly. Popping the 3D view out to its own window sidesteps the problem by giving it its own GL context.
+
+CopperForge keeps the 3D view in-process:
+
+- The renderer draws into egui's own OpenGL context via `egui_glow::CallbackFn`. No second GL context is created; no cross-context sharing is needed.
+- GPU resources (VBOs, VAOs, shader programs) live behind an `Arc<Mutex<GpuResources>>` that both the panel and the paint-callback closure hold. Lazy-initialised once on the first frame a gl context is available, reused every frame thereafter. The callback closure doesn't need to borrow the panel, which is what lets it satisfy egui's re-entrant paint signature.
+- The 3D tab is an ordinary `egui_dock` panel — draggable to any dock node, splittable next to the 2D gerber view, resizable without re-initialisation. Tab activation and hotkey routing go through `egui_citizen` exactly like every other panel (see #ref(<viewer-hotkeys>)).
+
+The practical consequences:
+
++ *Responsiveness.* No cross-context texture copies, no OS window spawn on tab switch, no window-manager focus handoff. Orbit and zoom run at display refresh rate on modest hardware.
+
++ *Compositional UI.* The 3D view shares the window with Layer Controls, Project Database, Terminal, and Logger. A user debugging a gerber export can orbit the 3D board, type a `kicad-cli` command in the terminal, and watch the logger tail in a single window — the popout pattern forces a context switch for every one of those steps.
+
+Rust's package ecosystem is the quiet load-bearing piece behind this. `glow`, `egui_glow`, `lyon`, `nalgebra`, `gerber_parser` are all single-line workspace dependencies. Adding the C++ equivalent via CMake + vcpkg + `ExternalProject` would mean a week of build-system plumbing before a pixel lands on screen; here it was an afternoon. The gerber-first pipeline is only tractable because reaching for a new parser or tessellator crate is cheap — which in turn makes the embedded-in-one-window architecture viable instead of being yet another thing to pop out.
 
 == What This Architecture Rejects <what-it-rejects>
 
