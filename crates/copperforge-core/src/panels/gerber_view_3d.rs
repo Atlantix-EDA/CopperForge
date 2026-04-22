@@ -12,8 +12,46 @@ use crate::render3d::{
 /// tone so a board rendered without mask+copper still reads as a PCB.
 const FR4_COLOR: [f32; 3] = [0.18, 0.42, 0.22];
 
+const GRID_COLOR: [f32; 3] = [0.28, 0.30, 0.35];
+
+const MM_PER_MIL: f32 = 0.0254;
+
+const RIBBON_HEIGHT: f32 = 26.0;
+
+/// Grid-step selection surfaced by the ribbon ComboBox. Manual picks are
+/// stored in mils (matching the human-facing unit), then converted to mm
+/// before the grid mesh is built.
+#[derive(Clone, Copy, PartialEq)]
+enum GridStep {
+    /// Scales with board size — picks a natural 1-2-5 mm step sized to
+    /// ~1/10th of the board's largest dimension.
+    Auto,
+    /// User-chosen step in mils.
+    Mils(f32),
+}
+
+impl GridStep {
+    fn label(&self) -> String {
+        match self {
+            GridStep::Auto => "Auto".to_string(),
+            GridStep::Mils(m) => format!("{} mils", *m as i32),
+        }
+    }
+
+    /// Resolve to a concrete step in mm for the given board dimensions.
+    fn to_mm(self, board_max_dim_mm: f32) -> f32 {
+        match self {
+            GridStep::Auto => pick_natural_step(board_max_dim_mm / 10.0),
+            GridStep::Mils(m) => m * MM_PER_MIL,
+        }
+    }
+}
+
+const MIL_CHOICES: &[f32] = &[20.0, 50.0, 100.0, 250.0, 500.0];
+
 /// Phase-3 3D viewport: axes gizmo + ground grid + flat board outline,
-/// sourced from the gerber polygon IR (FDD Stage 6 output).
+/// sourced from the gerber polygon IR (FDD Stage 6 output). A top ribbon
+/// hosts the grid-step ComboBox.
 pub struct GerberView3dPanel {
     citizen_id: CitizenId,
     citizen_state: CitizenState,
@@ -21,10 +59,20 @@ pub struct GerberView3dPanel {
     /// Lazily created on the first frame where a gl context is available.
     gpu: Option<Arc<Mutex<GpuResources>>>,
     /// Whether the last uploaded board mesh came from a real outline. Flips
-    /// between `false` (nothing loaded) and `true` (outline present). The
-    /// upload pass uses this to skip re-uploading identical geometry every
-    /// frame while still picking up newly loaded projects.
+    /// between `false` (nothing loaded) and `true` (outline present). Used
+    /// to decide when to re-upload the board mesh and re-fit the camera.
     last_had_outline: bool,
+    /// Board dims (mm) cached from the last uploaded outline. The grid
+    /// mesh is rebuilt off these whenever the step changes.
+    last_board_dim: Option<(f32, f32)>,
+    /// User-selected grid step. Persisted across outline loads; the grid
+    /// mesh re-uploads whenever the resolved mm step differs from the
+    /// value last sent to the GPU.
+    grid_step: GridStep,
+    /// Step in mm actually on the GPU right now, so we only re-upload when
+    /// the resolved value changes (e.g. Auto → step-per-board, or user
+    /// picking a new mil value).
+    last_uploaded_grid_step_mm: Option<f32>,
 }
 
 struct GpuResources {
@@ -45,10 +93,64 @@ impl GerberView3dPanel {
             camera: Camera::default(),
             gpu: None,
             last_had_outline: false,
+            last_board_dim: None,
+            grid_step: GridStep::Auto,
+            last_uploaded_grid_step_mm: None,
         }
     }
 
     pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        gl: Option<&Arc<glow::Context>>,
+        board_outline: Option<&OutlineData>,
+    ) {
+        // ── Ribbon ─────────────────────────────────────────────────
+        // Carve a fixed-height strip off the top of the panel for the
+        // grid-step ComboBox. The remainder is the 3D canvas.
+        let total = ui.available_rect_before_wrap();
+        let ribbon_rect = egui::Rect::from_min_max(
+            total.min,
+            egui::Pos2::new(total.max.x, total.min.y + RIBBON_HEIGHT),
+        );
+        let canvas_rect = egui::Rect::from_min_max(
+            egui::Pos2::new(total.min.x, total.min.y + RIBBON_HEIGHT),
+            total.max,
+        );
+
+        let mut ribbon_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(ribbon_rect)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        self.show_ribbon(&mut ribbon_ui);
+
+        // ── 3D canvas ──────────────────────────────────────────────
+        let mut canvas_ui = ui.new_child(egui::UiBuilder::new().max_rect(canvas_rect));
+        self.show_canvas(&mut canvas_ui, gl, board_outline);
+    }
+
+    fn show_ribbon(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.add_space(6.0);
+            ui.label("Grid:");
+            egui::ComboBox::from_id_salt("gerber_view_3d_grid_step")
+                .selected_text(self.grid_step.label())
+                .width(110.0)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.grid_step, GridStep::Auto, "Auto");
+                    for &m in MIL_CHOICES {
+                        ui.selectable_value(
+                            &mut self.grid_step,
+                            GridStep::Mils(m),
+                            format!("{} mils", m as i32),
+                        );
+                    }
+                });
+        });
+    }
+
+    fn show_canvas(
         &mut self,
         ui: &mut egui::Ui,
         gl: Option<&Arc<glow::Context>>,
@@ -97,8 +199,10 @@ impl GerberView3dPanel {
                     let mut axes = ColoredMesh::new(gl, glow::LINES);
                     axes.upload(gl, &axes_vertices(3.0, 0.001));
 
+                    // Placeholder grid — replaced on first outline load /
+                    // first grid-step change, whichever comes first.
                     let mut grid = ColoredMesh::new(gl, glow::LINES);
-                    grid.upload(gl, &grid_vertices(5.0, 1.0, [0.28, 0.30, 0.35]));
+                    grid.upload(gl, &grid_vertices(5.0, 1.0, GRID_COLOR));
 
                     let board = ColoredMesh::new(gl, glow::TRIANGLES);
 
@@ -108,30 +212,56 @@ impl GerberView3dPanel {
             })
             .clone();
 
-        // Upload (or re-upload) the board mesh whenever the outline transitions
-        // between absent ↔ present. Outline content is stable for a given
-        // project, so we don't need a deeper comparison than that. On every
-        // present→absent→present transition we also re-fit the camera and
-        // re-scale the grid so the new board frames correctly.
+        // ── Board mesh upload (absent ↔ present transition) ────────
         let has_outline = board_outline.is_some();
         if has_outline != self.last_had_outline {
             if let (Some(outline), Ok(mut g)) = (board_outline, gpu.lock()) {
                 let w = (outline.bbox.max.x - outline.bbox.min.x) as f32;
                 let h = (outline.bbox.max.y - outline.bbox.min.y) as f32;
                 let verts = build_board_vertices(outline, FR4_COLOR, 0.0);
-                let grid_verts = build_grid_for_board(w, h);
                 unsafe {
                     g.board.upload(gl, &verts);
-                    g.grid.upload(gl, &grid_verts);
                 }
                 g.board_ready = true;
-                // Fit camera to the new board's extent so the user sees the
-                // whole thing without a scroll-wheel hunt.
+                self.last_board_dim = Some((w, h));
+                // Auto-fit the camera to the new board's extent.
                 self.camera.fit_to_bbox(w, h);
             } else if let Ok(mut g) = gpu.lock() {
                 g.board_ready = false;
+                self.last_board_dim = None;
             }
             self.last_had_outline = has_outline;
+            // Force the grid to re-evaluate at the next step — board dim
+            // changed, and Auto's resolved step scales with it.
+            self.last_uploaded_grid_step_mm = None;
+        }
+
+        // ── Grid mesh upload (when resolved step changes) ──────────
+        // If no board is loaded, fall back to a fixed 10 mm reference grid
+        // so there's still spatial context on empty projects.
+        let (grid_step_mm, grid_half_extent) = match self.last_board_dim {
+            Some((w, h)) => {
+                let max_dim = w.max(h).max(1.0);
+                let step = self.grid_step.to_mm(max_dim);
+                let half_extent = (max_dim * 0.75).max(step * 3.0);
+                (step, half_extent)
+            }
+            None => {
+                let step = match self.grid_step {
+                    GridStep::Auto => 1.0,
+                    GridStep::Mils(m) => m * MM_PER_MIL,
+                };
+                (step, (step * 5.0).max(5.0))
+            }
+        };
+        if self.last_uploaded_grid_step_mm != Some(grid_step_mm) {
+            if let Ok(mut g) = gpu.lock() {
+                let verts = grid_vertices(grid_half_extent, grid_step_mm, GRID_COLOR);
+                unsafe {
+                    g.grid.upload(gl, &verts);
+                }
+            }
+            self.last_uploaded_grid_step_mm = Some(grid_step_mm);
         }
 
         let mvp = self.camera.mvp(rect);
@@ -144,9 +274,6 @@ impl GerberView3dPanel {
                 gl.depth_mask(true);
                 gl.clear(glow::DEPTH_BUFFER_BIT);
                 g.unlit.bind(gl, &mvp);
-                // Board (flat FR-4 fill) first so line primitives land on top
-                // via the depth test and the axes gizmo (lifted by z_base)
-                // wins at the centerlines.
                 if g.board_ready {
                     g.board.draw(gl);
                 }
@@ -185,19 +312,6 @@ fn build_board_vertices(outline: &OutlineData, rgb: [f32; 3], z: f32) -> Vec<f32
         out.extend_from_slice(&[v[0], v[1], z, r, g, b]);
     }
     out
-}
-
-/// Pick a grid extent + step that frames a centered board of `width × height`
-/// (mm) with room to spare. Step size tracks the board's largest dimension so
-/// a 30 mm board gets a 5 mm grid and a 300 mm board gets a 50 mm grid; the
-/// grid extends 1.5× the board's half-dimension past each edge so the board
-/// corners sit well inside the grid rather than at its boundary.
-fn build_grid_for_board(width: f32, height: f32) -> Vec<f32> {
-    let max_dim = width.max(height).max(1.0);
-    // Round step to a "natural" 1-2-5 magnitude for readability.
-    let step = pick_natural_step(max_dim / 10.0);
-    let half_extent = (max_dim * 0.75).max(step * 3.0);
-    grid_vertices(half_extent, step, [0.28, 0.30, 0.35])
 }
 
 fn pick_natural_step(target: f32) -> f32 {
