@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use egui_citizen::{Citizen, CitizenId, CitizenState};
 use glow::HasContext as _;
 
-use crate::gerber_geom::OutlineData;
+use crate::gerber_geom::{CopperData, OutlineData};
 use crate::render3d::{
     axes::axes_vertices, grid::grid_vertices, project, unproject_to_z0, Camera, ColoredMesh,
     UnlitProgram,
@@ -13,6 +13,15 @@ use nalgebra::Vector3;
 /// FR-4 green for the flat board mesh. Matches the conventional soldermask
 /// tone so a board rendered without mask+copper still reads as a PCB.
 const FR4_COLOR: [f32; 3] = [0.18, 0.42, 0.22];
+/// ENIG gold (#D8AD4F) for F.Cu / B.Cu. Matches what a HASL/ENIG finished
+/// board actually reads as under a green mask — keeps copper looking like
+/// copper rather than antique orange (#B87333) which reads as rust.
+const COPPER_COLOR: [f32; 3] = [0.85, 0.68, 0.31];
+/// Flat-slab Z offsets for the copper layers. Positive = top side (F.Cu
+/// floats above the FR-4 plane), negative = bottom (B.Cu sits beneath).
+/// Phase 4a is flat-slab extrusion; Phase 4b adds side walls.
+const COPPER_Z_TOP: f32 = 0.020;
+const COPPER_Z_BOTTOM: f32 = -0.040;
 
 const GRID_COLOR: [f32; 3] = [0.28, 0.30, 0.35];
 
@@ -44,6 +53,10 @@ pub struct GerberView3dPanel {
     gpu: Option<Arc<Mutex<GpuResources>>>,
     /// Whether the last uploaded board mesh came from a real outline.
     last_had_outline: bool,
+    /// Presence flags for copper meshes — re-upload only when the project
+    /// loads or unloads F.Cu / B.Cu geometry.
+    last_had_top_copper: bool,
+    last_had_bottom_copper: bool,
     /// Board dims (mm) cached from the last uploaded outline. Drives the
     /// grid's half-extent + Auto step picker.
     last_board_dim: Option<(f32, f32)>,
@@ -90,6 +103,10 @@ struct GpuResources {
     /// project with a parseable Edge.Cuts gerber loads.
     board: ColoredMesh,
     board_ready: bool,
+    top_copper: ColoredMesh,
+    top_copper_ready: bool,
+    bottom_copper: ColoredMesh,
+    bottom_copper_ready: bool,
 }
 
 impl GerberView3dPanel {
@@ -100,6 +117,8 @@ impl GerberView3dPanel {
             camera: Camera::default(),
             gpu: None,
             last_had_outline: false,
+            last_had_top_copper: false,
+            last_had_bottom_copper: false,
             last_board_dim: None,
             grid_step: GridStep::Auto,
             last_uploaded_grid_step_mm: None,
@@ -151,6 +170,8 @@ impl GerberView3dPanel {
         ui: &mut egui::Ui,
         gl: Option<&Arc<glow::Context>>,
         board_outline: Option<&OutlineData>,
+        top_copper: Option<&CopperData>,
+        bottom_copper: Option<&CopperData>,
         units_mils: bool,
     ) {
         // ── Ribbon ─────────────────────────────────────────────────
@@ -173,7 +194,7 @@ impl GerberView3dPanel {
 
         // ── 3D canvas ──────────────────────────────────────────────
         let mut canvas_ui = ui.new_child(egui::UiBuilder::new().max_rect(canvas_rect));
-        self.show_canvas(&mut canvas_ui, gl, board_outline, units_mils);
+        self.show_canvas(&mut canvas_ui, gl, board_outline, top_copper, bottom_copper, units_mils);
     }
 
     fn show_ribbon(
@@ -253,6 +274,8 @@ impl GerberView3dPanel {
         ui: &mut egui::Ui,
         gl: Option<&Arc<glow::Context>>,
         board_outline: Option<&OutlineData>,
+        top_copper: Option<&CopperData>,
+        bottom_copper: Option<&CopperData>,
         units_mils: bool,
     ) {
         let (rect, response) =
@@ -353,8 +376,20 @@ impl GerberView3dPanel {
                     grid.upload(gl, &grid_vertices(5.0, 1.0, GRID_COLOR));
 
                     let board = ColoredMesh::new(gl, glow::TRIANGLES);
+                    let top_copper = ColoredMesh::new(gl, glow::TRIANGLES);
+                    let bottom_copper = ColoredMesh::new(gl, glow::TRIANGLES);
 
-                    GpuResources { unlit, axes, grid, board, board_ready: false }
+                    GpuResources {
+                        unlit,
+                        axes,
+                        grid,
+                        board,
+                        board_ready: false,
+                        top_copper,
+                        top_copper_ready: false,
+                        bottom_copper,
+                        bottom_copper_ready: false,
+                    }
                 };
                 Arc::new(Mutex::new(resources))
             })
@@ -390,6 +425,34 @@ impl GerberView3dPanel {
             }
             self.last_had_outline = has_outline;
             self.last_uploaded_grid_step_mm = None;
+        }
+
+        // ── Copper meshes (F.Cu / B.Cu) ───────────────────────────
+        let has_top_copper = top_copper.is_some();
+        if has_top_copper != self.last_had_top_copper {
+            if let (Some(cu), Ok(mut g)) = (top_copper, gpu.lock()) {
+                let verts = build_copper_vertices(cu, COPPER_COLOR, COPPER_Z_TOP);
+                unsafe {
+                    g.top_copper.upload(gl, &verts);
+                }
+                g.top_copper_ready = true;
+            } else if let Ok(mut g) = gpu.lock() {
+                g.top_copper_ready = false;
+            }
+            self.last_had_top_copper = has_top_copper;
+        }
+        let has_bottom_copper = bottom_copper.is_some();
+        if has_bottom_copper != self.last_had_bottom_copper {
+            if let (Some(cu), Ok(mut g)) = (bottom_copper, gpu.lock()) {
+                let verts = build_copper_vertices(cu, COPPER_COLOR, COPPER_Z_BOTTOM);
+                unsafe {
+                    g.bottom_copper.upload(gl, &verts);
+                }
+                g.bottom_copper_ready = true;
+            } else if let Ok(mut g) = gpu.lock() {
+                g.bottom_copper_ready = false;
+            }
+            self.last_had_bottom_copper = has_bottom_copper;
         }
 
         // ── Grid mesh (when resolved step changes) ─────────────────
@@ -464,8 +527,17 @@ impl GerberView3dPanel {
                 gl.depth_mask(true);
                 gl.clear(glow::DEPTH_BUFFER_BIT);
                 g.unlit.bind(gl, &mvp);
+                // Deepest-to-shallowest draw order so the depth buffer
+                // handles layer overlap correctly: B.Cu (most negative Z)
+                // -> board -> F.Cu.
+                if g.bottom_copper_ready {
+                    g.bottom_copper.draw(gl);
+                }
                 if g.board_ready {
                     g.board.draw(gl);
+                }
+                if g.top_copper_ready {
+                    g.top_copper.draw(gl);
                 }
                 if show_grid {
                     gl.line_width(1.0);
@@ -622,6 +694,19 @@ fn build_board_vertices(outline: &OutlineData, rgb: [f32; 3], z: f32) -> Vec<f32
     let mut out = Vec::with_capacity(outline.mesh_indices.len() * 6);
     for &idx in &outline.mesh_indices {
         let v = outline.mesh_vertices_2d[idx as usize];
+        out.extend_from_slice(&[v[0], v[1], z, r, g, b]);
+    }
+    out
+}
+
+/// Same shape as `build_board_vertices` but reads from a `CopperData` at a
+/// caller-chosen Z. Kept separate so the call site reads clearly as
+/// "copper mesh, not board mesh."
+fn build_copper_vertices(cu: &CopperData, rgb: [f32; 3], z: f32) -> Vec<f32> {
+    let [r, g, b] = rgb;
+    let mut out = Vec::with_capacity(cu.mesh_indices.len() * 6);
+    for &idx in &cu.mesh_indices {
+        let v = cu.mesh_vertices_2d[idx as usize];
         out.extend_from_slice(&[v[0], v[1], z, r, g, b]);
     }
     out

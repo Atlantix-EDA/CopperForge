@@ -263,6 +263,8 @@ impl CopperForgeApp {
             needs_initial_view: true,
             rotation_degrees: 0.0,
             board_outline: None,
+            top_copper: None,
+            bottom_copper: None,
             display_manager: DisplayManager::new(),
             drc_manager: DrcManager::new(),
             grid_settings: GridSettings::default(),

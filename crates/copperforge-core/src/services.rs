@@ -49,6 +49,12 @@ pub struct SharedServices {
     /// gerber. `None` until a project with an Edge.Cuts gerber loads.
     /// Repopulated on every `load_gerbers_into_viewer` call.
     pub board_outline: Option<crate::gerber_geom::OutlineData>,
+    /// F.Cu polygon IR — copper on the top side. Extracted from the top-
+    /// copper gerber, tessellated in the same world frame as the board
+    /// outline so the meshes align on the GPU.
+    pub top_copper: Option<crate::gerber_geom::CopperData>,
+    /// B.Cu polygon IR — copper on the bottom side.
+    pub bottom_copper: Option<crate::gerber_geom::CopperData>,
 
     // ── Display / DRC / grid ──────────────────────────────────
     pub display_manager: DisplayManager,

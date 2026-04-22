@@ -124,8 +124,17 @@ impl Tab {
             TabKind::GerberView3d => {
                 let gl = params.app.gl_context.clone();
                 let outline = params.app.services.board_outline.as_ref();
+                let top_copper = params.app.services.top_copper.as_ref();
+                let bottom_copper = params.app.services.bottom_copper.as_ref();
                 let units_mils = params.app.services.global_units_mils;
-                params.app.gerber_view_3d_panel.show(ui, gl.as_ref(), outline, units_mils);
+                params.app.gerber_view_3d_panel.show(
+                    ui,
+                    gl.as_ref(),
+                    outline,
+                    top_copper,
+                    bottom_copper,
+                    units_mils,
+                );
             }
             TabKind::Logger => {
                 params.app.logger_panel.show(ui, &mut params.app.services);

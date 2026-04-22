@@ -159,6 +159,71 @@ pub fn load_gerbers_into_viewer(
     // This duplication is documented in the FDD's "Legacy 2D Rendering Path"
     // section and goes away when Phase 7 retires gerber_viewer.
     app.services.board_outline = extract_outline_from_layer_store(&app.services.layer_store, logger);
+
+    // Copper layers (Phase 4a). Require an outline bbox so the copper mesh
+    // lines up with the board mesh — both share the same world transform
+    // (Stage 6 of the FDD pipeline, centered at outline bbox).
+    if let Some(outline) = app.services.board_outline.as_ref() {
+        let outline_bbox = outline.bbox.clone();
+        app.services.top_copper = extract_copper_side(
+            &app.services.layer_store,
+            crate::layer_store::LayerType::Copper(1),
+            "F.Cu",
+            &outline_bbox,
+            logger,
+        );
+        app.services.bottom_copper = extract_copper_side(
+            &app.services.layer_store,
+            crate::layer_store::LayerType::Copper(2),
+            "B.Cu",
+            &outline_bbox,
+            logger,
+        );
+    } else {
+        app.services.top_copper = None;
+        app.services.bottom_copper = None;
+    }
+}
+
+/// Look up a copper layer in the store and extract its polygon IR, aligned
+/// to the board outline's bbox. `label` is used in log output so the reader
+/// can tell F.Cu and B.Cu lines apart.
+fn extract_copper_side(
+    store: &crate::layer_store::LayerStore,
+    layer_type: crate::layer_store::LayerType,
+    label: &str,
+    outline_bbox: &gerber_viewer::BoundingBox,
+    logger: &ReactiveEventLogger,
+) -> Option<crate::gerber_geom::CopperData> {
+    let layer = store.find(layer_type)?;
+    let path = layer.file_path.as_ref()?;
+    match crate::gerber_geom::extract_copper(path, outline_bbox) {
+        Some((data, counts)) => {
+            logger.log_info(&format!(
+                "{} copper: {} circle + {} rect + {} obround + {} polygon flash(es); {} linear stroke(s); {} region polygon(s); {} macros / {} arc-strokes / {} non-circle-strokes skipped",
+                label,
+                counts.flashed_circles,
+                counts.flashed_rectangles,
+                counts.flashed_obrounds,
+                counts.flashed_polygons,
+                counts.linear_strokes,
+                counts.region_polygons,
+                counts.flashed_macros_skipped,
+                counts.arc_strokes_skipped,
+                counts.non_circle_strokes_skipped,
+            ));
+            logger.log_info(&format!(
+                "{} copper: {} triangle(s) tessellated",
+                label,
+                data.mesh_indices.len() / 3,
+            ));
+            Some(data)
+        }
+        None => {
+            logger.log_warning(&format!("{} copper: no geometry extracted", label));
+            None
+        }
+    }
 }
 
 /// Look up the mechanical-outline layer in the store, grab its source file

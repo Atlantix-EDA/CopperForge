@@ -20,6 +20,9 @@
 //! a file omits X or Y (which KiCad exports do routinely, to keep file
 //! size reasonable).
 
+pub mod copper;
+pub use copper::{extract_copper, CopperCounts, CopperData};
+
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
