@@ -1,33 +1,38 @@
-use nalgebra::{Matrix4, Perspective3, Translation3, UnitQuaternion, Vector3};
+use nalgebra::{Matrix4, Perspective3, Translation3, UnitQuaternion, Vector3, Vector4};
 
-/// Simple orbit camera: rotates the world about the origin, viewed from a
-/// fixed distance `zoom` along -Z. Pan reserved for Phase 3+.
+/// Orbit camera: rotates the world about `target`, viewed from `zoom` units
+/// along -Z in camera space. `target` lets zoom-to-region + board-recenter
+/// move the orbit pivot to any scene point instead of being stuck at origin.
 pub struct Camera {
     pub rotation: UnitQuaternion<f32>,
     pub zoom: f32,
+    pub target: Vector3<f32>,
 }
 
 impl Default for Camera {
     fn default() -> Self {
         // Tilt the world ~55° forward so the XY plane reads as a receding
         // floor rather than edge-on, and pull the camera back far enough to
-        // see the 10×10 ground grid.
+        // see a 10×10 ground grid before any board is loaded.
         let tilt = UnitQuaternion::from_axis_angle(&Vector3::x_axis(), -55f32.to_radians());
         Self {
             rotation: tilt,
             zoom: 12.0,
+            target: Vector3::zeros(),
         }
     }
 }
 
 impl Camera {
-    /// Build `P * V * I` (identity model). Caller multiplies per-object M
-    /// in later phases.
+    /// Build `P * V` (identity model). The view matrix translates the world
+    /// so `target` lands at camera-space origin, rotates, then pulls back by
+    /// `zoom` — orbit pivots on `target`, not on the world origin.
     pub fn mvp(&self, viewport: egui::Rect) -> Matrix4<f32> {
         let aspect = (viewport.width() / viewport.height().max(1.0)).max(0.01);
         let proj = Perspective3::new(aspect, 60f32.to_radians(), 0.1, 10_000.0);
         let view = Translation3::new(0.0, 0.0, -self.zoom).to_homogeneous()
-            * self.rotation.to_homogeneous();
+            * self.rotation.to_homogeneous()
+            * Translation3::from(-self.target).to_homogeneous();
         proj.as_matrix() * view
     }
 
@@ -61,10 +66,43 @@ impl Camera {
     }
 
     /// Reset to the default tilted top-down orientation (the same view the
-    /// panel opens in). Leaves zoom alone so the caller can follow up with
-    /// `fit_to_bbox` to also re-frame the board if they want.
+    /// panel opens in) with the orbit pivot back at world origin. Leaves
+    /// zoom alone so the caller can follow up with `fit_to_bbox` to also
+    /// re-frame the board if they want.
     pub fn reset_top_down(&mut self) {
         let tilt = UnitQuaternion::from_axis_angle(&Vector3::x_axis(), -55f32.to_radians());
         self.rotation = tilt;
+        self.target = Vector3::zeros();
     }
+}
+
+/// Un-project a screen pixel onto the Z=0 world plane. Shoots a ray from
+/// the near clip plane to the far clip plane through the pixel and
+/// intersects it with the board plane — works for any camera orientation,
+/// including heavily tilted perspective views where a naive inverse-of-NDC
+/// trick wouldn't. Used by right-mouse-drag zoom-to-region so the selected
+/// rectangle maps back to the physical region the user framed.
+pub fn unproject_to_z0(
+    mvp_inverse: &Matrix4<f32>,
+    viewport: egui::Rect,
+    screen: egui::Pos2,
+) -> Option<Vector3<f32>> {
+    let nx = 2.0 * (screen.x - viewport.min.x) / viewport.width() - 1.0;
+    let ny = 1.0 - 2.0 * (screen.y - viewport.min.y) / viewport.height();
+    let to_world = |z: f32| -> Option<Vector3<f32>> {
+        let clip = Vector4::new(nx, ny, z, 1.0);
+        let w = mvp_inverse * clip;
+        if w.w.abs() < 1e-6 {
+            return None;
+        }
+        Some(Vector3::new(w.x / w.w, w.y / w.w, w.z / w.w))
+    };
+    let near = to_world(-1.0)?;
+    let far = to_world(1.0)?;
+    let dz = far.z - near.z;
+    if dz.abs() < 1e-6 {
+        return None;
+    }
+    let t = -near.z / dz;
+    Some(near + (far - near) * t)
 }

@@ -5,8 +5,9 @@ use glow::HasContext as _;
 
 use crate::gerber_geom::OutlineData;
 use crate::render3d::{
-    axes::axes_vertices, grid::grid_vertices, Camera, ColoredMesh, UnlitProgram,
+    axes::axes_vertices, grid::grid_vertices, unproject_to_z0, Camera, ColoredMesh, UnlitProgram,
 };
+use nalgebra::Vector3;
 
 /// FR-4 green for the flat board mesh. Matches the conventional soldermask
 /// tone so a board rendered without mask+copper still reads as a PCB.
@@ -57,6 +58,11 @@ pub struct GerberView3dPanel {
     /// "5 mm" under mm flips to "250 mils" under mils — round number in
     /// either unit rather than "394 mils" converted from 10 mm.
     last_units_mils: bool,
+    /// Right-mouse-drag zoom-to-region: anchor pixel on drag start, live
+    /// pixel during drag. On release we un-project both corners to the
+    /// Z=0 plane and retarget + rescale the camera to frame the selection.
+    zoom_box_start: Option<egui::Pos2>,
+    zoom_box_current: Option<egui::Pos2>,
 }
 
 struct GpuResources {
@@ -81,6 +87,8 @@ impl GerberView3dPanel {
             grid_step: GridStep::Auto,
             last_uploaded_grid_step_mm: None,
             last_units_mils: false,
+            zoom_box_start: None,
+            zoom_box_current: None,
         }
     }
 
@@ -206,6 +214,20 @@ impl GerberView3dPanel {
         if response.double_clicked_by(egui::PointerButton::Primary) {
             self.reset_view(board_outline);
         }
+        // Right-mouse-drag zoom-to-region. Track start + live pixel during
+        // the drag; commit on release once the final MVP is known.
+        if response.drag_started_by(egui::PointerButton::Secondary) {
+            if let Some(p) = response.interact_pointer_pos() {
+                self.zoom_box_start = Some(p);
+                self.zoom_box_current = Some(p);
+            }
+        }
+        if response.dragged_by(egui::PointerButton::Secondary) {
+            if let Some(p) = response.interact_pointer_pos() {
+                self.zoom_box_current = Some(p);
+            }
+        }
+        let zoom_box_released = response.drag_stopped_by(egui::PointerButton::Secondary);
         if response.hovered() {
             let scroll = ui.input(|i| i.raw_scroll_delta.y);
             if scroll.abs() > 0.0 {
@@ -294,6 +316,41 @@ impl GerberView3dPanel {
         }
 
         let mvp = self.camera.mvp(rect);
+
+        // On right-drag release: un-project the two screen corners onto the
+        // Z=0 plane, retarget the camera to the region's center, and scale
+        // zoom so the selection fills the viewport.
+        if zoom_box_released {
+            if let (Some(s), Some(e)) = (self.zoom_box_start, self.zoom_box_current) {
+                // Ignore accidental clicks (< 8 px on both axes).
+                if (s.x - e.x).abs() >= 8.0 || (s.y - e.y).abs() >= 8.0 {
+                    if let Some(mvp_inv) = mvp.try_inverse() {
+                        if let (Some(ws), Some(we)) = (
+                            unproject_to_z0(&mvp_inv, rect, s),
+                            unproject_to_z0(&mvp_inv, rect, e),
+                        ) {
+                            let min_x = ws.x.min(we.x);
+                            let max_x = ws.x.max(we.x);
+                            let min_y = ws.y.min(we.y);
+                            let max_y = ws.y.max(we.y);
+                            let w = max_x - min_x;
+                            let h = max_y - min_y;
+                            if w > 0.0 && h > 0.0 {
+                                self.camera.target = Vector3::new(
+                                    (min_x + max_x) * 0.5,
+                                    (min_y + max_y) * 0.5,
+                                    0.0,
+                                );
+                                self.camera.fit_to_bbox(w, h);
+                            }
+                        }
+                    }
+                }
+            }
+            self.zoom_box_start = None;
+            self.zoom_box_current = None;
+        }
+
         let callback = egui_glow::CallbackFn::new(move |_info, painter| {
             let gl = painter.gl();
             let Ok(g) = gpu.lock() else { return };
@@ -318,6 +375,22 @@ impl GerberView3dPanel {
             rect,
             callback: Arc::new(callback),
         });
+
+        // ── Right-drag zoom-box overlay ───────────────────────────
+        if let (Some(s), Some(e)) = (self.zoom_box_start, self.zoom_box_current) {
+            let box_rect = egui::Rect::from_two_pos(s, e).intersect(rect);
+            ui.painter().rect_filled(
+                box_rect,
+                0.0,
+                egui::Color32::from_rgba_unmultiplied(255, 200, 60, 40),
+            );
+            ui.painter().rect_stroke(
+                box_rect,
+                0.0,
+                egui::Stroke::new(1.5, egui::Color32::from_rgb(255, 200, 60)),
+                egui::StrokeKind::Inside,
+            );
+        }
 
         ui.ctx().request_repaint();
     }
