@@ -262,6 +262,7 @@ impl CopperForgeApp {
             ui_state: UiState::default(),
             needs_initial_view: true,
             rotation_degrees: 0.0,
+            board_outline: None,
             display_manager: DisplayManager::new(),
             drc_manager: DrcManager::new(),
             grid_settings: GridSettings::default(),

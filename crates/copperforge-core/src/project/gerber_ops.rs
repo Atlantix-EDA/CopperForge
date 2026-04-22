@@ -152,4 +152,44 @@ pub fn load_gerbers_into_viewer(
             logger.log_error(&format!("Failed to load gerbers: {}", e));
         }
     }
+
+    // 3D pipeline geometry: extract the board outline from the mechanical-
+    // outline gerber. Reads the file a second time via `gerber_parser` — the
+    // legacy `gerber_viewer` path has already read it once for the 2D canvas.
+    // This duplication is documented in the FDD's "Legacy 2D Rendering Path"
+    // section and goes away when Phase 7 retires gerber_viewer.
+    app.services.board_outline = extract_outline_from_layer_store(&app.services.layer_store, logger);
+}
+
+/// Look up the mechanical-outline layer in the store, grab its source file
+/// path, and run `gerber_geom::extract_outline` on it. Returns `None` if the
+/// layer isn't present, the file path wasn't recorded at load time, or the
+/// extractor couldn't recover any closed contours.
+fn extract_outline_from_layer_store(
+    store: &crate::layer_store::LayerStore,
+    logger: &ReactiveEventLogger,
+) -> Option<crate::gerber_geom::OutlineData> {
+    let layer = store.find(crate::layer_store::LayerType::MechanicalOutline)?;
+    let path = layer.file_path.as_ref()?;
+    match crate::gerber_geom::extract_outline(path) {
+        Some((data, counts)) => {
+            logger.log_info(&format!(
+                "Board outline: {} linear + {} arc stroke(s), {} region polygon(s) -> {} stitched contour(s), {} triangle(s)",
+                counts.linear_strokes,
+                counts.arc_strokes,
+                counts.region_polygons,
+                counts.stitched_contours,
+                data.mesh_indices.len() / 3,
+            ));
+            logger.log_info(&format!(
+                "Board outline bbox (gerber coords, mm): [{:.3}, {:.3}] -> [{:.3}, {:.3}]",
+                data.bbox.min.x, data.bbox.min.y, data.bbox.max.x, data.bbox.max.y,
+            ));
+            Some(data)
+        }
+        None => {
+            logger.log_warning("Board outline: gerber_geom produced no closed contours");
+            None
+        }
+    }
 }

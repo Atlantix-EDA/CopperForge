@@ -123,7 +123,8 @@ impl Tab {
             }
             TabKind::GerberView3d => {
                 let gl = params.app.gl_context.clone();
-                params.app.gerber_view_3d_panel.show(ui, gl.as_ref());
+                let outline = params.app.services.board_outline.as_ref();
+                params.app.gerber_view_3d_panel.show(ui, gl.as_ref(), outline);
             }
             TabKind::Logger => {
                 params.app.logger_panel.show(ui, &mut params.app.services);

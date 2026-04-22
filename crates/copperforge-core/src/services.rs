@@ -44,6 +44,12 @@ pub struct SharedServices {
     pub needs_initial_view: bool,
     pub rotation_degrees: f32,
 
+    // ── 3D pipeline geometry (FDD Stage 3-6 output) ───────────
+    /// Board-outline polygon IR extracted from the mechanical-outline
+    /// gerber. `None` until a project with an Edge.Cuts gerber loads.
+    /// Repopulated on every `load_gerbers_into_viewer` call.
+    pub board_outline: Option<crate::gerber_geom::OutlineData>,
+
     // ── Display / DRC / grid ──────────────────────────────────
     pub display_manager: DisplayManager,
     pub drc_manager: DrcManager,
