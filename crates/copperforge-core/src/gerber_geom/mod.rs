@@ -486,16 +486,21 @@ fn tessellate(
         return None;
     }
 
-    // World-space transform: translate so bbox.min lands at (0, 0), Y-flip
-    // around bbox.max.y so a top-down 3D view matches the 2D viewer's
-    // orientation. The gerber's original origin (e.g. alpha_filter board's
-    // (2995, 0) lower-left) disappears here — the 3D scene is always
-    // framed relative to the board itself, not the exporting tool's origin.
-    let min_x = bbox.min.x as f32;
-    let max_y = bbox.max.y as f32;
+    // World-space transform: translate so the board's *center* lands at
+    // (0, 0), Y-flip around the center so a top-down 3D view matches the
+    // 2D viewer's orientation. The gerber's original origin (e.g.
+    // alpha_filter's (2995, 0) lower-left) disappears here — the 3D scene
+    // is always framed relative to the board itself, not the exporting
+    // tool's origin.
+    //
+    // Centering (vs lower-left at origin) is what makes the default orbit
+    // camera frame the board correctly without needing a pan target: the
+    // camera already looks at world-origin.
+    let cx = ((bbox.min.x + bbox.max.x) * 0.5) as f32;
+    let cy = ((bbox.min.y + bbox.max.y) * 0.5) as f32;
     for v in &mut geometry.vertices {
-        v[0] -= min_x;
-        v[1] = max_y - v[1];
+        v[0] -= cx;
+        v[1] = cy - v[1];
     }
 
     Some((geometry.vertices, geometry.indices))

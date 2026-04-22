@@ -110,15 +110,24 @@ impl GerberView3dPanel {
 
         // Upload (or re-upload) the board mesh whenever the outline transitions
         // between absent ↔ present. Outline content is stable for a given
-        // project, so we don't need a deeper comparison than that.
+        // project, so we don't need a deeper comparison than that. On every
+        // present→absent→present transition we also re-fit the camera and
+        // re-scale the grid so the new board frames correctly.
         let has_outline = board_outline.is_some();
         if has_outline != self.last_had_outline {
             if let (Some(outline), Ok(mut g)) = (board_outline, gpu.lock()) {
+                let w = (outline.bbox.max.x - outline.bbox.min.x) as f32;
+                let h = (outline.bbox.max.y - outline.bbox.min.y) as f32;
                 let verts = build_board_vertices(outline, FR4_COLOR, 0.0);
+                let grid_verts = build_grid_for_board(w, h);
                 unsafe {
                     g.board.upload(gl, &verts);
+                    g.grid.upload(gl, &grid_verts);
                 }
                 g.board_ready = true;
+                // Fit camera to the new board's extent so the user sees the
+                // whole thing without a scroll-wheel hunt.
+                self.camera.fit_to_bbox(w, h);
             } else if let Ok(mut g) = gpu.lock() {
                 g.board_ready = false;
             }
@@ -176,4 +185,27 @@ fn build_board_vertices(outline: &OutlineData, rgb: [f32; 3], z: f32) -> Vec<f32
         out.extend_from_slice(&[v[0], v[1], z, r, g, b]);
     }
     out
+}
+
+/// Pick a grid extent + step that frames a centered board of `width × height`
+/// (mm) with room to spare. Step size tracks the board's largest dimension so
+/// a 30 mm board gets a 5 mm grid and a 300 mm board gets a 50 mm grid; the
+/// grid extends 1.5× the board's half-dimension past each edge so the board
+/// corners sit well inside the grid rather than at its boundary.
+fn build_grid_for_board(width: f32, height: f32) -> Vec<f32> {
+    let max_dim = width.max(height).max(1.0);
+    // Round step to a "natural" 1-2-5 magnitude for readability.
+    let step = pick_natural_step(max_dim / 10.0);
+    let half_extent = (max_dim * 0.75).max(step * 3.0);
+    grid_vertices(half_extent, step, [0.28, 0.30, 0.35])
+}
+
+fn pick_natural_step(target: f32) -> f32 {
+    const STEPS: &[f32] = &[0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0];
+    for &s in STEPS {
+        if s >= target {
+            return s;
+        }
+    }
+    *STEPS.last().unwrap()
 }

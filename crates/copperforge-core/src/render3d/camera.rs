@@ -46,4 +46,17 @@ impl Camera {
         }
         self.zoom = (self.zoom / factor).clamp(0.3, 500.0);
     }
+
+    /// Frame a centered-at-origin bounding box of size `width × height` (mm).
+    /// Picks a camera distance large enough that a 60°-FOV perspective view
+    /// from the default 55° tilt shows the full board with ~25% margin.
+    pub fn fit_to_bbox(&mut self, width: f32, height: f32) {
+        // Radius of the bbox on the XY plane. The projection squashes Y by
+        // cos(tilt) in screen space, so the taller dimension bounds the fit.
+        let radius = (width.max(height) * 0.5).max(1.0);
+        // For FOV 60° → half-FOV 30° → distance = radius / tan(30°) ≈ 1.73r.
+        // Bump by 25% for visual breathing room.
+        let dist = radius / 30f32.to_radians().tan() * 1.25;
+        self.zoom = dist.clamp(0.3, 500.0);
+    }
 }
