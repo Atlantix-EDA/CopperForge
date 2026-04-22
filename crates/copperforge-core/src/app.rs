@@ -867,6 +867,29 @@ impl eframe::App for CopperForgeApp {
                     }
                 }
 
+                // ── 3D-tab hotkeys ────────────────────────────────
+                if three_d_active {
+                    if i.key_pressed(egui::Key::F) {
+                        self.gerber_view_3d_panel.flip_view();
+                        let logger = ReactiveEventLogger::with_colors(&self.services.logger_state, &self.services.log_colors);
+                        logger.log_info("3D view flipped (F key)");
+                    }
+                    if i.key_pressed(egui::Key::R) {
+                        self.gerber_view_3d_panel.rotate_in_plane_90();
+                        let logger = ReactiveEventLogger::with_colors(&self.services.logger_state, &self.services.log_colors);
+                        logger.log_info("3D view rotated 90° in-plane (R key)");
+                    }
+                    if i.key_pressed(egui::Key::M) {
+                        let now_active = self.gerber_view_3d_panel.toggle_measure();
+                        let logger = ReactiveEventLogger::with_colors(&self.services.logger_state, &self.services.log_colors);
+                        logger.log_info(if now_active {
+                            "3D measure mode activated (M key) — left-drag to measure"
+                        } else {
+                            "3D measure mode exited (M key)"
+                        });
+                    }
+                }
+
                 if i.key_pressed(egui::Key::Escape) && self.services.ruler_active {
                     if self.services.ruler_start.is_some() && self.services.ruler_end.is_some() {
                         self.services.latched_measurement_start = self.services.ruler_start;

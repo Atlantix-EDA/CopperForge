@@ -1,6 +1,6 @@
 // CopperForge Functional Description Document
 // Document version (SEMVER)
-#let doc-version = "v0.3.1"
+#let doc-version = "v0.3.2"
 
 #let inset-size = 11pt
 
@@ -158,6 +158,7 @@
   [0.2.0], [Single-parse architecture: 2D via `gerber_viewer` reframed as legacy bypass, not a parallel pipeline. Roadmap extended with explicit retirement phase.], [22 Apr 2026], [JB],
   [0.3.0], [Added Section 4 "Viewer 3D Features" documenting grid, zoom-to-region, flip, measure, hotkeys, and the 3D gizmo. Stage 6 updated: centered-at-origin world transform.], [22 Apr 2026], [JB],
   [0.3.1], [Hotkey routing via egui_citizen: 2D vs 3D tab activation gates keys like F/R/M so they fire in the correct view. "gerber_view_3d" citizen added to the registration list; the global dispatcher reads the one-hot active flag.], [22 Apr 2026], [JB],
+  [0.3.2], [F / R / M 3D hotkeys implemented: flip camera 180° Y, rotate 90° Z, modal measure tool on Z=0 plane with distance label. Added Rotate In-Plane subsection.], [22 Apr 2026], [JB],
 )
 
 #pagebreak()
@@ -423,15 +424,25 @@ Right-mouse-drag on the canvas draws a yellow selection rectangle. On release, t
 
 == Flip <viewer-flip>
 
-_Status: planned._
+_Status: implemented._
 
-A one-keystroke flip between viewing the top and bottom of the board. Intended binding: `F` hotkey (cursor over canvas). Implementation will add a 180° yaw to `camera.rotation` about the world Y axis, leaving `target` and `zoom` untouched so the framed region stays the same — just viewed from the opposite side.
+`F` hotkey flips the camera 180° about the world Y axis, revealing the bottom of the board. Press `F` a second time to return. Implementation: `Camera::flip_y()` post-multiplies the camera's rotation quaternion by a 180° Y-axis rotation, leaving `target` and `zoom` untouched so the framed region stays the same — just viewed from the opposite side.
+
+== Rotate In-Plane <viewer-rotate>
+
+_Status: implemented._
+
+`R` hotkey rotates the view 90° about the world Z axis — a quarter-turn in-plane. Each press steps another 90°; four presses return to the starting orientation. Implementation: `Camera::rotate_in_plane(radians)` post-multiplies the rotation quaternion by a Z-axis rotation. Use-case: matching the 3D view's orientation to a physical board a user is holding, or switching between portrait and landscape board layouts.
 
 == Measure <viewer-measure>
 
-_Status: planned._
+_Status: implemented._
 
-3D ruler tool for reading distances between two points on the board. Intended interaction: click to place the first endpoint, drag or click again to place the second; a measurement line + distance label appear in the active display unit (mm or mils). Endpoints will be un-projected to `Z = 0` using the same helper zoom-to-region uses, so the ruler lives on the board plane and reads physical distances regardless of camera tilt. Parallel to the 2D-gerber ruler feature already in `SharedServices` (see `ruler_start` / `ruler_end`).
+3D ruler tool. `M` hotkey toggles measure mode; when active, a yellow `MEASURE (M to exit)` banner appears in the top-left of the canvas and left-drag no longer orbits the camera — it draws a measurement line between two points on the `Z = 0` board plane. A distance label (formatted in the active display unit — mm or mils) appears at the midpoint of the line with a dark backdrop for legibility over the FR-4 green.
+
+Endpoints are un-projected from screen to world via `render3d::unproject_to_z0`, the same helper zoom-to-region uses, so the ruler reads physical board distances regardless of camera tilt or rotation. Exiting measure mode with a second `M` press leaves the last line visible at half opacity — re-entering measure mode clears it and lets the user start over.
+
+The measure tool lives inside the 3D panel's state (not `SharedServices`) because it isn't shared with other panels. Parallel but independent of the 2D-gerber ruler (`services.ruler_*`), which is tracked globally because the 2D ruler is visible in the DRC panel's measurement readout too.
 
 == Hotkeys <viewer-hotkeys>
 
@@ -447,9 +458,9 @@ One additional rule: `G` (grid toggle) is scoped more tightly — it requires po
   table.header([*Key*], [*Action*], [*Status*]),
   [`G`], [Toggle ground grid visibility], [Implemented],
   [Double-click left], [Restore default view + fit to board], [Implemented],
-  [`F`], [Flip top/bottom view], [Planned (see #ref(<viewer-flip>))],
-  [`R`], [Rotate board 90° in-plane], [Planned],
-  [`M`], [Enter measure mode (see #ref(<viewer-measure>))], [Planned],
+  [`F`], [Flip top/bottom view (see #ref(<viewer-flip>))], [Implemented],
+  [`R`], [Rotate 90° in-plane (see #ref(<viewer-rotate>))], [Implemented],
+  [`M`], [Toggle measure mode (see #ref(<viewer-measure>))], [Implemented],
   [Mouse wheel], [Zoom in / out], [Implemented],
   [Left-drag], [Orbit camera], [Implemented],
   [Right-drag], [Zoom to region (see #ref(<viewer-zoom>))], [Implemented],

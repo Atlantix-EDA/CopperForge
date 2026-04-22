@@ -74,6 +74,22 @@ impl Camera {
         self.rotation = tilt;
         self.target = Vector3::zeros();
     }
+
+    /// Flip the view 180° about the world Y axis — in practice, this
+    /// spins the board over so the bottom faces the camera. Pressing
+    /// `F` twice returns to the original view.
+    pub fn flip_y(&mut self) {
+        let flip = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), std::f32::consts::PI);
+        self.rotation *= flip;
+    }
+
+    /// Rotate the view about the world Z axis by `radians`. Bound to the
+    /// `R` hotkey as 90° increments — each press steps the board a
+    /// quarter-turn in-plane.
+    pub fn rotate_in_plane(&mut self, radians: f32) {
+        let rot = UnitQuaternion::from_axis_angle(&Vector3::z_axis(), radians);
+        self.rotation *= rot;
+    }
 }
 
 /// Project a world-space point through `mvp` into the egui screen rect.

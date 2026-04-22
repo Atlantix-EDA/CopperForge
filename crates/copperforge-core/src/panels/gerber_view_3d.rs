@@ -72,6 +72,14 @@ pub struct GerberView3dPanel {
     /// gizmo reads as a meaningful reference rather than a microscopic
     /// stub on large boards or a board-swamping monster on small ones.
     axes_len: f32,
+    /// Measure tool (`M` hotkey). When active, left-drag on the canvas
+    /// draws a line between two points on the Z=0 plane instead of
+    /// orbiting the camera. Start/end stay visible until `M` is pressed
+    /// again to exit measure mode.
+    measure_active: bool,
+    measure_start: Option<Vector3<f32>>,
+    measure_end: Option<Vector3<f32>>,
+    measure_dragging: bool,
 }
 
 struct GpuResources {
@@ -100,7 +108,42 @@ impl GerberView3dPanel {
             zoom_box_current: None,
             show_grid: true,
             axes_len: 3.0,
+            measure_active: false,
+            measure_start: None,
+            measure_end: None,
+            measure_dragging: false,
         }
+    }
+
+    /// Flip the camera 180° about world Y — reveals the back of the
+    /// board. Bound to the `F` hotkey when the 3D tab is the active
+    /// citizen.
+    pub fn flip_view(&mut self) {
+        self.camera.flip_y();
+    }
+
+    /// Rotate the view 90° in-plane (about world Z). Bound to the `R`
+    /// hotkey when the 3D tab is the active citizen.
+    pub fn rotate_in_plane_90(&mut self) {
+        self.camera.rotate_in_plane(std::f32::consts::FRAC_PI_2);
+    }
+
+    /// Enter/exit the measure tool. Exiting clears the active drag but
+    /// leaves the latched start/end visible so the user can re-enter
+    /// measure mode and see what was measured last. Bound to the `M`
+    /// hotkey when the 3D tab is the active citizen.
+    pub fn toggle_measure(&mut self) -> bool {
+        self.measure_active = !self.measure_active;
+        self.measure_dragging = false;
+        if !self.measure_active {
+            // Exiting: clear the in-flight drag but keep the last line
+            // visible so the user can see what was measured.
+        } else {
+            // Entering a fresh measurement: wipe the previous endpoints.
+            self.measure_start = None;
+            self.measure_end = None;
+        }
+        self.measure_active
     }
 
     pub fn show(
@@ -221,7 +264,38 @@ impl GerberView3dPanel {
             egui::Color32::from_rgb(12, 14, 20),
         );
 
-        if response.dragged_by(egui::PointerButton::Primary) {
+        // Compute MVP early so we can un-project pixels for the measure
+        // tool during the same frame the drag starts.
+        let mvp = self.camera.mvp(rect);
+
+        // Primary-button handling branches on measure-mode. Measure wins:
+        // while active, left-drag draws a distance line on Z=0 instead of
+        // orbiting the camera. Double-click always resets view regardless.
+        if self.measure_active {
+            if response.drag_started_by(egui::PointerButton::Primary) {
+                if let Some(p) = response.interact_pointer_pos() {
+                    if let Some(mvp_inv) = mvp.try_inverse() {
+                        if let Some(w) = unproject_to_z0(&mvp_inv, rect, p) {
+                            self.measure_start = Some(w);
+                            self.measure_end = Some(w);
+                            self.measure_dragging = true;
+                        }
+                    }
+                }
+            }
+            if self.measure_dragging && response.dragged_by(egui::PointerButton::Primary) {
+                if let Some(p) = response.interact_pointer_pos() {
+                    if let Some(mvp_inv) = mvp.try_inverse() {
+                        if let Some(w) = unproject_to_z0(&mvp_inv, rect, p) {
+                            self.measure_end = Some(w);
+                        }
+                    }
+                }
+            }
+            if response.drag_stopped_by(egui::PointerButton::Primary) {
+                self.measure_dragging = false;
+            }
+        } else if response.dragged_by(egui::PointerButton::Primary) {
             self.camera.orbit(response.drag_delta());
         }
         // Double-click anywhere on the canvas to restore the default view.
@@ -346,8 +420,6 @@ impl GerberView3dPanel {
             self.last_uploaded_grid_step_mm = Some(grid_step_mm);
         }
 
-        let mvp = self.camera.mvp(rect);
-
         // On right-drag release: un-project the two screen corners onto the
         // Z=0 plane, retarget the camera to the region's center, and scale
         // zoom so the selection fills the viewport.
@@ -444,6 +516,62 @@ impl GerberView3dPanel {
             if rect.contains(pos) {
                 ui.painter().text(pos, egui::Align2::CENTER_CENTER, text, font.clone(), color);
             }
+        }
+
+        // ── Measure tool overlay ──────────────────────────────────
+        // Painted over the 3D view (not depth-tested) so the line + label
+        // stay visible regardless of viewing angle. Endpoints project
+        // through MVP; distance is the world-space (Z=0) length.
+        if let (Some(ws), Some(we)) = (self.measure_start, self.measure_end) {
+            if let (Some(ps), Some(pe)) = (project(&mvp, rect, ws), project(&mvp, rect, we)) {
+                let color = if self.measure_active {
+                    egui::Color32::from_rgb(255, 220, 90)
+                } else {
+                    egui::Color32::from_rgba_unmultiplied(255, 220, 90, 180)
+                };
+                ui.painter().line_segment([ps, pe], egui::Stroke::new(2.0, color));
+                ui.painter().circle_filled(ps, 3.5, color);
+                ui.painter().circle_filled(pe, 3.5, color);
+                let dist_mm = (we - ws).norm();
+                let midpoint = egui::Pos2::new(
+                    (ps.x + pe.x) * 0.5,
+                    (ps.y + pe.y) * 0.5 - 10.0,
+                );
+                let text = format_dim(dist_mm, units_mils);
+                // Small dark backdrop behind the label so the number stays
+                // legible over the FR-4 green.
+                let galley = ui.painter().layout_no_wrap(
+                    text.clone(),
+                    egui::FontId::monospace(13.0),
+                    color,
+                );
+                let bg_rect = egui::Rect::from_center_size(midpoint, galley.size() + egui::vec2(8.0, 4.0));
+                ui.painter().rect_filled(
+                    bg_rect,
+                    3.0,
+                    egui::Color32::from_rgba_unmultiplied(0, 0, 0, 180),
+                );
+                ui.painter().text(
+                    midpoint,
+                    egui::Align2::CENTER_CENTER,
+                    text,
+                    egui::FontId::monospace(13.0),
+                    color,
+                );
+            }
+        }
+
+        // Measure-mode banner in the top-left of the canvas so the modal
+        // input binding (left-drag = measure, not orbit) is visible.
+        if self.measure_active {
+            let banner_pos = egui::Pos2::new(rect.min.x + 10.0, rect.min.y + 10.0);
+            ui.painter().text(
+                banner_pos,
+                egui::Align2::LEFT_TOP,
+                "MEASURE  (M to exit)",
+                egui::FontId::monospace(12.0),
+                egui::Color32::from_rgb(255, 220, 90),
+            );
         }
 
         // ── Right-drag zoom-box overlay ───────────────────────────
