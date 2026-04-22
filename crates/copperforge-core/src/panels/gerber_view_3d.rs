@@ -19,60 +19,44 @@ const MM_PER_MIL: f32 = 0.0254;
 const RIBBON_HEIGHT: f32 = 26.0;
 
 /// Grid-step selection surfaced by the ribbon ComboBox. Manual picks are
-/// stored in mils (matching the human-facing unit), then converted to mm
-/// before the grid mesh is built.
+/// stored in mm so toggling the display unit between mm and mils doesn't
+/// drift the world-space grid; the ribbon label just translates on the fly.
 #[derive(Clone, Copy, PartialEq)]
 enum GridStep {
-    /// Scales with board size — picks a natural 1-2-5 mm step sized to
-    /// ~1/10th of the board's largest dimension.
+    /// Scales with board size + the active display unit — picks a natural
+    /// 1-2-5 step in that unit sized to ~1/20th of the board's largest
+    /// dimension, so the cell count reads as a round number either way.
     Auto,
-    /// User-chosen step in mils.
-    Mils(f32),
+    /// User-chosen step, stored in mm.
+    Manual(f32),
 }
-
-impl GridStep {
-    fn label(&self) -> String {
-        match self {
-            GridStep::Auto => "Auto".to_string(),
-            GridStep::Mils(m) => format!("{} mils", *m as i32),
-        }
-    }
-
-    /// Resolve to a concrete step in mm for the given board dimensions.
-    fn to_mm(self, board_max_dim_mm: f32) -> f32 {
-        match self {
-            GridStep::Auto => pick_natural_step(board_max_dim_mm / 10.0),
-            GridStep::Mils(m) => m * MM_PER_MIL,
-        }
-    }
-}
-
-const MIL_CHOICES: &[f32] = &[20.0, 50.0, 100.0, 250.0, 500.0];
 
 /// Phase-3 3D viewport: axes gizmo + ground grid + flat board outline,
 /// sourced from the gerber polygon IR (FDD Stage 6 output). A top ribbon
-/// hosts the grid-step ComboBox.
+/// hosts the grid-step ComboBox, which tracks the global display unit.
 pub struct GerberView3dPanel {
     citizen_id: CitizenId,
     citizen_state: CitizenState,
     camera: Camera,
     /// Lazily created on the first frame where a gl context is available.
     gpu: Option<Arc<Mutex<GpuResources>>>,
-    /// Whether the last uploaded board mesh came from a real outline. Flips
-    /// between `false` (nothing loaded) and `true` (outline present). Used
-    /// to decide when to re-upload the board mesh and re-fit the camera.
+    /// Whether the last uploaded board mesh came from a real outline.
     last_had_outline: bool,
-    /// Board dims (mm) cached from the last uploaded outline. The grid
-    /// mesh is rebuilt off these whenever the step changes.
+    /// Board dims (mm) cached from the last uploaded outline. Drives the
+    /// grid's half-extent + Auto step picker.
     last_board_dim: Option<(f32, f32)>,
     /// User-selected grid step. Persisted across outline loads; the grid
-    /// mesh re-uploads whenever the resolved mm step differs from the
-    /// value last sent to the GPU.
+    /// mesh re-uploads whenever the resolved mm value changes (which can
+    /// happen from a new board, a new manual pick, or a unit toggle under
+    /// Auto — where the step is re-picked in the active unit).
     grid_step: GridStep,
-    /// Step in mm actually on the GPU right now, so we only re-upload when
-    /// the resolved value changes (e.g. Auto → step-per-board, or user
-    /// picking a new mil value).
+    /// Step in mm currently on the GPU. Change-detection key.
     last_uploaded_grid_step_mm: Option<f32>,
+    /// Display unit at the last grid upload. Auto mode re-picks its step
+    /// in the active unit when this flips, so a 30 mm board that shows
+    /// "5 mm" under mm flips to "250 mils" under mils — round number in
+    /// either unit rather than "394 mils" converted from 10 mm.
+    last_units_mils: bool,
 }
 
 struct GpuResources {
@@ -96,6 +80,7 @@ impl GerberView3dPanel {
             last_board_dim: None,
             grid_step: GridStep::Auto,
             last_uploaded_grid_step_mm: None,
+            last_units_mils: false,
         }
     }
 
@@ -104,10 +89,9 @@ impl GerberView3dPanel {
         ui: &mut egui::Ui,
         gl: Option<&Arc<glow::Context>>,
         board_outline: Option<&OutlineData>,
+        units_mils: bool,
     ) {
         // ── Ribbon ─────────────────────────────────────────────────
-        // Carve a fixed-height strip off the top of the panel for the
-        // grid-step ComboBox. The remainder is the 3D canvas.
         let total = ui.available_rect_before_wrap();
         let ribbon_rect = egui::Rect::from_min_max(
             total.min,
@@ -123,30 +107,72 @@ impl GerberView3dPanel {
                 .max_rect(ribbon_rect)
                 .layout(egui::Layout::left_to_right(egui::Align::Center)),
         );
-        self.show_ribbon(&mut ribbon_ui);
+        self.show_ribbon(&mut ribbon_ui, board_outline, units_mils);
 
         // ── 3D canvas ──────────────────────────────────────────────
         let mut canvas_ui = ui.new_child(egui::UiBuilder::new().max_rect(canvas_rect));
-        self.show_canvas(&mut canvas_ui, gl, board_outline);
+        self.show_canvas(&mut canvas_ui, gl, board_outline, units_mils);
     }
 
-    fn show_ribbon(&mut self, ui: &mut egui::Ui) {
+    fn show_ribbon(
+        &mut self,
+        ui: &mut egui::Ui,
+        board_outline: Option<&OutlineData>,
+        units_mils: bool,
+    ) {
         ui.horizontal(|ui| {
             ui.add_space(6.0);
             ui.label("Grid:");
+
+            // What step is Auto resolving to right now — used for the
+            // ribbon's "Auto (<step>)" label so the user can tell at a
+            // glance what the grid is actually showing.
+            let auto_step_mm = auto_grid_step_mm(
+                board_outline.map(|o| {
+                    (
+                        (o.bbox.max.x - o.bbox.min.x) as f32,
+                        (o.bbox.max.y - o.bbox.min.y) as f32,
+                    )
+                }),
+                units_mils,
+            );
+
+            let selected_label = match self.grid_step {
+                GridStep::Auto => format!("Auto ({})", format_step(auto_step_mm, units_mils)),
+                GridStep::Manual(mm) => format_step(mm, units_mils),
+            };
+
             egui::ComboBox::from_id_salt("gerber_view_3d_grid_step")
-                .selected_text(self.grid_step.label())
-                .width(110.0)
+                .selected_text(selected_label)
+                .width(130.0)
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.grid_step, GridStep::Auto, "Auto");
-                    for &m in MIL_CHOICES {
+                    ui.selectable_value(
+                        &mut self.grid_step,
+                        GridStep::Auto,
+                        format!("Auto ({})", format_step(auto_step_mm, units_mils)),
+                    );
+                    for &choice in grid_step_choices(units_mils) {
+                        let mm = if units_mils { choice * MM_PER_MIL } else { choice };
                         ui.selectable_value(
                             &mut self.grid_step,
-                            GridStep::Mils(m),
-                            format!("{} mils", m as i32),
+                            GridStep::Manual(mm),
+                            format_step(mm, units_mils),
                         );
                     }
                 });
+
+            ui.add_space(12.0);
+            ui.label(format!("Units: {}", if units_mils { "mils" } else { "mm" }));
+            if let Some(outline) = board_outline {
+                let w = (outline.bbox.max.x - outline.bbox.min.x) as f32;
+                let h = (outline.bbox.max.y - outline.bbox.min.y) as f32;
+                ui.add_space(12.0);
+                ui.label(format!(
+                    "Board: {} × {}",
+                    format_dim(w, units_mils),
+                    format_dim(h, units_mils),
+                ));
+            }
         });
     }
 
@@ -155,22 +181,20 @@ impl GerberView3dPanel {
         ui: &mut egui::Ui,
         gl: Option<&Arc<glow::Context>>,
         board_outline: Option<&OutlineData>,
+        units_mils: bool,
     ) {
         let (rect, response) =
             ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
 
-        // Background fill so the 3D viewport is visually distinct.
         ui.painter().rect_filled(
             rect,
             0.0,
             egui::Color32::from_rgb(12, 14, 20),
         );
 
-        // Orbit on left-drag.
         if response.dragged_by(egui::PointerButton::Primary) {
             self.camera.orbit(response.drag_delta());
         }
-        // Wheel zoom — only when cursor is over the viewport.
         if response.hovered() {
             let scroll = ui.input(|i| i.raw_scroll_delta.y);
             if scroll.abs() > 0.0 {
@@ -189,7 +213,6 @@ impl GerberView3dPanel {
             return;
         };
 
-        // Lazy init — needs a gl context, only available inside update().
         let gpu = self
             .gpu
             .get_or_insert_with(|| {
@@ -199,8 +222,6 @@ impl GerberView3dPanel {
                     let mut axes = ColoredMesh::new(gl, glow::LINES);
                     axes.upload(gl, &axes_vertices(3.0, 0.001));
 
-                    // Placeholder grid — replaced on first outline load /
-                    // first grid-step change, whichever comes first.
                     let mut grid = ColoredMesh::new(gl, glow::LINES);
                     grid.upload(gl, &grid_vertices(5.0, 1.0, GRID_COLOR));
 
@@ -212,7 +233,7 @@ impl GerberView3dPanel {
             })
             .clone();
 
-        // ── Board mesh upload (absent ↔ present transition) ────────
+        // ── Board mesh (absent ↔ present transition) ───────────────
         let has_outline = board_outline.is_some();
         if has_outline != self.last_had_outline {
             if let (Some(outline), Ok(mut g)) = (board_outline, gpu.lock()) {
@@ -224,33 +245,30 @@ impl GerberView3dPanel {
                 }
                 g.board_ready = true;
                 self.last_board_dim = Some((w, h));
-                // Auto-fit the camera to the new board's extent.
                 self.camera.fit_to_bbox(w, h);
             } else if let Ok(mut g) = gpu.lock() {
                 g.board_ready = false;
                 self.last_board_dim = None;
             }
             self.last_had_outline = has_outline;
-            // Force the grid to re-evaluate at the next step — board dim
-            // changed, and Auto's resolved step scales with it.
             self.last_uploaded_grid_step_mm = None;
         }
 
-        // ── Grid mesh upload (when resolved step changes) ──────────
-        // If no board is loaded, fall back to a fixed 10 mm reference grid
-        // so there's still spatial context on empty projects.
+        // ── Grid mesh (when resolved step changes) ─────────────────
+        // Unit toggle under Auto re-picks the step in the active unit; we
+        // detect that via `last_units_mils`.
+        if self.last_units_mils != units_mils {
+            self.last_uploaded_grid_step_mm = None;
+            self.last_units_mils = units_mils;
+        }
         let (grid_step_mm, grid_half_extent) = match self.last_board_dim {
             Some((w, h)) => {
-                let max_dim = w.max(h).max(1.0);
-                let step = self.grid_step.to_mm(max_dim);
-                let half_extent = (max_dim * 0.75).max(step * 3.0);
+                let step = resolve_grid_step_mm(self.grid_step, Some((w, h)), units_mils);
+                let half_extent = (w.max(h) * 0.75).max(step * 3.0);
                 (step, half_extent)
             }
             None => {
-                let step = match self.grid_step {
-                    GridStep::Auto => 1.0,
-                    GridStep::Mils(m) => m * MM_PER_MIL,
-                };
+                let step = resolve_grid_step_mm(self.grid_step, None, units_mils);
                 (step, (step * 5.0).max(5.0))
             }
         };
@@ -290,7 +308,6 @@ impl GerberView3dPanel {
             callback: Arc::new(callback),
         });
 
-        // Force continuous repaint so orbit drags feel smooth.
         ui.ctx().request_repaint();
     }
 }
@@ -301,9 +318,10 @@ impl Citizen for GerberView3dPanel {
     fn state_mut(&mut self) -> &mut CitizenState { &mut self.citizen_state }
 }
 
-/// Convert the gerber_geom outline mesh into the `xyz rgb` flat buffer that
-/// `ColoredMesh::upload` expects, placing every vertex at `z` with the given
-/// RGB colour.
+// ────────────────────────────────────────────────────────────────────────
+// Mesh helpers
+// ────────────────────────────────────────────────────────────────────────
+
 fn build_board_vertices(outline: &OutlineData, rgb: [f32; 3], z: f32) -> Vec<f32> {
     let [r, g, b] = rgb;
     let mut out = Vec::with_capacity(outline.mesh_indices.len() * 6);
@@ -314,12 +332,100 @@ fn build_board_vertices(outline: &OutlineData, rgb: [f32; 3], z: f32) -> Vec<f32
     out
 }
 
-fn pick_natural_step(target: f32) -> f32 {
-    const STEPS: &[f32] = &[0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0];
-    for &s in STEPS {
-        if s >= target {
-            return s;
+// ────────────────────────────────────────────────────────────────────────
+// Grid step helpers (ported from the archived PCB-direct iteration —
+// unit-aware natural step picker + ComboBox menu population)
+// ────────────────────────────────────────────────────────────────────────
+
+/// Pick the smallest value in a sorted "natural step" series that yields
+/// roughly ~20 cells across the board's largest dimension. Values are in
+/// whatever unit the caller prefers; the caller converts to mm afterwards.
+fn pick_natural_step(max_dim: f32, series: &[f32]) -> f32 {
+    let target = max_dim / 20.0;
+    for &c in series {
+        if c >= target {
+            return c;
         }
     }
-    *STEPS.last().unwrap()
+    *series.last().unwrap_or(&1.0)
+}
+
+/// Round mm steps engineers actually type into CAD tools.
+fn grid_step_mm_for(max_dim_mm: f32) -> f32 {
+    const STEPS: &[f32] = &[0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0];
+    pick_natural_step(max_dim_mm, STEPS)
+}
+
+/// Round mil steps engineers actually type into CAD tools. User-preferred
+/// set: 20 / 50 / 100 / 250 / 500 / 1000 mils.
+fn grid_step_mils_for(max_dim_mils: f32) -> f32 {
+    const STEPS: &[f32] = &[20.0, 50.0, 100.0, 250.0, 500.0, 1000.0];
+    pick_natural_step(max_dim_mils, STEPS)
+}
+
+/// Auto-picked step in mm based on board size + active display unit. Picks
+/// in the active unit so the cell count across the board is a round
+/// number either way — "5 mm" or "250 mils" rather than "394 mils"
+/// converted from 10 mm.
+fn auto_grid_step_mm(board_dim: Option<(f32, f32)>, units_mils: bool) -> f32 {
+    let max_dim_mm = board_dim
+        .map(|(w, h)| w.max(h))
+        .filter(|d| *d > 0.0)
+        .unwrap_or(10.0);
+    if units_mils {
+        grid_step_mils_for(max_dim_mm / MM_PER_MIL) * MM_PER_MIL
+    } else {
+        grid_step_mm_for(max_dim_mm)
+    }
+}
+
+fn resolve_grid_step_mm(
+    step: GridStep,
+    board_dim: Option<(f32, f32)>,
+    units_mils: bool,
+) -> f32 {
+    match step {
+        GridStep::Auto => auto_grid_step_mm(board_dim, units_mils),
+        GridStep::Manual(mm) => mm,
+    }
+}
+
+/// Natural-step options the ribbon ComboBox offers in the active unit.
+fn grid_step_choices(units_mils: bool) -> &'static [f32] {
+    if units_mils {
+        &[20.0, 50.0, 100.0, 250.0, 500.0, 1000.0]
+    } else {
+        &[0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0]
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Number formatting
+// ────────────────────────────────────────────────────────────────────────
+
+fn fmt_trim(v: f32) -> String {
+    if (v - v.round()).abs() < 1e-4 {
+        format!("{:.0}", v)
+    } else {
+        format!("{:.3}", v)
+            .trim_end_matches('0')
+            .trim_end_matches('.')
+            .to_string()
+    }
+}
+
+fn format_step(mm: f32, units_mils: bool) -> String {
+    if units_mils {
+        format!("{} mils", fmt_trim(mm / MM_PER_MIL))
+    } else {
+        format!("{} mm", fmt_trim(mm))
+    }
+}
+
+fn format_dim(mm: f32, units_mils: bool) -> String {
+    if units_mils {
+        format!("{} mils", fmt_trim(mm / MM_PER_MIL))
+    } else {
+        format!("{} mm", fmt_trim(mm))
+    }
 }
