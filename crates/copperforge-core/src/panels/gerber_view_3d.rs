@@ -13,10 +13,16 @@ use nalgebra::Vector3;
 /// FR-4 green for the flat board mesh. Matches the conventional soldermask
 /// tone so a board rendered without mask+copper still reads as a PCB.
 const FR4_COLOR: [f32; 3] = [0.18, 0.42, 0.22];
-/// ENIG gold (#D8AD4F) for F.Cu / B.Cu. Matches what a HASL/ENIG finished
-/// board actually reads as under a green mask — keeps copper looking like
-/// copper rather than antique orange (#B87333) which reads as rust.
-const COPPER_COLOR: [f32; 3] = [0.85, 0.68, 0.31];
+/// ENIG gold (#D8AD4F) for F.Cu. Matches what a HASL/ENIG finished board
+/// reads as under a green mask.
+const COPPER_COLOR_TOP: [f32; 3] = [0.85, 0.68, 0.31];
+/// Slightly-redder copper for B.Cu — same family, but distinct enough to
+/// call out "this is the bottom" at a glance when both happen to be in
+/// view (orbit halfway, edge-on, depth-test sanity check). Until Phase 4b
+/// thickens layers with side walls, this is also our primary visual
+/// confirmation that the depth test is correctly hiding B.Cu behind the
+/// FR-4 from a top view and hiding F.Cu from a bottom view.
+const COPPER_COLOR_BOTTOM: [f32; 3] = [0.72, 0.45, 0.20];
 /// Flat-slab Z offsets for the copper layers. Positive = top side (F.Cu
 /// floats above the FR-4 plane), negative = bottom (B.Cu sits beneath).
 /// Phase 4a is flat-slab extrusion; Phase 4b adds side walls.
@@ -431,7 +437,7 @@ impl GerberView3dPanel {
         let has_top_copper = top_copper.is_some();
         if has_top_copper != self.last_had_top_copper {
             if let (Some(cu), Ok(mut g)) = (top_copper, gpu.lock()) {
-                let verts = build_copper_vertices(cu, COPPER_COLOR, COPPER_Z_TOP);
+                let verts = build_copper_vertices(cu, COPPER_COLOR_TOP, COPPER_Z_TOP);
                 unsafe {
                     g.top_copper.upload(gl, &verts);
                 }
@@ -444,7 +450,7 @@ impl GerberView3dPanel {
         let has_bottom_copper = bottom_copper.is_some();
         if has_bottom_copper != self.last_had_bottom_copper {
             if let (Some(cu), Ok(mut g)) = (bottom_copper, gpu.lock()) {
-                let verts = build_copper_vertices(cu, COPPER_COLOR, COPPER_Z_BOTTOM);
+                let verts = build_copper_vertices(cu, COPPER_COLOR_BOTTOM, COPPER_Z_BOTTOM);
                 unsafe {
                     g.bottom_copper.upload(gl, &verts);
                 }

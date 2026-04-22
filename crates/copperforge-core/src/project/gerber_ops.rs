@@ -197,6 +197,13 @@ fn extract_copper_side(
 ) -> Option<crate::gerber_geom::CopperData> {
     let layer = store.find(layer_type)?;
     let path = layer.file_path.as_ref()?;
+    // Log the filename each slot landed on so bottom/top swaps caused by
+    // upstream filename detection are visible without a code trace.
+    logger.log_info(&format!(
+        "{} copper: reading {}",
+        label,
+        path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default(),
+    ));
     match crate::gerber_geom::extract_copper(path, outline_bbox) {
         Some((data, counts)) => {
             logger.log_info(&format!(
