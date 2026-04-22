@@ -1,6 +1,6 @@
 // CopperForge Functional Description Document
 // Document version (SEMVER)
-#let doc-version = "v0.3.0"
+#let doc-version = "v0.3.1"
 
 #let inset-size = 11pt
 
@@ -157,6 +157,7 @@
   [0.1.0], [Initial draft — gerber-direct pipeline architecture, block diagram, Phase 3 scope], [22 Apr 2026], [JB],
   [0.2.0], [Single-parse architecture: 2D via `gerber_viewer` reframed as legacy bypass, not a parallel pipeline. Roadmap extended with explicit retirement phase.], [22 Apr 2026], [JB],
   [0.3.0], [Added Section 4 "Viewer 3D Features" documenting grid, zoom-to-region, flip, measure, hotkeys, and the 3D gizmo. Stage 6 updated: centered-at-origin world transform.], [22 Apr 2026], [JB],
+  [0.3.1], [Hotkey routing via egui_citizen: 2D vs 3D tab activation gates keys like F/R/M so they fire in the correct view. "gerber_view_3d" citizen added to the registration list; the global dispatcher reads the one-hot active flag.], [22 Apr 2026], [JB],
 )
 
 #pagebreak()
@@ -434,7 +435,11 @@ _Status: planned._
 
 == Hotkeys <viewer-hotkeys>
 
-Hotkeys only fire when the 3D canvas has pointer hover; typing the same key in another panel (Terminal, Settings, etc.) does not affect the 3D view. This is the same scoping rule the ribbon toggles use.
+Several keys mean different things in the 2D gerber view and the 3D view — `F` flips top/bottom in both, `R` rotates in both, `M` is the ruler/measure toggle in both. Without scoping, hitting `F` with the 3D tab focused would silently flip the 2D gerber behind it.
+
+*Scoping rule.* Hotkeys are routed to the active tab via `egui_citizen`. Each dockable panel is a _citizen_ with a one-hot active bit; `TabViewer::on_tab_button` calls `Dispatcher::activate(citizen_id)` when the user clicks a tab, which atomically sets that citizen's `active` flag to `true` and clears every other citizen's flag. The global hotkey dispatcher in `CopperForgeApp::update` reads `dispatcher.get(citizen_id).active.get()` and gates each handler accordingly — 2D handlers fire only when the 2D citizen is active, 3D handlers fire only when the 3D citizen is active.
+
+One additional rule: `G` (grid toggle) is scoped more tightly — it requires pointer-hover over the 3D canvas, not just 3D-tab-active. This is because `G` is harmless to misfire (toggling the grid is easily reversed) and the tighter scoping lets the user keep the 3D tab focused while the mouse is parked elsewhere without accidentally losing the grid.
 
 #table(
   columns: (auto, 1fr, auto),

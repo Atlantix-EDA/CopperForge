@@ -290,7 +290,7 @@ impl CopperForgeApp {
         let mut dispatcher = egui_citizen::Dispatcher::new();
         use egui_citizen::message::CitizenId;
         for id in [
-            "gerber_view", "view_settings", "drc", "projects",
+            "gerber_view", "gerber_view_3d", "view_settings", "drc", "projects",
             "settings", "bom",
             "terminal", "logger",
         ] {
@@ -762,12 +762,29 @@ impl eframe::App for CopperForgeApp {
             self.services.layer_store.mark_clean();
         }
 
-        // Hotkeys (only when no text field has focus)
+        // Hotkeys (only when no text field has focus).
+        //
+        // Tab routing: keys that mean different things in the 2D gerber view
+        // (`F` = flip, `R` = rotate, `M` = measure, `A` = align-to-grid) vs
+        // the 3D view (planned: `F` = flip, `R` = 90° in-plane, `M` = 3D
+        // ruler) must not fire simultaneously on both. The active tab is
+        // tracked by egui_citizen — on_tab_button calls
+        // `dispatcher.activate()`, which flips the one-hot active bit on
+        // the matching `CitizenState`. Here we read that bit to gate the
+        // 2D handlers so hitting F while the 3D tab is active doesn't
+        // silently flip the 2D gerber behind it. When 3D F/R/M handlers
+        // land they gate on the inverse of the same check.
         let text_input_active = ctx.memory(|mem| mem.focused().is_some());
+        let three_d_active = self
+            .dispatcher
+            .get(&egui_citizen::message::CitizenId::new("gerber_view_3d"))
+            .map(|s| s.active.get())
+            .unwrap_or(false);
+        let two_d_view_active = !three_d_active;
 
         if !text_input_active {
             ctx.input(|i| {
-                if i.key_pressed(egui::Key::F) {
+                if two_d_view_active && i.key_pressed(egui::Key::F) {
                     self.services.display_manager.showing_top = !self.services.display_manager.showing_top;
 
                     use crate::layer_store::{LayerType, Side};
@@ -810,7 +827,7 @@ impl eframe::App for CopperForgeApp {
                     logger.log_info(&format!("Toggled units to {} (U key)", units_name));
                 }
 
-                if i.key_pressed(egui::Key::R) {
+                if two_d_view_active && i.key_pressed(egui::Key::R) {
                     self.services.rotation_degrees = (self.services.rotation_degrees + 90.0) % 360.0;
                     self.services.layer_store.mark_dirty();
 
@@ -821,13 +838,13 @@ impl eframe::App for CopperForgeApp {
                     );
                 }
 
-                if i.key_pressed(egui::Key::A) {
+                if two_d_view_active && i.key_pressed(egui::Key::A) {
                     display::align_to_grid(&mut self.services.view_state, &self.services.grid_settings);
                     let logger = ReactiveEventLogger::with_colors(&self.services.logger_state, &self.services.log_colors);
                     logger.log_info("Aligned view to grid (A key)");
                 }
 
-                if i.key_pressed(egui::Key::M) {
+                if two_d_view_active && i.key_pressed(egui::Key::M) {
                     if self.services.ruler_active {
                         if self.services.ruler_start.is_some() && self.services.ruler_end.is_some() {
                             self.services.latched_measurement_start = self.services.ruler_start;
