@@ -72,11 +72,19 @@ impl LayerType {
         layers
     }
 
-    /// Every layer type the UI should be aware of. Includes all 45 KiCad
-    /// user-layer slots; unused ones are filtered out by the View Settings
-    /// panel via `layer_store.find(layer_type)`.
+    /// Every layer type the UI should be aware of. Includes 32 copper slots
+    /// (KiCad's max) and all 45 KiCad user-layer slots; unused ones are
+    /// filtered out by the View Settings panel via `layer_store.find()`.
     pub fn all() -> Vec<Self> {
-        let mut v = Self::standard_2_layer();
+        let mut v: Vec<Self> = (1..=32).map(Self::Copper).collect();
+        v.extend_from_slice(&[
+            Self::Silkscreen(Side::Top), Self::Silkscreen(Side::Bottom),
+            Self::Soldermask(Side::Top), Self::Soldermask(Side::Bottom),
+            Self::Paste(Side::Top), Self::Paste(Side::Bottom),
+            Self::MechanicalOutline,
+            Self::Drill,
+            Self::ViaPlugging(Side::Top), Self::ViaPlugging(Side::Bottom),
+        ]);
         v.extend((1..=45).map(Self::UserLayer));
         v
     }

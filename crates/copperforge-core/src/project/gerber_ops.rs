@@ -40,9 +40,11 @@ pub fn generate_gerbers_from_pcb(
         .map(|n| format!("User.{}", n))
         .collect::<Vec<_>>()
         .join(",");
+    let copper_layers = copper_layers_from_pcb(pcb_path);
+    logger.log_info(&format!("Copper stack from .kicad_pcb: {}", copper_layers));
     let layers_arg = format!(
-        "F.Cu,B.Cu,F.SilkS,B.SilkS,F.Mask,B.Mask,Edge.Cuts,F.Paste,B.Paste,{}",
-        user_layers
+        "{},F.SilkS,B.SilkS,F.Mask,B.Mask,Edge.Cuts,F.Paste,B.Paste,{}",
+        copper_layers, user_layers
     );
 
     let mut cmd = CopperForgeApp::build_kicad_cli_command(kicad_cli_method);
@@ -110,6 +112,31 @@ pub fn generate_gerbers_from_pcb(
     }
 
     Some(output_dir)
+}
+
+/// Read the copper-layer stack from the `.kicad_pcb` so kicad-cli is asked
+/// to export every copper layer the board actually has — not just F.Cu/B.Cu.
+/// KiCad assigns even layer IDs to copper (F.Cu=0, B.Cu=2, In1.Cu=4, In2.Cu=6,
+/// ...), so sorting by ID with B.Cu pinned last yields the stack-correct order
+/// `F.Cu, In1.Cu, ..., B.Cu`. Falls back to plain `F.Cu,B.Cu` on parse failure.
+fn copper_layers_from_pcb(pcb_path: &Path) -> String {
+    let fallback = "F.Cu,B.Cu";
+    let Ok(content) = std::fs::read_to_string(pcb_path) else { return fallback.into() };
+    let Ok(pcb) = kiparse::pcb::parse_layers_only(&content) else { return fallback.into() };
+
+    let mut copper: Vec<(i32, String)> = pcb.layers.iter()
+        .filter(|(_, layer)| layer.name.ends_with(".Cu"))
+        .map(|(id, layer)| (*id, layer.name.clone()))
+        .collect();
+    if copper.is_empty() { return fallback.into(); }
+
+    copper.sort_by(|a, b| match (a.1 == "B.Cu", b.1 == "B.Cu") {
+        (true, true) => std::cmp::Ordering::Equal,
+        (true, false) => std::cmp::Ordering::Greater,
+        (false, true) => std::cmp::Ordering::Less,
+        _ => a.0.cmp(&b.0),
+    });
+    copper.into_iter().map(|(_, name)| name).collect::<Vec<_>>().join(",")
 }
 
 /// Load gerber files from `gerber_dir` into the app's layer store. The
