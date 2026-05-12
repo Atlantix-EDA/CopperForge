@@ -25,6 +25,32 @@ use crate::ui::{Tab, TabKind, TabViewer, initialize_and_show_banner, show_system
 use crate::project::{load_demo_gerber, ProjectState, manager::ProjectConfig};
 use crate::display::GridSettings;
 
+/// A single discovered (or user-configured) kicad-cli install. Stored on
+/// SharedServices so the settings modal can list every working option.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KicadCandidate {
+    /// Method key. One of `path`, `path-nightly`, `flatpak`, `snap`, or
+    /// `custom:/abs/path/to/kicad-cli`. Persisted in `ProjectConfig.kicad_cli_override`.
+    pub method: String,
+    /// Human-readable label for the selector UI.
+    pub label: String,
+    /// Reported version, e.g. `"10.0.2"` or `"10.99.0 (nightly)"`.
+    pub version: String,
+}
+
+fn kicad_method_label(method: &str) -> String {
+    if let Some(path) = method.strip_prefix("custom:") {
+        return format!("Custom path ({})", path);
+    }
+    match method {
+        "path" => "Native on PATH (kicad-cli)".into(),
+        "path-nightly" => "Native nightly on PATH (kicad-cli-nightly)".into(),
+        "flatpak" => "Flatpak (org.kicad.KiCad)".into(),
+        "snap" => "Snap (kicad.kicad-cli)".into(),
+        other => other.into(),
+    }
+}
+
 /// The main application struct. A thin outer layer around `SharedServices`;
 /// panels operate on services, never directly on fields of this struct.
 pub struct CopperForgeApp {
@@ -209,7 +235,7 @@ impl CopperForgeApp {
         };
 
         // ── Stage 2: DiscoverKiCad (slow on first Flatpak launch) ─
-        let (kicad_version, kicad_cli_method) = Self::probe_kicad_cli();
+        let (kicad_version, kicad_cli_method, _kicad_candidates) = Self::probe_kicad_cli(&config);
 
         // ── Stage 3: InitializeDb ────────────────────────────────
         // Single-file redb DB; requires exclusive file-level lock so only one
@@ -514,22 +540,34 @@ impl CopperForgeApp {
     }
 
     /// One-shot KiCad discovery + version parse. Returns (version_string, method).
-    fn probe_kicad_cli() -> (Option<String>, Option<String>) {
-        let (method, mut cmd) = match Self::find_kicad_cli() {
-            Some(f) => f,
-            None => return (None, None),
-        };
-        let output = match cmd.arg("--version").output() {
-            Ok(o) if o.status.success() => o,
-            _ => return (None, Some(method)),
-        };
-        let version = Self::parse_kicad_version(&output.stdout, false).map(|mut v| {
-            if method != "path" {
-                v = format!("{} ({})", v, method);
+    /// Resolve the active kicad-cli at startup. Honors `config.kicad_cli_override`
+    /// if it points at a still-working install; otherwise picks the preferred
+    /// candidate from discovery (stable PATH → flatpak → snap → nightly PATH).
+    ///
+    /// Returns `(version_label, method, all_discovered_candidates)`. The list
+    /// is the full set of working installs (plus a probed custom path if the
+    /// override is one) so the settings UI can offer them as choices.
+    fn probe_kicad_cli(config: &ProjectConfig) -> (Option<String>, Option<String>, Vec<KicadCandidate>) {
+        let mut candidates = Self::discover_kicad_clis();
+
+        if let Some(override_method) = config.kicad_cli_override.as_deref() {
+            let already_known = candidates.iter().any(|c| c.method == override_method);
+            if !already_known {
+                if let Some(custom) = Self::probe_kicad_candidate(override_method) {
+                    candidates.push(custom);
+                }
             }
-            v
-        });
-        (version, Some(method))
+            if let Some(picked) = candidates.iter().find(|c| c.method == override_method) {
+                return (Some(picked.version.clone()), Some(picked.method.clone()), candidates);
+            }
+            // Override pointed at something broken; fall through to default pick
+            // and let the modal show the user what's actually available.
+        }
+
+        let picked = candidates.first().cloned();
+        let version = picked.as_ref().map(|c| c.version.clone());
+        let method = picked.map(|c| c.method);
+        (version, method, candidates)
     }
 
     /// Build a `kicad-cli` Command using the cached discovery method — no probe.
@@ -539,6 +577,9 @@ impl CopperForgeApp {
 
     pub fn build_kicad_cli_command(method: &str) -> std::process::Command {
         use std::process::Command;
+        if let Some(path) = method.strip_prefix("custom:") {
+            return Command::new(path);
+        }
         match method {
             "flatpak" => {
                 let mut cmd = Command::new("flatpak");
@@ -550,40 +591,41 @@ impl CopperForgeApp {
                 cmd.args(["run", "kicad.kicad-cli"]);
                 cmd
             }
+            "path-nightly" => Command::new("kicad-cli-nightly"),
             _ => Command::new("kicad-cli"),
         }
     }
 
-    pub fn find_kicad_cli() -> Option<(String, std::process::Command)> {
-        use std::process::Command;
-
-        for bin in ["kicad-cli", "kicad-cli-nightly"] {
-            if let Ok(output) = Command::new(bin).arg("--version").output() {
-                if output.status.success() {
-                    return Some(("path".into(), Command::new(bin)));
-                }
-            }
+    /// Probe a single method key by running `<cmd> --version`. Returns a
+    /// populated KicadCandidate iff the binary exists and reports a version.
+    pub fn probe_kicad_candidate(method: &str) -> Option<KicadCandidate> {
+        let mut cmd = Self::build_kicad_cli_command(method);
+        let output = cmd.arg("--version").output().ok()?;
+        if !output.status.success() {
+            return None;
         }
+        let is_nightly = method == "path-nightly";
+        let raw = Self::parse_kicad_version(&output.stdout, is_nightly)?;
+        let version = match method {
+            "path" | "path-nightly" => raw,
+            other => format!("{} ({})", raw, other.strip_prefix("custom:").unwrap_or(other)),
+        };
+        Some(KicadCandidate {
+            method: method.to_string(),
+            label: kicad_method_label(method),
+            version,
+        })
+    }
 
-        if let Ok(output) = Command::new("flatpak")
-            .args(["run", "--command=kicad-cli", "org.kicad.KiCad", "--version"])
-            .output()
-        {
-            if output.status.success() {
-                return Some(("flatpak".into(), Self::build_kicad_cli_command("flatpak")));
-            }
-        }
-
-        if let Ok(output) = Command::new("snap")
-            .args(["run", "kicad.kicad-cli", "--version"])
-            .output()
-        {
-            if output.status.success() {
-                return Some(("snap".into(), Self::build_kicad_cli_command("snap")));
-            }
-        }
-
-        None
+    /// Probe every well-known install location and return one entry per
+    /// working install. Order is the default preference: stable PATH →
+    /// flatpak → snap → nightly PATH. The settings UI lets the user pick
+    /// a different one if they want.
+    pub fn discover_kicad_clis() -> Vec<KicadCandidate> {
+        ["path", "flatpak", "snap", "path-nightly"]
+            .iter()
+            .filter_map(|m| Self::probe_kicad_candidate(m))
+            .collect()
     }
 
     fn parse_kicad_version(stdout: &[u8], nightly: bool) -> Option<String> {

@@ -31,7 +31,8 @@ pub struct SharedServices {
     pub config: ProjectConfig,
     pub config_path: PathBuf,
     pub kicad_version: Option<String>,
-    /// One of "path" / "flatpak" / "snap". Used by
+    /// One of "path" (stable `kicad-cli` on PATH) / "path-nightly"
+    /// (`kicad-cli-nightly` on PATH) / "flatpak" / "snap". Used by
     /// `CopperForgeApp::kicad_cli_command()` to build Commands without probing.
     pub kicad_cli_method: Option<String>,
     pub project_db: ProjectDatabase,
