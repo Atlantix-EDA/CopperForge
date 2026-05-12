@@ -687,8 +687,8 @@ impl GerberView3dPanel {
 
 impl Citizen for GerberView3dPanel {
     fn id(&self) -> &CitizenId { &self.citizen_id }
-    fn state(&self) -> &CitizenState { &self.citizen_state }
-    fn state_mut(&mut self) -> &mut CitizenState { &mut self.citizen_state }
+    fn citizen_state(&self) -> &CitizenState { &self.citizen_state }
+    fn citizen_state_mut(&mut self) -> &mut CitizenState { &mut self.citizen_state }
 }
 
 // ────────────────────────────────────────────────────────────────────────
