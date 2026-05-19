@@ -15,14 +15,16 @@ void main() { v_col = a_col; gl_Position = u_mvp * vec4(a_pos, 1.0); }
 "#;
 
 const FS_UNLIT: &str = r#"#version 330
+uniform float u_alpha;
 in vec3 v_col;
 out vec4 o_col;
-void main() { o_col = vec4(v_col, 1.0); }
+void main() { o_col = vec4(v_col, u_alpha); }
 "#;
 
 pub struct UnlitProgram {
     prog: glow::Program,
     u_mvp: glow::UniformLocation,
+    u_alpha: glow::UniformLocation,
 }
 
 impl UnlitProgram {
@@ -32,7 +34,10 @@ impl UnlitProgram {
             let u_mvp = gl
                 .get_uniform_location(prog, "u_mvp")
                 .expect("unlit shader missing u_mvp uniform");
-            Self { prog, u_mvp }
+            let u_alpha = gl
+                .get_uniform_location(prog, "u_alpha")
+                .expect("unlit shader missing u_alpha uniform");
+            Self { prog, u_mvp, u_alpha }
         }
     }
 
@@ -40,6 +45,18 @@ impl UnlitProgram {
         unsafe {
             gl.use_program(Some(self.prog));
             gl.uniform_matrix_4_f32_slice(Some(&self.u_mvp), false, mvp.as_slice());
+            // Default to fully opaque each bind so the opaque-first / blended-
+            // last callers don't need to reset alpha between frames.
+            gl.uniform_1_f32(Some(&self.u_alpha), 1.0);
+        }
+    }
+
+    /// Override the per-fragment alpha until the next `bind()` (or another
+    /// `set_alpha()` call). Used by the mask layer to render as a tinted
+    /// translucent sheet over copper without occluding it.
+    pub unsafe fn set_alpha(&self, gl: &Context, alpha: f32) {
+        unsafe {
+            gl.uniform_1_f32(Some(&self.u_alpha), alpha);
         }
     }
 }

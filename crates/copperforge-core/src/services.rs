@@ -56,6 +56,12 @@ pub struct SharedServices {
     pub top_copper: Option<crate::gerber_geom::CopperData>,
     /// B.Cu polygon IR — copper on the bottom side.
     pub bottom_copper: Option<crate::gerber_geom::CopperData>,
+    /// F.Mask polygon IR — soldermask on the top side. Already holes-cut,
+    /// i.e. a board-outline-shaped sheet with pad/via openings punched
+    /// out. Same world frame as the board and copper meshes.
+    pub top_mask: Option<crate::gerber_geom::MaskData>,
+    /// B.Mask polygon IR — soldermask on the bottom side.
+    pub bottom_mask: Option<crate::gerber_geom::MaskData>,
 
     // ── Display / DRC / grid ──────────────────────────────────
     pub display_manager: DisplayManager,

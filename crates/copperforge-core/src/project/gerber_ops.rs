@@ -204,6 +204,7 @@ pub fn load_gerbers_into_viewer(
     // (Stage 6 of the FDD pipeline, centered at outline bbox).
     if let Some(outline) = app.services.board_outline.as_ref() {
         let outline_bbox = outline.bbox.clone();
+        let outline_contours = outline.contours.clone();
         app.services.top_copper = extract_copper_side(
             &app.services.layer_store,
             crate::layer_store::LayerType::Copper(1),
@@ -218,9 +219,27 @@ pub fn load_gerbers_into_viewer(
             &outline_bbox,
             logger,
         );
+        app.services.top_mask = extract_mask_side(
+            &app.services.layer_store,
+            crate::layer_store::LayerType::Soldermask(crate::layer_store::Side::Top),
+            "F.Mask",
+            &outline_contours,
+            &outline_bbox,
+            logger,
+        );
+        app.services.bottom_mask = extract_mask_side(
+            &app.services.layer_store,
+            crate::layer_store::LayerType::Soldermask(crate::layer_store::Side::Bottom),
+            "B.Mask",
+            &outline_contours,
+            &outline_bbox,
+            logger,
+        );
     } else {
         app.services.top_copper = None;
         app.services.bottom_copper = None;
+        app.services.top_mask = None;
+        app.services.bottom_mask = None;
     }
 }
 
@@ -246,10 +265,11 @@ fn extract_copper_side(
     match crate::gerber_geom::extract_copper(path, outline_bbox) {
         Some((data, counts)) => {
             logger.log_info(&format!(
-                "{} copper: {} circle + {} rect + {} obround + {} polygon flash(es); {} linear stroke(s); {} region polygon(s); {} macros / {} arc-strokes / {} non-circle-strokes skipped",
+                "{} copper: {} circle + {} rect + {} roundrect + {} obround + {} polygon flash(es); {} linear stroke(s); {} region polygon(s); {} macros / {} arc-strokes / {} non-circle-strokes skipped",
                 label,
                 counts.flashed_circles,
                 counts.flashed_rectangles,
+                counts.flashed_roundrects,
                 counts.flashed_obrounds,
                 counts.flashed_polygons,
                 counts.linear_strokes,
@@ -267,6 +287,55 @@ fn extract_copper_side(
         }
         None => {
             logger.log_warning(&format!("{} copper: no geometry extracted", label));
+            None
+        }
+    }
+}
+
+/// Look up a soldermask layer in the store and extract its polygon IR as
+/// a green-sheet-with-holes mesh. The openings in the gerber become holes
+/// in the mask; the board outline contours provide the outer sheet
+/// boundary (plus any cutouts / slots as additional holes).
+fn extract_mask_side(
+    store: &crate::layer_store::LayerStore,
+    layer_type: crate::layer_store::LayerType,
+    label: &str,
+    outline_contours: &[Vec<nalgebra::Point2<f32>>],
+    outline_bbox: &gerber_viewer::BoundingBox,
+    logger: &ReactiveEventLogger,
+) -> Option<crate::gerber_geom::MaskData> {
+    let layer = store.find(layer_type)?;
+    let path = layer.file_path.as_ref()?;
+    logger.log_info(&format!(
+        "{} mask: reading {}",
+        label,
+        path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default(),
+    ));
+    match crate::gerber_geom::extract_mask(path, outline_contours, outline_bbox) {
+        Some((data, counts)) => {
+            logger.log_info(&format!(
+                "{} mask: {} circle + {} rect + {} roundrect + {} obround + {} polygon opening(s); {} linear stroke(s); {} region polygon(s); {} macros / {} arc-strokes / {} non-circle-strokes skipped",
+                label,
+                counts.flashed_circles,
+                counts.flashed_rectangles,
+                counts.flashed_roundrects,
+                counts.flashed_obrounds,
+                counts.flashed_polygons,
+                counts.linear_strokes,
+                counts.region_polygons,
+                counts.flashed_macros_skipped,
+                counts.arc_strokes_skipped,
+                counts.non_circle_strokes_skipped,
+            ));
+            logger.log_info(&format!(
+                "{} mask: {} triangle(s) tessellated",
+                label,
+                data.mesh_indices.len() / 3,
+            ));
+            Some(data)
+        }
+        None => {
+            logger.log_warning(&format!("{} mask: no geometry extracted", label));
             None
         }
     }

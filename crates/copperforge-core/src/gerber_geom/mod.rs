@@ -21,7 +21,9 @@
 //! size reasonable).
 
 pub mod copper;
+pub mod mask;
 pub use copper::{extract_copper, CopperCounts, CopperData};
+pub use mask::{extract_mask, MaskCounts, MaskData};
 
 use std::fs::File;
 use std::io::BufReader;

@@ -291,6 +291,8 @@ impl CopperForgeApp {
             board_outline: None,
             top_copper: None,
             bottom_copper: None,
+            top_mask: None,
+            bottom_mask: None,
             display_manager: DisplayManager::new(),
             drc_manager: DrcManager::new(),
             grid_settings: GridSettings::default(),

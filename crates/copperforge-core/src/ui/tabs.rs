@@ -126,6 +126,8 @@ impl Tab {
                 let outline = params.app.services.board_outline.as_ref();
                 let top_copper = params.app.services.top_copper.as_ref();
                 let bottom_copper = params.app.services.bottom_copper.as_ref();
+                let top_mask = params.app.services.top_mask.as_ref();
+                let bottom_mask = params.app.services.bottom_mask.as_ref();
                 let units_mils = params.app.services.global_units_mils;
                 params.app.gerber_view_3d_panel.show(
                     ui,
@@ -133,6 +135,8 @@ impl Tab {
                     outline,
                     top_copper,
                     bottom_copper,
+                    top_mask,
+                    bottom_mask,
                     units_mils,
                 );
             }

@@ -30,7 +30,7 @@ use std::path::Path;
 use gerber_parser::parse;
 use gerber_types::{
     Aperture, Command, CoordinateNumber, Coordinates, DCode, FunctionCode, GCode,
-    InterpolationMode, Operation, Unit,
+    InterpolationMode, MacroDecimal, Operation, Unit,
 };
 use gerber_viewer::BoundingBox;
 use lyon::math::Point as LyonPoint;
@@ -51,15 +51,21 @@ pub struct CopperData {
 }
 
 /// Per-layer counts for logging. Broken out by primitive so we can spot
-/// when a particular shape or case isn't being handled.
+/// when a particular shape or case isn't being handled. Shared with the
+/// soldermask extractor (same gerber primitives; mask.rs re-uses the
+/// copper walker wholesale).
 #[derive(Debug, Default, Clone, Copy)]
 pub struct CopperCounts {
     pub flashed_circles: usize,
     pub flashed_rectangles: usize,
     pub flashed_obrounds: usize,
     pub flashed_polygons: usize,
-    /// Flashed macro apertures — Phase 4b. Logged so we know the board has
-    /// features that aren't being rendered.
+    /// KiCad-style `RoundRect` macro flashes, expanded to a rounded-rect
+    /// contour. Broken out from `flashed_macros_skipped` because this path
+    /// IS rendered.
+    pub flashed_roundrects: usize,
+    /// Flashed macro apertures that the expander didn't recognize.
+    /// Currently anything that isn't KiCad's `RoundRect`.
     pub flashed_macros_skipped: usize,
     pub linear_strokes: usize,
     /// Arc strokes (G02/G03 outside a region with an aperture width) —
@@ -140,7 +146,12 @@ impl State {
     }
 }
 
-fn walk_copper(
+/// Walk a parsed gerber doc and emit closed contours for every flash,
+/// stroke, and region encountered. Used by both `extract_copper` (this
+/// module) and `extract_mask` (sibling `mask.rs`) — copper and soldermask
+/// gerbers expose the same primitive set; only the post-tessellation
+/// interpretation differs.
+pub(super) fn walk_copper(
     doc: &gerber_parser::GerberDoc,
     unit_scale: f64,
 ) -> (Vec<Vec<Point2<f32>>>, CopperCounts) {
@@ -316,7 +327,16 @@ fn emit_aperture_flash(
                 counts.flashed_polygons += 1;
             }
         }
-        Aperture::Macro(_, _) => {
+        Aperture::Macro(name, args_opt) => {
+            if name == "RoundRect" {
+                if let Some(args) = args_opt.as_ref() {
+                    if let Some(contour) = roundrect_contour_from_macro(pos, args, unit_scale) {
+                        contours.push(contour);
+                        counts.flashed_roundrects += 1;
+                        return;
+                    }
+                }
+            }
             counts.flashed_macros_skipped += 1;
         }
     }
@@ -387,6 +407,91 @@ fn obround_contour(center: Point2<f32>, w: f32, h: f32) -> Vec<Point2<f32>> {
         }
     }
     pts
+}
+
+/// Expand a KiCad `RoundRect` macro flash to a rounded-rectangle contour.
+///
+/// KiCad's macro layout (see `%AMRoundRect*` in a KiCad-exported gerber):
+/// args = `[r, x1, y1, x2, y2, x3, y3, x4, y4, rotation]`. The four `(x,y)`
+/// pairs are the *inner* rect corners — the centers of the four corner
+/// arcs — and `r` is the arc radius. KiCad always emits these axis-aligned;
+/// pad rotation (90° / 180° / 270°) is handled by permuting which corner
+/// lands in which slot, not by rotating the points. So the outer contour
+/// is just "axis-aligned inner bbox, inflated by `r`, with radius-`r` arcs
+/// at the four corners" — no trig needed.
+///
+/// Returns `None` if args aren't resolvable to concrete decimals (macro
+/// variables / expressions) or the 10th arg encodes a non-zero rotation
+/// we're not attempting to honour yet. In those cases the caller falls
+/// back to counting as skipped.
+fn roundrect_contour_from_macro(
+    pos: Point2<f32>,
+    args: &[MacroDecimal],
+    unit_scale: f64,
+) -> Option<Vec<Point2<f32>>> {
+    if args.len() < 9 {
+        return None;
+    }
+    // Resolve the first 9 args as concrete f32 values (in gerber units,
+    // converted to mm). A variable/expression means the flash was written
+    // without inlining — shouldn't happen on KiCad output but bail cleanly.
+    let mut vals = [0.0_f32; 9];
+    for (i, slot) in vals.iter_mut().enumerate() {
+        match args[i] {
+            MacroDecimal::Value(v) => *slot = (v * unit_scale) as f32,
+            _ => return None,
+        }
+    }
+    // Tolerate a rotation arg only if it resolves to ~0. Non-zero rotated
+    // roundrects are rare in KiCad output and we'd need real trig — defer.
+    if let Some(rot) = args.get(9) {
+        match rot {
+            MacroDecimal::Value(v) if v.abs() < 1e-3 => {}
+            MacroDecimal::Value(_) => return None,
+            _ => return None,
+        }
+    }
+    let r = vals[0];
+    if r <= 0.0 {
+        return None;
+    }
+    // Inner-corner extremes. KiCad lists the corners CCW in some rotation
+    // — for axis-aligned roundrects any permutation collapses to the same
+    // min/max here.
+    let xs = [vals[1], vals[3], vals[5], vals[7]];
+    let ys = [vals[2], vals[4], vals[6], vals[8]];
+    let xmin = xs.iter().cloned().fold(f32::INFINITY, f32::min);
+    let xmax = xs.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    let ymin = ys.iter().cloned().fold(f32::INFINITY, f32::min);
+    let ymax = ys.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    if !(xmax > xmin && ymax > ymin) {
+        return None;
+    }
+
+    // CCW quarter-arcs at each inner corner, starting bottom-right:
+    //   BR: angle sweeps  -π/2 → 0    (outward = right / down-right)
+    //   TR:                0   → π/2
+    //   TL:                π/2 → π
+    //   BL:                π   → 3π/2
+    let corners = [
+        (xmax, ymin, -std::f32::consts::FRAC_PI_2),
+        (xmax, ymax, 0.0_f32),
+        (xmin, ymax, std::f32::consts::FRAC_PI_2),
+        (xmin, ymin, std::f32::consts::PI),
+    ];
+    let steps_per_arc = (circle_steps(r) / 4).max(4);
+    let mut pts = Vec::with_capacity(steps_per_arc * 4 + 4);
+    for &(cx, cy, a0) in &corners {
+        for k in 0..=steps_per_arc {
+            let t = k as f32 / steps_per_arc as f32;
+            let a = a0 + t * std::f32::consts::FRAC_PI_2;
+            pts.push(Point2::new(
+                pos.x + cx + r * a.cos(),
+                pos.y + cy + r * a.sin(),
+            ));
+        }
+    }
+    Some(pts)
 }
 
 fn polygon_contour(

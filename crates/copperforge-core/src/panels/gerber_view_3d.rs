@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use egui_citizen::{Citizen, CitizenId, CitizenState};
 use glow::HasContext as _;
 
-use crate::gerber_geom::{CopperData, OutlineData};
+use crate::gerber_geom::{CopperData, MaskData, OutlineData};
 use crate::render3d::{
     axes::axes_vertices, grid::grid_vertices, project, unproject_to_z0, Camera, ColoredMesh,
     UnlitProgram,
@@ -28,6 +28,21 @@ const COPPER_COLOR_BOTTOM: [f32; 3] = [0.72, 0.45, 0.20];
 /// Phase 4a is flat-slab extrusion; Phase 4b adds side walls.
 const COPPER_Z_TOP: f32 = 0.020;
 const COPPER_Z_BOTTOM: f32 = -0.040;
+
+/// Soldermask green (~RAL 6000 territory). A hair darker + more saturated
+/// than the bare-FR-4 colour so the mask reads as a distinct layer when
+/// both happen to be visible at the same pixel (viewport alignment, edge
+/// pixels).
+const MASK_COLOR_TOP: [f32; 3] = [0.11, 0.38, 0.18];
+const MASK_COLOR_BOTTOM: [f32; 3] = [0.09, 0.32, 0.15];
+/// Mask Z offsets: ~10 µm above F.Cu on top, ~10 µm below B.Cu on bottom.
+/// Enough to keep the mask stable over copper under typical camera angles
+/// without introducing a visible gap between the two.
+const MASK_Z_TOP: f32 = 0.030;
+const MASK_Z_BOTTOM: f32 = -0.050;
+/// Mask blend alpha. 0.55 lets copper traces read through as a darker
+/// green tint — matches KiCad's built-in 3D viewer at default settings.
+const MASK_ALPHA: f32 = 0.55;
 
 const GRID_COLOR: [f32; 3] = [0.28, 0.30, 0.35];
 
@@ -59,10 +74,12 @@ pub struct GerberView3dPanel {
     gpu: Option<Arc<Mutex<GpuResources>>>,
     /// Whether the last uploaded board mesh came from a real outline.
     last_had_outline: bool,
-    /// Presence flags for copper meshes — re-upload only when the project
-    /// loads or unloads F.Cu / B.Cu geometry.
+    /// Presence flags for copper / mask meshes — re-upload only when the
+    /// project loads or unloads each layer's geometry.
     last_had_top_copper: bool,
     last_had_bottom_copper: bool,
+    last_had_top_mask: bool,
+    last_had_bottom_mask: bool,
     /// Board dims (mm) cached from the last uploaded outline. Drives the
     /// grid's half-extent + Auto step picker.
     last_board_dim: Option<(f32, f32)>,
@@ -113,6 +130,10 @@ struct GpuResources {
     top_copper_ready: bool,
     bottom_copper: ColoredMesh,
     bottom_copper_ready: bool,
+    top_mask: ColoredMesh,
+    top_mask_ready: bool,
+    bottom_mask: ColoredMesh,
+    bottom_mask_ready: bool,
 }
 
 impl GerberView3dPanel {
@@ -125,6 +146,8 @@ impl GerberView3dPanel {
             last_had_outline: false,
             last_had_top_copper: false,
             last_had_bottom_copper: false,
+            last_had_top_mask: false,
+            last_had_bottom_mask: false,
             last_board_dim: None,
             grid_step: GridStep::Auto,
             last_uploaded_grid_step_mm: None,
@@ -178,6 +201,8 @@ impl GerberView3dPanel {
         board_outline: Option<&OutlineData>,
         top_copper: Option<&CopperData>,
         bottom_copper: Option<&CopperData>,
+        top_mask: Option<&MaskData>,
+        bottom_mask: Option<&MaskData>,
         units_mils: bool,
     ) {
         // ── Ribbon ─────────────────────────────────────────────────
@@ -200,7 +225,12 @@ impl GerberView3dPanel {
 
         // ── 3D canvas ──────────────────────────────────────────────
         let mut canvas_ui = ui.new_child(egui::UiBuilder::new().max_rect(canvas_rect));
-        self.show_canvas(&mut canvas_ui, gl, board_outline, top_copper, bottom_copper, units_mils);
+        self.show_canvas(
+            &mut canvas_ui, gl, board_outline,
+            top_copper, bottom_copper,
+            top_mask, bottom_mask,
+            units_mils,
+        );
     }
 
     fn show_ribbon(
@@ -282,6 +312,8 @@ impl GerberView3dPanel {
         board_outline: Option<&OutlineData>,
         top_copper: Option<&CopperData>,
         bottom_copper: Option<&CopperData>,
+        top_mask: Option<&MaskData>,
+        bottom_mask: Option<&MaskData>,
         units_mils: bool,
     ) {
         let (rect, response) =
@@ -384,6 +416,8 @@ impl GerberView3dPanel {
                     let board = ColoredMesh::new(gl, glow::TRIANGLES);
                     let top_copper = ColoredMesh::new(gl, glow::TRIANGLES);
                     let bottom_copper = ColoredMesh::new(gl, glow::TRIANGLES);
+                    let top_mask = ColoredMesh::new(gl, glow::TRIANGLES);
+                    let bottom_mask = ColoredMesh::new(gl, glow::TRIANGLES);
 
                     GpuResources {
                         unlit,
@@ -395,6 +429,10 @@ impl GerberView3dPanel {
                         top_copper_ready: false,
                         bottom_copper,
                         bottom_copper_ready: false,
+                        top_mask,
+                        top_mask_ready: false,
+                        bottom_mask,
+                        bottom_mask_ready: false,
                     }
                 };
                 Arc::new(Mutex::new(resources))
@@ -459,6 +497,34 @@ impl GerberView3dPanel {
                 g.bottom_copper_ready = false;
             }
             self.last_had_bottom_copper = has_bottom_copper;
+        }
+
+        // ── Soldermask meshes (F.Mask / B.Mask) ───────────────────
+        let has_top_mask = top_mask.is_some();
+        if has_top_mask != self.last_had_top_mask {
+            if let (Some(m), Ok(mut g)) = (top_mask, gpu.lock()) {
+                let verts = build_mask_vertices(m, MASK_COLOR_TOP, MASK_Z_TOP);
+                unsafe {
+                    g.top_mask.upload(gl, &verts);
+                }
+                g.top_mask_ready = true;
+            } else if let Ok(mut g) = gpu.lock() {
+                g.top_mask_ready = false;
+            }
+            self.last_had_top_mask = has_top_mask;
+        }
+        let has_bottom_mask = bottom_mask.is_some();
+        if has_bottom_mask != self.last_had_bottom_mask {
+            if let (Some(m), Ok(mut g)) = (bottom_mask, gpu.lock()) {
+                let verts = build_mask_vertices(m, MASK_COLOR_BOTTOM, MASK_Z_BOTTOM);
+                unsafe {
+                    g.bottom_mask.upload(gl, &verts);
+                }
+                g.bottom_mask_ready = true;
+            } else if let Ok(mut g) = gpu.lock() {
+                g.bottom_mask_ready = false;
+            }
+            self.last_had_bottom_mask = has_bottom_mask;
         }
 
         // ── Grid mesh (when resolved step changes) ─────────────────
@@ -533,9 +599,9 @@ impl GerberView3dPanel {
                 gl.depth_mask(true);
                 gl.clear(glow::DEPTH_BUFFER_BIT);
                 g.unlit.bind(gl, &mvp);
-                // Deepest-to-shallowest draw order so the depth buffer
-                // handles layer overlap correctly: B.Cu (most negative Z)
-                // -> board -> F.Cu.
+                // Opaque pass first (depth-write on): B.Cu, board (FR-4),
+                // F.Cu. Deepest-to-shallowest so the depth buffer settles
+                // correctly before the blended pass reads from it.
                 if g.bottom_copper_ready {
                     g.bottom_copper.draw(gl);
                 }
@@ -545,6 +611,26 @@ impl GerberView3dPanel {
                 if g.top_copper_ready {
                     g.top_copper.draw(gl);
                 }
+                // Translucent pass for the solder-mask sheets. Alpha-blend
+                // against whatever the opaque pass wrote; depth-write off
+                // so the masks don't occlude each other when both are in
+                // view (halfway-tilted camera). Back-to-front draw order:
+                // B.Mask sits beneath the board and only shows from the
+                // bottom side; F.Mask sits above F.Cu and dominates the
+                // top-down view.
+                gl.enable(glow::BLEND);
+                gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+                gl.depth_mask(false);
+                g.unlit.set_alpha(gl, MASK_ALPHA);
+                if g.bottom_mask_ready {
+                    g.bottom_mask.draw(gl);
+                }
+                if g.top_mask_ready {
+                    g.top_mask.draw(gl);
+                }
+                g.unlit.set_alpha(gl, 1.0);
+                gl.depth_mask(true);
+                gl.disable(glow::BLEND);
                 if show_grid {
                     gl.line_width(1.0);
                     g.grid.draw(gl);
@@ -713,6 +799,16 @@ fn build_copper_vertices(cu: &CopperData, rgb: [f32; 3], z: f32) -> Vec<f32> {
     let mut out = Vec::with_capacity(cu.mesh_indices.len() * 6);
     for &idx in &cu.mesh_indices {
         let v = cu.mesh_vertices_2d[idx as usize];
+        out.extend_from_slice(&[v[0], v[1], z, r, g, b]);
+    }
+    out
+}
+
+fn build_mask_vertices(m: &MaskData, rgb: [f32; 3], z: f32) -> Vec<f32> {
+    let [r, g, b] = rgb;
+    let mut out = Vec::with_capacity(m.mesh_indices.len() * 6);
+    for &idx in &m.mesh_indices {
+        let v = m.mesh_vertices_2d[idx as usize];
         out.extend_from_slice(&[v[0], v[1], z, r, g, b]);
     }
     out
