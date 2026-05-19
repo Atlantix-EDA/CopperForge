@@ -7,46 +7,54 @@ Companion PCB Release & Manufacturing Tool for KiCad.
 
 [![egui](https://img.shields.io/badge/egui-0.33-blue)](https://github.com/emilk/egui)
 [![KiCad](https://img.shields.io/badge/KiCad-10-blue)](https://www.kicad.org/)
-[![csgrs](https://img.shields.io/crates/v/csgrs?label=csgrs)](https://crates.io/crates/csgrs)
-[![docs.rs csgrs](https://img.shields.io/docsrs/csgrs?label=csgrs%20docs)](https://docs.rs/csgrs)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
 </div>
 
+![CopperForge in action](assets/media/citizen-copper.gif)
+
 ## What it does
 
 CopperForge sits alongside KiCad and owns the manufacturing-backend
-workflow: taking a finished PCB, generating fabrication outputs, tagging
-a release, and tracking every revision you send to a fab.
-
-
-![CopperForge in action](assets/media/citizen-copper.gif)
+workflow: taking a finished PCB, generating fabrication outputs, viewing
+the board in 3D, tagging a release, and tracking every revision you send
+to a fab.
 
 - **Release packaging** — one click cuts `<project>/outputs/<rev>/<name>_<rev>[_<date>].zip`
-  containing gerbers, drill files, and a Markdown `RELEASE_NOTES.md`
-  (KiCad version, host OS, git commit, description, user changes).
-  Right-click a rev in the Projects tree → Regenerate to overwrite in place.
+  containing gerbers, drill files, fabrication data, and a Markdown
+  `RELEASE_NOTES.md` (KiCad version, host OS, git commit, description,
+  user changes). Right-click a rev in the Projects tree → Regenerate to
+  overwrite in place.
 - **Gerber processing** — generate via `kicad-cli` (auto-detected on
   PATH / Flatpak / Snap), load, inspect. Live stale-file warning when
   the PCB is modified on disk.
-- **BOM extraction** — parse `.kicad_pcb` files directly via `kiparse`
-  (no live IPC to KiCad needed).
+- **3D gerber viewer** — an embedded OpenGL view rendering the
+  gerber-driven board outline, F.Cu / B.Cu copper, and a translucent
+  F.Mask / B.Mask soldermask. Handles 2- and 4+ layer stacks with
+  correct stack-position layer numbering.
+- **BOM & fabrication data** — parse `.kicad_pcb` files directly via
+  `kiparse` (no live IPC to KiCad needed); export a grouped BOM to CSV
+  and XLSX — enriched with Manufacturer / MPN from your KiCad symbol
+  libraries — plus a PCBWay / JLCPCB-style centroid (CPL) file.
+- **Design rule checks** — a DRC panel that inspects copper geometry,
+  including corner-rounding overlays, across every layer of the board.
 - **Project database** — embedded [redb](https://github.com/cberner/redb)
   store tracks imported projects, BOM snapshots, and release history.
-- **Shell / Terminal / Logger panels** — in-app command shell, a bash terminal, and a structured event log.
+- **Shell / Terminal / Logger panels** — in-app command shell, a bash
+  terminal, and a structured event log.
 
-Built with Rust + [egui](https://github.com/emilk/egui), and built on
-the [`egui_mobius`](https://github.com/saturn77/egui_mobius) ecosystem
-— specifically the
+## Architecture
+
+CopperForge is built with Rust + [egui](https://github.com/emilk/egui),
+on the [`egui_mobius`](https://github.com/saturn77/egui_mobius)
+ecosystem — specifically the
 [`egui_citizen`](https://github.com/saturn77/egui-citizen) pattern for
 panel lifecycle and reactive state, layered on
 [`egui_mobius_reactive`](https://github.com/saturn77/egui_mobius)'s
 `Dynamic<T>` and `Derived<T>` primitives. CopperForge serves as a
 real-world reference implementation of the citizen pattern; the
-egui_mobius book covers the design rationale and walks through
-smaller example apps end to end.
-
-## Architecture
+egui_mobius book covers the design rationale and walks through smaller
+example apps end to end.
 
 ```
 CopperForgeApp
@@ -72,9 +80,9 @@ stage print a stage-aware diagnostic with actionable hints.
 | Gerber handling | gerber_viewer 0.5, gerber_parser 0.4, gerber-types 0.7 |
 | BOM parsing | kiparse (Atlantix-EDA/atlantix-eda) |
 | Storage | redb (project database, single file) |
-| Release archives | zip (deflate-only) |
+| Release / export | zip (deflate-only), rust_xlsxwriter (BOM XLSX) |
 
-## KiCad 10 support
+### KiCad 10 support
 
 CopperForge detects KiCad installed via PATH, Flatpak, or Snap. Discovery
 runs once at startup; subsequent gerber/drill operations reuse the
@@ -98,12 +106,15 @@ cargo run
 Active development. Shipped:
 
 - Release workflow (zip + markdown notes + per-rev DB tracking + regenerate)
+- 3D gerber viewer (board outline, copper, and soldermask; 2- and 4-layer stacks)
+- BOM & centroid export (CSV / XLSX with symbol-library enrichment, CPL centroid)
 - Projects tab rework + Project Edit modal
 - Shell / Terminal / Logger panels
 - AppLifecycle with explicit init + cached kicad-cli discovery
 
 In flight / planned:
 
+- 3D drill-hole and silkscreen rendering
 - Vendor packaging (PCBWay, Sierra Proto Express, JLCPCB specifics)
 - DRC algorithm enhancements
 - Multi-rev diff view (outputs/rev_01 vs rev_02)
