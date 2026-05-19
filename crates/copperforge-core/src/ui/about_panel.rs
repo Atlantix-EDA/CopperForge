@@ -62,7 +62,7 @@ impl AboutPanel {
 
             // Compact dependency credits
             ui.label(
-                egui::RichText::new("Built with egui-citizen + Tokyo Night Storm")
+                egui::RichText::new("Built with egui_citizen + Tokyo Night Storm")
                     .size(11.0)
                     .color(TokyoNight::COMMENT)
             );
@@ -73,8 +73,8 @@ impl AboutPanel {
                 let pad = ((total_width - approx_content) / 2.0).max(0.0);
                 ui.add_space(pad);
                 ui.hyperlink_to(
-                    egui::RichText::new("egui-citizen").size(11.0).color(TokyoNight::BLUE),
-                    "https://github.com/saturn77/egui-citizen"
+                    egui::RichText::new("egui_citizen").size(11.0).color(TokyoNight::BLUE),
+                    "https://github.com/saturn77/egui_mobius"
                 );
                 ui.label(egui::RichText::new("·").color(TokyoNight::COMMENT));
                 ui.hyperlink_to(
@@ -87,6 +87,22 @@ impl AboutPanel {
                     "https://github.com/MakerPnP/gerber-viewer"
                 );
             });
+
+            ui.add_space(8.0);
+
+            // 3D viewer credit — render3d is adapted from Timothy Schmidt's
+            // alumina-interface (see render3d/mod.rs for the full note).
+            ui.label(
+                egui::RichText::new("3D viewer adapted from")
+                    .size(11.0)
+                    .color(TokyoNight::COMMENT)
+            );
+            ui.hyperlink_to(
+                egui::RichText::new("alumina-interface by Timothy Schmidt (MIT)")
+                    .size(11.0)
+                    .color(TokyoNight::BLUE),
+                "https://github.com/timschmidt/alumina-interface"
+            );
         });
     }
 }

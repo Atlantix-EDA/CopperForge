@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="CopperForge">
+  <title>CopperForge</title>
+  <!-- Free-routed trace snippets in the open corners (45-deg doglegs) -->
+  <g fill="none" stroke="#C77B3C" stroke-width="9" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="188,80 214,80 238,56"/>
+    <polyline points="188,176 214,176 238,200"/>
+  </g>
+  <g fill="#C77B3C">
+    <circle cx="188" cy="80"  r="9.5"/>
+    <circle cx="238" cy="56"  r="9.5"/>
+    <circle cx="188" cy="176" r="9.5"/>
+    <circle cx="238" cy="200" r="9.5"/>
+  </g>
+  <!-- Three copper traces fanning out from the via, 120 deg apart -->
+  <g stroke="#C77B3C" stroke-width="15" stroke-linecap="round">
+    <line x1="182" y1="128"   x2="224" y2="128"/>
+    <line x1="101" y1="174.8" x2="80"  y2="211.1"/>
+    <line x1="101" y1="81.2"  x2="80"  y2="44.9"/>
+  </g>
+  <g fill="#C77B3C">
+    <!-- Landing pads at the end of each trace -->
+    <circle cx="224" cy="128"   r="13"/>
+    <circle cx="80"  cy="211.1" r="13"/>
+    <circle cx="80"  cy="44.9"  r="13"/>
+    <!-- Hexagonal copper pad with a drilled via hole (even-odd punch) -->
+    <path fill-rule="evenodd" d="
+      M182,128 L155,174.8 L101,174.8 L74,128 L101,81.2 L155,81.2 Z
+      M110,128 a18,18 0 1,0 36,0 a18,18 0 1,0 -36,0 Z"/>
+  </g>
+</svg>

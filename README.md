@@ -1,5 +1,5 @@
 <div align="center">
-<img width=280 height=260 src="./assets/media/ForgeCopper.png"></img>
+<img width="420" src="./assets/media/copperforge-banner.png" alt="CopperForge"></img>
 
 # CopperForge
 
@@ -98,6 +98,16 @@ citizen pattern.
 | BOM parsing | kiparse (Atlantix-EDA/atlantix-eda) |
 | Storage | redb (project database, single file) |
 | Release / export | zip (deflate-only), rust_xlsxwriter (BOM XLSX) |
+
+## Credits
+
+- The 3D viewer is adapted from
+  [alumina-interface](https://github.com/timschmidt/alumina-interface) by
+  Timothy Schmidt (MIT) — its OpenGL renderer is the foundation CopperForge's
+  `render3d` module is built on.
+- Gerber rendering builds on
+  [gerber-viewer](https://github.com/MakerPnP/gerber-viewer) from the
+  MakerPnP project.
 
 ## License
 
