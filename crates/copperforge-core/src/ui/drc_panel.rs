@@ -405,7 +405,7 @@ pub fn show_drc_panel<'a>(
                         }
 
                         // Generate overlay for bottom copper
-                        if let Some(layer) = app.services.layer_store.find(LayerType::Copper(2)) {
+                        if let Some(layer) = app.services.layer_store.find(app.services.layer_store.bottom_copper_type()) {
                             logger.log_info("Processing bottom copper layer for corner rounding...");
                             let (overlay_shapes, fixed_count) = drc.generate_corner_overlay_data(&layer.gerber, scaling_factor);
                             logger.log_info(&format!("Generated overlay for {} corners on bottom copper", fixed_count));

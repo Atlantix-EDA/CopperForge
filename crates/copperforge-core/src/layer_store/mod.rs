@@ -48,6 +48,12 @@ pub struct LayerStore {
     /// 20 → "Top 3D Body"). These are KiCad's defined convention, not names
     /// the engineer typed in. Populated when a project loads.
     pub user_layer_names: HashMap<u8, String>,
+    /// Number of copper layers in the loaded board. Used to translate
+    /// detector output (which uses 2-layer-first numbering: B.Cu=Copper(2),
+    /// In1.Cu=Copper(3)) into stack-position numbering (B.Cu=Copper(N),
+    /// In1.Cu=Copper(2)) at insert time. Defaults to 2; set from the
+    /// .kicad_pcb layer stack before loading.
+    pub copper_count: u8,
 }
 
 /// Zoom/view tracking (was ZoomResource).
@@ -115,7 +121,23 @@ impl Default for LayerStore {
             zoom: ZoomState::default(),
             units: UnitsState::default(),
             user_layer_names: HashMap::new(),
+            copper_count: 2,
         }
+    }
+}
+
+/// Translate the detector's 2-layer-first copper numbering into the
+/// stack-position numbering CopperForge uses everywhere else (F.Cu=Copper(1),
+/// In1=Copper(2), …, B.Cu=Copper(N)). Non-copper LayerTypes pass through.
+///
+/// Detector returns:    1 (F.Cu), 2 (B.Cu), 3 (In1.Cu), 4 (In2.Cu), …
+/// We want to store as: 1 (F.Cu), N (B.Cu), 2 (In1.Cu),  3 (In2.Cu),  …
+fn remap_copper_for_stack(detected: LayerType, copper_count: u8) -> LayerType {
+    match detected {
+        LayerType::Copper(1) => LayerType::Copper(1),
+        LayerType::Copper(2) => LayerType::Copper(copper_count),
+        LayerType::Copper(n) if n >= 3 => LayerType::Copper(n - 1),
+        other => other,
     }
 }
 
@@ -124,13 +146,31 @@ impl LayerStore {
     /// prefers the KiCad 10 canonical name parsed from the loaded
     /// `.kicad_pcb` (e.g. "M1 Board Outline", "Top 3D Body"), falling
     /// back to the generic `display_name()` when no PCB is loaded.
+    ///
+    /// Copper layers route through `display_name_with_context(copper_count)`
+    /// so 4+ layer boards label B.Cu as "Bottom Copper (L4)" instead of the
+    /// 2-layer "L2", and inner layers get their correct stack position.
     pub fn display_name(&self, layer_type: LayerType) -> String {
         if let LayerType::UserLayer(n) = layer_type {
             if let Some(name) = self.user_layer_names.get(&n) {
                 return name.clone();
             }
         }
-        layer_type.display_name()
+        layer_type.display_name_with_context(self.copper_count)
+    }
+
+    /// Set the copper-layer count from the .kicad_pcb. Must be called before
+    /// loading gerbers so detection results get remapped to stack-position
+    /// numbering at insert time.
+    pub fn set_copper_count(&mut self, n: u8) {
+        self.copper_count = n.max(2);
+    }
+
+    /// The stack-position LayerType for B.Cu on this board. On 2-layer boards
+    /// that's `Copper(2)`; on 4-layer it's `Copper(4)`. Used by callers that
+    /// want "the bottom copper layer" without hardcoding the count.
+    pub fn bottom_copper_type(&self) -> LayerType {
+        LayerType::Copper(self.copper_count)
     }
 }
 
@@ -188,7 +228,7 @@ impl LayerStore {
     ) {
         let layer = PcbLayer {
             layer_type,
-            name: layer_type.display_name(),
+            name: layer_type.display_name_with_context(self.copper_count),
             file_path,
             image_transform: gerber.image_transform().clone(),
             gerber,
@@ -242,10 +282,12 @@ impl LayerStore {
     /// Auto-detect and assign all unassigned gerbers that can be identified.
     pub fn auto_assign(&mut self) -> Vec<(String, LayerType)> {
         let mut assigned = Vec::new();
+        let cc = self.copper_count;
         let candidates: Vec<(String, LayerType)> = self.unassigned.iter()
             .filter_map(|ug| {
                 let detected = self.detector.detect_layer_type_with_names(&ug.filename, &self.user_layer_names)?;
-                if self.find(detected).is_none() { Some((ug.filename.clone(), detected)) } else { None }
+                let remapped = remap_copper_for_stack(detected, cc);
+                if self.find(remapped).is_none() { Some((ug.filename.clone(), remapped)) } else { None }
             })
             .collect();
 
@@ -278,9 +320,10 @@ impl LayerStore {
             let gerber_layer = GerberLayer::new(doc.into_commands());
 
             if let Some(detected) = self.detector.detect_layer_type_with_names(&filename, &self.user_layer_names) {
-                if self.find(detected).is_none() && !self.assignments.values().any(|t| *t == detected) {
-                    self.add_layer(detected, gerber_layer, Some(path.clone()), true);
-                    self.add_assignment(filename, detected);
+                let remapped = remap_copper_for_stack(detected, self.copper_count);
+                if self.find(remapped).is_none() && !self.assignments.values().any(|t| *t == remapped) {
+                    self.add_layer(remapped, gerber_layer, Some(path.clone()), true);
+                    self.add_assignment(filename, remapped);
                     loaded += 1;
                     continue;
                 }

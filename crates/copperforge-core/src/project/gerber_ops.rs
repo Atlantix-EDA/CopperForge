@@ -114,21 +114,19 @@ pub fn generate_gerbers_from_pcb(
     Some(output_dir)
 }
 
-/// Read the copper-layer stack from the `.kicad_pcb` so kicad-cli is asked
-/// to export every copper layer the board actually has — not just F.Cu/B.Cu.
-/// KiCad assigns even layer IDs to copper (F.Cu=0, B.Cu=2, In1.Cu=4, In2.Cu=6,
-/// ...), so sorting by ID with B.Cu pinned last yields the stack-correct order
-/// `F.Cu, In1.Cu, ..., B.Cu`. Falls back to plain `F.Cu,B.Cu` on parse failure.
-fn copper_layers_from_pcb(pcb_path: &Path) -> String {
-    let fallback = "F.Cu,B.Cu";
-    let Ok(content) = std::fs::read_to_string(pcb_path) else { return fallback.into() };
-    let Ok(pcb) = kiparse::pcb::parse_layers_only(&content) else { return fallback.into() };
+/// Read the copper-layer stack from the `.kicad_pcb` in physical stack order:
+/// F.Cu first, then In1.Cu, In2.Cu, ..., B.Cu last. KiCad assigns even layer
+/// IDs to copper (F.Cu=0, B.Cu=2, In1.Cu=4, In2.Cu=6, ...), so sorting by ID
+/// with B.Cu pinned last yields the correct order. Empty vec on parse failure
+/// — callers fall back to plain F.Cu/B.Cu.
+pub fn copper_layers_from_pcb_vec(pcb_path: &Path) -> Vec<String> {
+    let Ok(content) = std::fs::read_to_string(pcb_path) else { return vec![] };
+    let Ok(pcb) = kiparse::pcb::parse_layers_only(&content) else { return vec![] };
 
     let mut copper: Vec<(i32, String)> = pcb.layers.iter()
         .filter(|(_, layer)| layer.name.ends_with(".Cu"))
         .map(|(id, layer)| (*id, layer.name.clone()))
         .collect();
-    if copper.is_empty() { return fallback.into(); }
 
     copper.sort_by(|a, b| match (a.1 == "B.Cu", b.1 == "B.Cu") {
         (true, true) => std::cmp::Ordering::Equal,
@@ -136,7 +134,13 @@ fn copper_layers_from_pcb(pcb_path: &Path) -> String {
         (false, true) => std::cmp::Ordering::Less,
         _ => a.0.cmp(&b.0),
     });
-    copper.into_iter().map(|(_, name)| name).collect::<Vec<_>>().join(",")
+    copper.into_iter().map(|(_, name)| name).collect()
+}
+
+/// Comma-joined copper stack for the kicad-cli `--layers` argument.
+fn copper_layers_from_pcb(pcb_path: &Path) -> String {
+    let stack = copper_layers_from_pcb_vec(pcb_path);
+    if stack.is_empty() { "F.Cu,B.Cu".into() } else { stack.join(",") }
 }
 
 /// Load gerber files from `gerber_dir` into the app's layer store. The
@@ -151,6 +155,14 @@ pub fn load_gerbers_into_viewer(
 ) {
     logger.log_info("Clearing existing gerber layers...");
     app.services.layer_store.clear_all();
+
+    let copper_stack = copper_layers_from_pcb_vec(pcb_path);
+    if !copper_stack.is_empty() {
+        let cc = copper_stack.len() as u8;
+        logger.log_info(&format!(
+            "Board has {} copper layers: {}", cc, copper_stack.join(", ")));
+        app.services.layer_store.set_copper_count(cc);
+    }
 
     match crate::project_manager::kicad_metadata::read_user_layer_names(pcb_path) {
         Ok(names) => {
@@ -201,7 +213,7 @@ pub fn load_gerbers_into_viewer(
         );
         app.services.bottom_copper = extract_copper_side(
             &app.services.layer_store,
-            crate::layer_store::LayerType::Copper(2),
+            app.services.layer_store.bottom_copper_type(),
             "B.Cu",
             &outline_bbox,
             logger,
