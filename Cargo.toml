@@ -64,11 +64,11 @@ glow = "0.16"
 egui_glow = { version = "0.33", default-features = false }
 bytemuck = "1.23"
 
-# Egui Mobius framework
-egui_mobius_reactive = { version = "0.3.0-alpha.33" }
+# Egui Mobius framework (canonical home: the egui_mobius monorepo)
+egui_mobius_reactive = { path = "../egui_mobius/crates/egui_mobius_reactive" }
 
-# Citizen panel lifecycle
-egui_citizen = { path = "../egui-citizen/crates/egui_citizen" }
+# Citizen panel lifecycle (canonical home: the egui_mobius monorepo)
+egui_citizen = { path = "../egui_mobius/crates/egui_citizen" }
 
 # KiCad file parsing (BOM extraction from .kicad_pcb)
 kiparse = { git = "https://github.com/Atlantix-EDA/atlantix-eda.git", package = "kiparse" }

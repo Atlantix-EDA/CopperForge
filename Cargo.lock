@@ -856,9 +856,8 @@ dependencies = [
 
 [[package]]
 name = "egui_citizen"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
- "egui",
  "egui_mobius_reactive",
 ]
 
@@ -917,9 +916,7 @@ dependencies = [
 
 [[package]]
 name = "egui_mobius_reactive"
-version = "0.3.0-alpha.33"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89365b05cb5d87d86b919437cf81059b1deece869e3c65254bfa100c6ce851dd"
+version = "0.4.0"
 dependencies = [
  "parking_lot",
 ]
