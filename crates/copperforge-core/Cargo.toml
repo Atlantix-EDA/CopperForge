@@ -3,6 +3,14 @@ name = "copperforge-core"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "CopperForge internals (panels, gerber/BOM/3D, services)"
+
+# This is a library crate — don't generate a cargo-dist installer for it
+# (no binary to install). Only the top-level `copperforge` package ships.
+[package.metadata.dist]
+dist = false
 
 [dependencies]
 egui = { workspace = true }

@@ -12,6 +12,9 @@ name = "copperforge"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "PCB release & manufacturing companion tool for KiCad"
 
 [[bin]]
 name = "copperforge"
@@ -25,10 +28,17 @@ egui_extras.workspace = true
 env_logger.workspace = true
 log.workspace = true
 
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
 [workspace.package]
 version = "0.5.0"
 edition = "2024"
 authors = ["James Bonanno <atlantix-eda@proton.me>"]
+repository = "https://github.com/Atlantix-EDA/CopperForge"
+license = "MIT"
 
 [workspace.dependencies]
 egui = "0.33"
