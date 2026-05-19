@@ -5,6 +5,8 @@ Companion PCB Release & Manufacturing Tool for KiCad.
 
 [![egui](https://img.shields.io/badge/egui-0.33-blue)](https://github.com/emilk/egui)
 [![KiCad](https://img.shields.io/badge/KiCad-10-blue)](https://www.kicad.org/)
+[![Rust](https://img.shields.io/badge/rust-1.88%2B-blue)](https://www.rust-lang.org/)
+[![egui_mobius](https://img.shields.io/badge/built_with-egui__mobius-orange)](https://github.com/saturn77/egui_mobius)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
 </div>
