@@ -142,19 +142,65 @@ pub fn create_release(
     std::fs::write(&notes_path, &notes_markdown)
         .map_err(|e| format!("Failed to write RELEASE_NOTES.md: {}", e))?;
 
+    // 4b. Fabrication data: centroid (CPL) + BOM (CSV and XLSX), written next
+    //     to the zip and bundled into it. Non-fatal — a BOM parse failure logs
+    //     a warning and the release proceeds without these files.
+    let mut fab_files: Vec<PathBuf> = Vec::new();
+    match crate::bom::extract_bom(sources.pcb_path) {
+        Ok(entries) if !entries.is_empty() => {
+            type Writer = fn(&[crate::bom::BomEntry], &Path) -> Result<(), String>;
+            let targets: [(&str, PathBuf, Writer); 3] = [
+                (
+                    "Centroid file",
+                    rev_dir.join(format!("{}-centroid.csv", project_stem)),
+                    crate::export::centroid::write_cpl_csv,
+                ),
+                (
+                    "BOM CSV",
+                    rev_dir.join(format!("{}-bom.csv", project_stem)),
+                    crate::export::bom::write_bom_csv,
+                ),
+                (
+                    "BOM XLSX",
+                    rev_dir.join(format!("{}-bom.xlsx", project_stem)),
+                    crate::export::bom::write_bom_xlsx,
+                ),
+            ];
+            for (label, path, write) in targets {
+                match write(&entries, &path) {
+                    Ok(()) => {
+                        logger.log_info(&format!("{}: {}", label, path.display()));
+                        fab_files.push(path);
+                    }
+                    Err(e) => logger.log_warning(&format!("{} skipped: {}", label, e)),
+                }
+            }
+        }
+        Ok(_) => logger
+            .log_warning("BOM extraction found no components — centroid/BOM not bundled."),
+        Err(e) => logger.log_warning(&format!(
+            "BOM extraction failed — centroid/BOM not bundled: {}",
+            e
+        )),
+    }
+
     // 5. Build the archive.
     let notes_for_zip = if req.include_notes_in_zip {
         Some((notes_path.as_path(), "RELEASE_NOTES.md"))
     } else {
         None
     };
-    write_release_zip(&zip_path, sources.gerber_dir, &drill_dir, notes_for_zip)
+    write_release_zip(&zip_path, sources.gerber_dir, &drill_dir, notes_for_zip, &fab_files)
         .map_err(|e| format!("Failed to build zip: {}", e))?;
 
     // 6. Clean up drill staging (its contents are in the zip now).
     let _ = std::fs::remove_dir_all(&drill_dir);
 
     logger.log_info(&format!("Release archive: {}", zip_path.display()));
+
+    // Open the release folder in the system file manager.
+    open_directory(&rev_dir);
+    logger.log_info(&format!("Opened release folder: {}", rev_dir.display()));
 
     let release = Release {
         tag: req.rev_tag.clone(),
@@ -307,6 +353,7 @@ fn write_release_zip(
     gerber_dir: &Path,
     drill_dir: &Path,
     notes: Option<(&Path, &str)>,
+    extra_files: &[PathBuf],
 ) -> std::io::Result<()> {
     let file = File::create(zip_path)?;
     let mut zw = ZipWriter::new(file);
@@ -334,8 +381,27 @@ fn write_release_zip(
         add_to_zip(&mut zw, notes_path, Some(name_in_zip), opts)?;
     }
 
+    // Fabrication data (centroid, BOM)
+    for path in extra_files {
+        if path.is_file() {
+            add_to_zip(&mut zw, path, None, opts)?;
+        }
+    }
+
     zw.finish()?;
     Ok(())
+}
+
+/// Open `dir` in the system file manager. Best-effort — failures are ignored.
+fn open_directory(dir: &Path) {
+    let opener = if cfg!(target_os = "windows") {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    let _ = std::process::Command::new(opener).arg(dir).spawn();
 }
 
 fn add_to_zip(

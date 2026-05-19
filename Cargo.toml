@@ -99,6 +99,9 @@ egui_ltreeview = "0.6.0"
 # Release archives (gerber+drill zip)
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
 
+# XLSX BOM export
+rust_xlsxwriter = "0.95"
+
 # In-app shell: argument parsing (clap) + quote-aware tokenization (shlex).
 # `derive` pulls `clap_derive` so sub-commands can be declared inline;
 # `std` is default. Colors are disabled explicitly at call time so we don't

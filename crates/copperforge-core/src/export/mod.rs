@@ -1,3 +1,7 @@
+pub mod bom;
+pub mod centroid;
+pub mod symbol_meta;
+
 use std::path::PathBuf;
 use image::{ImageBuffer, Rgba, RgbaImage};
 use eframe::emath::{Rect, Vec2};
@@ -6,6 +10,50 @@ use gerber_viewer::{ViewState, BoundingBox, GerberTransform};
 use crate::{CopperForgeApp, layer_store::LayerType};
 use crate::display::VectorOffset;
 use nalgebra::{Vector2, Point2};
+
+/// The footprint name without its `library:` prefix
+/// (`0_kiverse_Components:C_0603_1608Metric` -> `C_0603_1608Metric`).
+pub(crate) fn footprint_name(s: &str) -> &str {
+    s.rsplit(':').next().unwrap_or(s)
+}
+
+/// Best-effort physical package from a KiCad footprint name.
+///
+/// Standard two-terminal passive footprints (`C_0603_1608Metric`,
+/// `R_0805_2012Metric`, `L_1210_3225Metric`, ...) yield the imperial size
+/// (`0603`, `0805`, `1210`). Anything else falls back to the footprint name
+/// without its library prefix.
+pub(crate) fn package_from_footprint(footprint: &str) -> String {
+    let name = footprint_name(footprint);
+    // <Letter(s)>_<imperial>_<metric>Metric
+    if let Some((_, rest)) = name.split_once('_') {
+        if let Some((imperial, tail)) = rest.split_once('_') {
+            if imperial.len() == 4
+                && imperial.chars().all(|c| c.is_ascii_digit())
+                && tail.ends_with("Metric")
+            {
+                return imperial.to_string();
+            }
+        }
+    }
+    name.to_string()
+}
+
+/// True for footprints that are mechanical / fabrication aids rather than
+/// assembled parts (mounting holes, fiducials) and so do not belong in a BOM.
+pub(crate) fn is_bom_excluded(footprint: &str) -> bool {
+    let f = footprint.to_lowercase();
+    f.contains("mountinghole") || f.contains("fiducial")
+}
+
+/// Quote a string as a CSV field if it contains a comma, double-quote, CR or LF.
+pub(crate) fn csv_field(s: &str) -> String {
+    if s.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
 
 #[allow(dead_code)]
 pub struct PngExporter;
