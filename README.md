@@ -54,7 +54,22 @@ matters). Gerber filename detection supports KiCad 10's `--no-protel-ext`
 naming convention (`Top Layer.gbr`, `Bottom Solder.gbr`, etc.) alongside
 traditional KiCad and Protel patterns.
 
-## Building
+## Install
+
+Prebuilt binary, Linux / macOS / Windows — no Rust toolchain needed:
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/Atlantix-EDA/CopperForge/releases/latest/download/copperforge-installer.sh | sh
+```
+
+Binaries for `x86_64`/`aarch64` Linux, `x86_64`/`aarch64` macOS, and
+`x86_64` Windows are published to
+[GitHub Releases](https://github.com/Atlantix-EDA/CopperForge/releases)
+on every tagged version, with SHA-256 checksums alongside. The release
+pipeline is driven by [cargo-dist](https://github.com/axodotdev/cargo-dist).
+
+### Build from source
 
 Requires Rust 1.88+.
 
