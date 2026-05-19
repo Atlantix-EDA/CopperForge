@@ -1,0 +1,15 @@
+# Local co-development override for the egui_mobius framework crates.
+#
+# CopperForge depends on `egui_citizen` / `egui_mobius_reactive` as git
+# dependencies pinned to a tag (see Cargo.toml) so a plain `cargo run`
+# works on a fresh clone with nothing else checked out.
+#
+# If you are also hacking on the egui_mobius monorepo itself, copy this
+# file to `.cargo/config.toml` (which is gitignored) and adjust the path.
+# Cargo's `paths` override then uses your working-tree monorepo instead
+# of the pinned git checkout — local edits are picked up with no commit,
+# push, or tag bump. Delete `.cargo/config.toml` to go back to the git dep.
+#
+#   cp .cargo/config.toml.example .cargo/config.toml
+
+paths = ["../egui_mobius"]

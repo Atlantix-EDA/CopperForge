@@ -857,6 +857,7 @@ dependencies = [
 [[package]]
 name = "egui_citizen"
 version = "0.4.0"
+source = "git+https://github.com/saturn77/egui_mobius?tag=v0.4.0#a86386ba7f1b10755dd8112e35e8d238439591c1"
 dependencies = [
  "egui_mobius_reactive",
 ]
@@ -917,6 +918,7 @@ dependencies = [
 [[package]]
 name = "egui_mobius_reactive"
 version = "0.4.0"
+source = "git+https://github.com/saturn77/egui_mobius?tag=v0.4.0#a86386ba7f1b10755dd8112e35e8d238439591c1"
 dependencies = [
  "parking_lot",
 ]

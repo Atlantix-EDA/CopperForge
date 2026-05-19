@@ -64,11 +64,13 @@ glow = "0.16"
 egui_glow = { version = "0.33", default-features = false }
 bytemuck = "1.23"
 
-# Egui Mobius framework (canonical home: the egui_mobius monorepo)
-egui_mobius_reactive = { path = "../egui_mobius/crates/egui_mobius_reactive" }
+# Egui Mobius framework — fetched from the egui_mobius monorepo so a plain
+# `cargo run` pulls it. For local co-development, override with a path via
+# a (gitignored) .cargo/config.toml `paths` entry — see .cargo/config.toml.example.
+egui_mobius_reactive = { git = "https://github.com/saturn77/egui_mobius", tag = "v0.4.0" }
 
-# Citizen panel lifecycle (canonical home: the egui_mobius monorepo)
-egui_citizen = { path = "../egui_mobius/crates/egui_citizen" }
+# Citizen panel lifecycle (lives in the same egui_mobius monorepo).
+egui_citizen = { git = "https://github.com/saturn77/egui_mobius", tag = "v0.4.0" }
 
 # KiCad file parsing (BOM extraction from .kicad_pcb)
 kiparse = { git = "https://github.com/Atlantix-EDA/atlantix-eda.git", package = "kiparse" }
