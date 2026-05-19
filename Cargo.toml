@@ -34,7 +34,7 @@ inherits = "release"
 lto = "thin"
 
 [workspace.package]
-version = "0.5.0"
+version = "0.5.1"
 edition = "2024"
 authors = ["James Bonanno <atlantix-eda@proton.me>"]
 repository = "https://github.com/Atlantix-EDA/CopperForge"
