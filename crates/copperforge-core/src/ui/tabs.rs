@@ -25,9 +25,12 @@ pub enum TabKind {
     ViewSettings,
     DRC,
     GerberView,
+    GerberView3d,
     Logger,
+    /// Forge commands (via clap) + bash passthrough — merged from the
+    /// former `Shell` panel. Any unknown first-token falls through to
+    /// `bash -c`, so the tab behaves like a normal terminal too.
     Terminal,
-    Shell,
     Projects,  // Project database + tree + Import modal (replaced old Project tab)
     Settings,
     BOM,
@@ -40,9 +43,9 @@ impl TabKind {
             TabKind::ViewSettings => CitizenId::new("view_settings"),
             TabKind::DRC => CitizenId::new("drc"),
             TabKind::GerberView => CitizenId::new("gerber_view"),
+            TabKind::GerberView3d => CitizenId::new("gerber_view_3d"),
             TabKind::Logger => CitizenId::new("logger"),
             TabKind::Terminal => CitizenId::new("terminal"),
-            TabKind::Shell => CitizenId::new("shell"),
             TabKind::Projects => CitizenId::new("projects"),
             TabKind::Settings => CitizenId::new("settings"),
             TabKind::BOM => CitizenId::new("bom"),
@@ -85,9 +88,9 @@ impl Tab {
             TabKind::ViewSettings => "View Settings".to_string(),
             TabKind::DRC => "DRC".to_string(),
             TabKind::GerberView => "Gerber View".to_string(),
+            TabKind::GerberView3d => "Gerber View 3D".to_string(),
             TabKind::Logger => "Logger".to_string(),
             TabKind::Terminal => "Terminal".to_string(),
-            TabKind::Shell => "Shell".to_string(),
             TabKind::Projects => "Projects".to_string(),
             TabKind::Settings => "Settings".to_string(),
             TabKind::BOM => "BOM".to_string(),
@@ -118,14 +121,30 @@ impl Tab {
             TabKind::GerberView => {
                 self.render_gerber_view(ui, params.app);
             }
+            TabKind::GerberView3d => {
+                let gl = params.app.gl_context.clone();
+                let outline = params.app.services.board_outline.as_ref();
+                let top_copper = params.app.services.top_copper.as_ref();
+                let bottom_copper = params.app.services.bottom_copper.as_ref();
+                let top_mask = params.app.services.top_mask.as_ref();
+                let bottom_mask = params.app.services.bottom_mask.as_ref();
+                let units_mils = params.app.services.global_units_mils;
+                params.app.gerber_view_3d_panel.show(
+                    ui,
+                    gl.as_ref(),
+                    outline,
+                    top_copper,
+                    bottom_copper,
+                    top_mask,
+                    bottom_mask,
+                    units_mils,
+                );
+            }
             TabKind::Logger => {
                 params.app.logger_panel.show(ui, &mut params.app.services);
             }
             TabKind::Terminal => {
                 params.app.terminal_panel.show(ui, &mut params.app.services);
-            }
-            TabKind::Shell => {
-                params.app.shell_panel.show(ui, &mut params.app.services);
             }
             TabKind::Projects => {
                 ProjectsPanel::new(egui_citizen::CitizenState::default())

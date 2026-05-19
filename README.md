@@ -7,6 +7,8 @@ Companion PCB Release & Manufacturing Tool for KiCad.
 
 [![egui](https://img.shields.io/badge/egui-0.33-blue)](https://github.com/emilk/egui)
 [![KiCad](https://img.shields.io/badge/KiCad-10-blue)](https://www.kicad.org/)
+[![csgrs](https://img.shields.io/crates/v/csgrs?label=csgrs)](https://crates.io/crates/csgrs)
+[![docs.rs csgrs](https://img.shields.io/docsrs/csgrs?label=csgrs%20docs)](https://docs.rs/csgrs)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
 </div>
@@ -18,7 +20,7 @@ workflow: taking a finished PCB, generating fabrication outputs, tagging
 a release, and tracking every revision you send to a fab.
 
 
-![alt text](assets/media/KiForge_usage.gif)
+![CopperForge in action](assets/media/citizen-copper.gif)
 
 - **Release packaging** — one click cuts `<project>/outputs/<rev>/<name>_<rev>[_<date>].zip`
   containing gerbers, drill files, and a Markdown `RELEASE_NOTES.md`
@@ -33,9 +35,16 @@ a release, and tracking every revision you send to a fab.
   store tracks imported projects, BOM snapshots, and release history.
 - **Shell / Terminal / Logger panels** — in-app command shell, a bash terminal, and a structured event log.
 
-Built with Rust + [egui](https://github.com/emilk/egui). Uses the
-[egui-citizen](https://github.com/saturn77/egui-citizen) framework for
-panel lifecycle (an evolution of egui-mobius).
+Built with Rust + [egui](https://github.com/emilk/egui), and built on
+the [`egui_mobius`](https://github.com/saturn77/egui_mobius) ecosystem
+— specifically the
+[`egui_citizen`](https://github.com/saturn77/egui-citizen) pattern for
+panel lifecycle and reactive state, layered on
+[`egui_mobius_reactive`](https://github.com/saturn77/egui_mobius)'s
+`Dynamic<T>` and `Derived<T>` primitives. CopperForge serves as a
+real-world reference implementation of the citizen pattern; the
+egui_mobius book covers the design rationale and walks through
+smaller example apps end to end.
 
 ## Architecture
 

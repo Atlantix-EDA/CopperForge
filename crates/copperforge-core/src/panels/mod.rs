@@ -8,7 +8,7 @@ mod view_settings;
 mod projects;
 mod bom;
 mod gerber_view;
-mod shell;
+mod gerber_view_3d;
 mod terminal;
 mod logger;
 
@@ -18,7 +18,7 @@ pub use view_settings::ViewSettingsPanel;
 pub use projects::ProjectsPanel;
 pub use bom::BomPanel;
 pub use gerber_view::GerberViewPanel;
-pub use shell::ShellPanel;
+pub use gerber_view_3d::GerberView3dPanel;
 pub use terminal::TerminalPanel;
 pub use logger::LoggerPanel;
 
@@ -43,8 +43,8 @@ macro_rules! citizen_panel {
 
         impl Citizen for $name {
             fn id(&self) -> &CitizenId { &self.citizen_id }
-            fn state(&self) -> &CitizenState { &self.citizen_state }
-            fn state_mut(&mut self) -> &mut CitizenState { &mut self.citizen_state }
+            fn citizen_state(&self) -> &CitizenState { &self.citizen_state }
+            fn citizen_state_mut(&mut self) -> &mut CitizenState { &mut self.citizen_state }
         }
     };
 }

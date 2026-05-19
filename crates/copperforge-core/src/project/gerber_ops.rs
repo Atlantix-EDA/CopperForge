@@ -40,9 +40,11 @@ pub fn generate_gerbers_from_pcb(
         .map(|n| format!("User.{}", n))
         .collect::<Vec<_>>()
         .join(",");
+    let copper_layers = copper_layers_from_pcb(pcb_path);
+    logger.log_info(&format!("Copper stack from .kicad_pcb: {}", copper_layers));
     let layers_arg = format!(
-        "F.Cu,B.Cu,F.SilkS,B.SilkS,F.Mask,B.Mask,Edge.Cuts,F.Paste,B.Paste,{}",
-        user_layers
+        "{},F.SilkS,B.SilkS,F.Mask,B.Mask,Edge.Cuts,F.Paste,B.Paste,{}",
+        copper_layers, user_layers
     );
 
     let mut cmd = CopperForgeApp::build_kicad_cli_command(kicad_cli_method);
@@ -112,6 +114,35 @@ pub fn generate_gerbers_from_pcb(
     Some(output_dir)
 }
 
+/// Read the copper-layer stack from the `.kicad_pcb` in physical stack order:
+/// F.Cu first, then In1.Cu, In2.Cu, ..., B.Cu last. KiCad assigns even layer
+/// IDs to copper (F.Cu=0, B.Cu=2, In1.Cu=4, In2.Cu=6, ...), so sorting by ID
+/// with B.Cu pinned last yields the correct order. Empty vec on parse failure
+/// — callers fall back to plain F.Cu/B.Cu.
+pub fn copper_layers_from_pcb_vec(pcb_path: &Path) -> Vec<String> {
+    let Ok(content) = std::fs::read_to_string(pcb_path) else { return vec![] };
+    let Ok(pcb) = kiparse::pcb::parse_layers_only(&content) else { return vec![] };
+
+    let mut copper: Vec<(i32, String)> = pcb.layers.iter()
+        .filter(|(_, layer)| layer.name.ends_with(".Cu"))
+        .map(|(id, layer)| (*id, layer.name.clone()))
+        .collect();
+
+    copper.sort_by(|a, b| match (a.1 == "B.Cu", b.1 == "B.Cu") {
+        (true, true) => std::cmp::Ordering::Equal,
+        (true, false) => std::cmp::Ordering::Greater,
+        (false, true) => std::cmp::Ordering::Less,
+        _ => a.0.cmp(&b.0),
+    });
+    copper.into_iter().map(|(_, name)| name).collect()
+}
+
+/// Comma-joined copper stack for the kicad-cli `--layers` argument.
+fn copper_layers_from_pcb(pcb_path: &Path) -> String {
+    let stack = copper_layers_from_pcb_vec(pcb_path);
+    if stack.is_empty() { "F.Cu,B.Cu".into() } else { stack.join(",") }
+}
+
 /// Load gerber files from `gerber_dir` into the app's layer store. The
 /// `pcb_path` is read to pull the KiCad 10 canonical names for User.N
 /// slots out of the `.kicad_pcb` (e.g. "M1 Board Outline", "Top 3D Body")
@@ -124,6 +155,14 @@ pub fn load_gerbers_into_viewer(
 ) {
     logger.log_info("Clearing existing gerber layers...");
     app.services.layer_store.clear_all();
+
+    let copper_stack = copper_layers_from_pcb_vec(pcb_path);
+    if !copper_stack.is_empty() {
+        let cc = copper_stack.len() as u8;
+        logger.log_info(&format!(
+            "Board has {} copper layers: {}", cc, copper_stack.join(", ")));
+        app.services.layer_store.set_copper_count(cc);
+    }
 
     match crate::project_manager::kicad_metadata::read_user_layer_names(pcb_path) {
         Ok(names) => {
@@ -150,6 +189,187 @@ pub fn load_gerbers_into_viewer(
         }
         Err(e) => {
             logger.log_error(&format!("Failed to load gerbers: {}", e));
+        }
+    }
+
+    // 3D pipeline geometry: extract the board outline from the mechanical-
+    // outline gerber. Reads the file a second time via `gerber_parser` — the
+    // legacy `gerber_viewer` path has already read it once for the 2D canvas.
+    // This duplication is documented in the FDD's "Legacy 2D Rendering Path"
+    // section and goes away when Phase 7 retires gerber_viewer.
+    app.services.board_outline = extract_outline_from_layer_store(&app.services.layer_store, logger);
+
+    // Copper layers (Phase 4a). Require an outline bbox so the copper mesh
+    // lines up with the board mesh — both share the same world transform
+    // (Stage 6 of the FDD pipeline, centered at outline bbox).
+    if let Some(outline) = app.services.board_outline.as_ref() {
+        let outline_bbox = outline.bbox.clone();
+        let outline_contours = outline.contours.clone();
+        app.services.top_copper = extract_copper_side(
+            &app.services.layer_store,
+            crate::layer_store::LayerType::Copper(1),
+            "F.Cu",
+            &outline_bbox,
+            logger,
+        );
+        app.services.bottom_copper = extract_copper_side(
+            &app.services.layer_store,
+            app.services.layer_store.bottom_copper_type(),
+            "B.Cu",
+            &outline_bbox,
+            logger,
+        );
+        app.services.top_mask = extract_mask_side(
+            &app.services.layer_store,
+            crate::layer_store::LayerType::Soldermask(crate::layer_store::Side::Top),
+            "F.Mask",
+            &outline_contours,
+            &outline_bbox,
+            logger,
+        );
+        app.services.bottom_mask = extract_mask_side(
+            &app.services.layer_store,
+            crate::layer_store::LayerType::Soldermask(crate::layer_store::Side::Bottom),
+            "B.Mask",
+            &outline_contours,
+            &outline_bbox,
+            logger,
+        );
+    } else {
+        app.services.top_copper = None;
+        app.services.bottom_copper = None;
+        app.services.top_mask = None;
+        app.services.bottom_mask = None;
+    }
+}
+
+/// Look up a copper layer in the store and extract its polygon IR, aligned
+/// to the board outline's bbox. `label` is used in log output so the reader
+/// can tell F.Cu and B.Cu lines apart.
+fn extract_copper_side(
+    store: &crate::layer_store::LayerStore,
+    layer_type: crate::layer_store::LayerType,
+    label: &str,
+    outline_bbox: &gerber_viewer::BoundingBox,
+    logger: &ReactiveEventLogger,
+) -> Option<crate::gerber_geom::CopperData> {
+    let layer = store.find(layer_type)?;
+    let path = layer.file_path.as_ref()?;
+    // Log the filename each slot landed on so bottom/top swaps caused by
+    // upstream filename detection are visible without a code trace.
+    logger.log_info(&format!(
+        "{} copper: reading {}",
+        label,
+        path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default(),
+    ));
+    match crate::gerber_geom::extract_copper(path, outline_bbox) {
+        Some((data, counts)) => {
+            logger.log_info(&format!(
+                "{} copper: {} circle + {} rect + {} roundrect + {} obround + {} polygon flash(es); {} linear stroke(s); {} region polygon(s); {} macros / {} arc-strokes / {} non-circle-strokes skipped",
+                label,
+                counts.flashed_circles,
+                counts.flashed_rectangles,
+                counts.flashed_roundrects,
+                counts.flashed_obrounds,
+                counts.flashed_polygons,
+                counts.linear_strokes,
+                counts.region_polygons,
+                counts.flashed_macros_skipped,
+                counts.arc_strokes_skipped,
+                counts.non_circle_strokes_skipped,
+            ));
+            logger.log_info(&format!(
+                "{} copper: {} triangle(s) tessellated",
+                label,
+                data.mesh_indices.len() / 3,
+            ));
+            Some(data)
+        }
+        None => {
+            logger.log_warning(&format!("{} copper: no geometry extracted", label));
+            None
+        }
+    }
+}
+
+/// Look up a soldermask layer in the store and extract its polygon IR as
+/// a green-sheet-with-holes mesh. The openings in the gerber become holes
+/// in the mask; the board outline contours provide the outer sheet
+/// boundary (plus any cutouts / slots as additional holes).
+fn extract_mask_side(
+    store: &crate::layer_store::LayerStore,
+    layer_type: crate::layer_store::LayerType,
+    label: &str,
+    outline_contours: &[Vec<nalgebra::Point2<f32>>],
+    outline_bbox: &gerber_viewer::BoundingBox,
+    logger: &ReactiveEventLogger,
+) -> Option<crate::gerber_geom::MaskData> {
+    let layer = store.find(layer_type)?;
+    let path = layer.file_path.as_ref()?;
+    logger.log_info(&format!(
+        "{} mask: reading {}",
+        label,
+        path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default(),
+    ));
+    match crate::gerber_geom::extract_mask(path, outline_contours, outline_bbox) {
+        Some((data, counts)) => {
+            logger.log_info(&format!(
+                "{} mask: {} circle + {} rect + {} roundrect + {} obround + {} polygon opening(s); {} linear stroke(s); {} region polygon(s); {} macros / {} arc-strokes / {} non-circle-strokes skipped",
+                label,
+                counts.flashed_circles,
+                counts.flashed_rectangles,
+                counts.flashed_roundrects,
+                counts.flashed_obrounds,
+                counts.flashed_polygons,
+                counts.linear_strokes,
+                counts.region_polygons,
+                counts.flashed_macros_skipped,
+                counts.arc_strokes_skipped,
+                counts.non_circle_strokes_skipped,
+            ));
+            logger.log_info(&format!(
+                "{} mask: {} triangle(s) tessellated",
+                label,
+                data.mesh_indices.len() / 3,
+            ));
+            Some(data)
+        }
+        None => {
+            logger.log_warning(&format!("{} mask: no geometry extracted", label));
+            None
+        }
+    }
+}
+
+/// Look up the mechanical-outline layer in the store, grab its source file
+/// path, and run `gerber_geom::extract_outline` on it. Returns `None` if the
+/// layer isn't present, the file path wasn't recorded at load time, or the
+/// extractor couldn't recover any closed contours.
+fn extract_outline_from_layer_store(
+    store: &crate::layer_store::LayerStore,
+    logger: &ReactiveEventLogger,
+) -> Option<crate::gerber_geom::OutlineData> {
+    let layer = store.find(crate::layer_store::LayerType::MechanicalOutline)?;
+    let path = layer.file_path.as_ref()?;
+    match crate::gerber_geom::extract_outline(path) {
+        Some((data, counts)) => {
+            logger.log_info(&format!(
+                "Board outline: {} linear + {} arc stroke(s), {} region polygon(s) -> {} stitched contour(s), {} triangle(s)",
+                counts.linear_strokes,
+                counts.arc_strokes,
+                counts.region_polygons,
+                counts.stitched_contours,
+                data.mesh_indices.len() / 3,
+            ));
+            logger.log_info(&format!(
+                "Board outline bbox (gerber coords, mm): [{:.3}, {:.3}] -> [{:.3}, {:.3}]",
+                data.bbox.min.x, data.bbox.min.y, data.bbox.max.x, data.bbox.max.y,
+            ));
+            Some(data)
+        }
+        None => {
+            logger.log_warning("Board outline: gerber_geom produced no closed contours");
+            None
         }
     }
 }

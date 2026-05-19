@@ -10,6 +10,13 @@ fn main() -> eframe::Result<()> {
         APPLICATION_NAME,
         eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 768.0]),
+            // Without this, eframe defaults to depth_buffer: 0 — no
+            // depth attachment allocated, gl.enable(DEPTH_TEST) silently
+            // does nothing, and every layer renders in draw order
+            // regardless of Z. Symptom: looking at the board from
+            // underneath, top copper bleeds through B.Cu + FR-4 because
+            // nothing rejects the further-away fragments.
+            depth_buffer: 24,
             ..Default::default()
         },
         Box::new(|cc|{

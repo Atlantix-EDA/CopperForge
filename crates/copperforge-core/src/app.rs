@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, sync::Arc};
 
 use eframe::emath::{Rect, Vec2};
 use egui::Pos2;
@@ -24,6 +24,32 @@ use crate::ui::{Tab, TabKind, TabViewer, initialize_and_show_banner, show_system
 
 use crate::project::{load_demo_gerber, ProjectState, manager::ProjectConfig};
 use crate::display::GridSettings;
+
+/// A single discovered (or user-configured) kicad-cli install. Stored on
+/// SharedServices so the settings modal can list every working option.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KicadCandidate {
+    /// Method key. One of `path`, `path-nightly`, `flatpak`, `snap`, or
+    /// `custom:/abs/path/to/kicad-cli`. Persisted in `ProjectConfig.kicad_cli_override`.
+    pub method: String,
+    /// Human-readable label for the selector UI.
+    pub label: String,
+    /// Reported version, e.g. `"10.0.2"` or `"10.99.0 (nightly)"`.
+    pub version: String,
+}
+
+fn kicad_method_label(method: &str) -> String {
+    if let Some(path) = method.strip_prefix("custom:") {
+        return format!("Custom path ({})", path);
+    }
+    match method {
+        "path" => "Native on PATH (kicad-cli)".into(),
+        "path-nightly" => "Native nightly on PATH (kicad-cli-nightly)".into(),
+        "flatpak" => "Flatpak (org.kicad.KiCad)".into(),
+        "snap" => "Snap (kicad.kicad-cli)".into(),
+        other => other.into(),
+    }
+}
 
 /// The main application struct. A thin outer layer around `SharedServices`;
 /// panels operate on services, never directly on fields of this struct.
@@ -51,8 +77,14 @@ pub struct CopperForgeApp {
     /// per frame in tabs.rs since they have nothing to carry.
     pub bom_panel: crate::panels::BomPanel,
     pub terminal_panel: crate::panels::TerminalPanel,
-    pub shell_panel: crate::panels::ShellPanel,
     pub logger_panel: crate::panels::LoggerPanel,
+    pub gerber_view_3d_panel: crate::panels::GerberView3dPanel,
+
+    // ── Render backend handles ────────────────────────────────
+    /// Cached OpenGL context (from eframe's glow backend). Stashed on the
+    /// first `update()` call so 3D panels can reach it without threading
+    /// `&mut eframe::Frame` through `TabViewer`.
+    pub gl_context: Option<Arc<glow::Context>>,
 
     // ── Panel-owned state (for panels not yet citizen-persisted) ─
     pub project_manager_state: Option<project_manager::ProjectManagerState>,
@@ -203,7 +235,7 @@ impl CopperForgeApp {
         };
 
         // ── Stage 2: DiscoverKiCad (slow on first Flatpak launch) ─
-        let (kicad_version, kicad_cli_method) = Self::probe_kicad_cli();
+        let (kicad_version, kicad_cli_method, _kicad_candidates) = Self::probe_kicad_cli(&config);
 
         // ── Stage 3: InitializeDb ────────────────────────────────
         // Single-file redb DB; requires exclusive file-level lock so only one
@@ -256,6 +288,11 @@ impl CopperForgeApp {
             ui_state: UiState::default(),
             needs_initial_view: true,
             rotation_degrees: 0.0,
+            board_outline: None,
+            top_copper: None,
+            bottom_copper: None,
+            top_mask: None,
+            bottom_mask: None,
             display_manager: DisplayManager::new(),
             drc_manager: DrcManager::new(),
             grid_settings: GridSettings::default(),
@@ -283,9 +320,9 @@ impl CopperForgeApp {
         let mut dispatcher = egui_citizen::Dispatcher::new();
         use egui_citizen::message::CitizenId;
         for id in [
-            "gerber_view", "view_settings", "drc", "projects",
+            "gerber_view", "gerber_view_3d", "view_settings", "drc", "projects",
             "settings", "bom",
-            "shell", "terminal", "logger",
+            "terminal", "logger",
         ] {
             dispatcher.register(CitizenId::new(id));
         }
@@ -305,8 +342,9 @@ impl CopperForgeApp {
             last_picked_projects_directory: None,
             bom_panel: crate::panels::BomPanel::new(egui_citizen::CitizenState::default()),
             terminal_panel: crate::panels::TerminalPanel::new(egui_citizen::CitizenState::default()),
-            shell_panel: crate::panels::ShellPanel::new(egui_citizen::CitizenState::default()),
             logger_panel: crate::panels::LoggerPanel::new(egui_citizen::CitizenState::default()),
+            gerber_view_3d_panel: crate::panels::GerberView3dPanel::new(egui_citizen::CitizenState::default()),
+            gl_context: None,
             project_manager_state: None,
             release_modal: None,
             project_edit_modal: None,
@@ -504,22 +542,34 @@ impl CopperForgeApp {
     }
 
     /// One-shot KiCad discovery + version parse. Returns (version_string, method).
-    fn probe_kicad_cli() -> (Option<String>, Option<String>) {
-        let (method, mut cmd) = match Self::find_kicad_cli() {
-            Some(f) => f,
-            None => return (None, None),
-        };
-        let output = match cmd.arg("--version").output() {
-            Ok(o) if o.status.success() => o,
-            _ => return (None, Some(method)),
-        };
-        let version = Self::parse_kicad_version(&output.stdout, false).map(|mut v| {
-            if method != "path" {
-                v = format!("{} ({})", v, method);
+    /// Resolve the active kicad-cli at startup. Honors `config.kicad_cli_override`
+    /// if it points at a still-working install; otherwise picks the preferred
+    /// candidate from discovery (stable PATH → flatpak → snap → nightly PATH).
+    ///
+    /// Returns `(version_label, method, all_discovered_candidates)`. The list
+    /// is the full set of working installs (plus a probed custom path if the
+    /// override is one) so the settings UI can offer them as choices.
+    fn probe_kicad_cli(config: &ProjectConfig) -> (Option<String>, Option<String>, Vec<KicadCandidate>) {
+        let mut candidates = Self::discover_kicad_clis();
+
+        if let Some(override_method) = config.kicad_cli_override.as_deref() {
+            let already_known = candidates.iter().any(|c| c.method == override_method);
+            if !already_known {
+                if let Some(custom) = Self::probe_kicad_candidate(override_method) {
+                    candidates.push(custom);
+                }
             }
-            v
-        });
-        (version, Some(method))
+            if let Some(picked) = candidates.iter().find(|c| c.method == override_method) {
+                return (Some(picked.version.clone()), Some(picked.method.clone()), candidates);
+            }
+            // Override pointed at something broken; fall through to default pick
+            // and let the modal show the user what's actually available.
+        }
+
+        let picked = candidates.first().cloned();
+        let version = picked.as_ref().map(|c| c.version.clone());
+        let method = picked.map(|c| c.method);
+        (version, method, candidates)
     }
 
     /// Build a `kicad-cli` Command using the cached discovery method — no probe.
@@ -529,6 +579,9 @@ impl CopperForgeApp {
 
     pub fn build_kicad_cli_command(method: &str) -> std::process::Command {
         use std::process::Command;
+        if let Some(path) = method.strip_prefix("custom:") {
+            return Command::new(path);
+        }
         match method {
             "flatpak" => {
                 let mut cmd = Command::new("flatpak");
@@ -540,40 +593,41 @@ impl CopperForgeApp {
                 cmd.args(["run", "kicad.kicad-cli"]);
                 cmd
             }
+            "path-nightly" => Command::new("kicad-cli-nightly"),
             _ => Command::new("kicad-cli"),
         }
     }
 
-    pub fn find_kicad_cli() -> Option<(String, std::process::Command)> {
-        use std::process::Command;
-
-        for bin in ["kicad-cli", "kicad-cli-nightly"] {
-            if let Ok(output) = Command::new(bin).arg("--version").output() {
-                if output.status.success() {
-                    return Some(("path".into(), Command::new(bin)));
-                }
-            }
+    /// Probe a single method key by running `<cmd> --version`. Returns a
+    /// populated KicadCandidate iff the binary exists and reports a version.
+    pub fn probe_kicad_candidate(method: &str) -> Option<KicadCandidate> {
+        let mut cmd = Self::build_kicad_cli_command(method);
+        let output = cmd.arg("--version").output().ok()?;
+        if !output.status.success() {
+            return None;
         }
+        let is_nightly = method == "path-nightly";
+        let raw = Self::parse_kicad_version(&output.stdout, is_nightly)?;
+        let version = match method {
+            "path" | "path-nightly" => raw,
+            other => format!("{} ({})", raw, other.strip_prefix("custom:").unwrap_or(other)),
+        };
+        Some(KicadCandidate {
+            method: method.to_string(),
+            label: kicad_method_label(method),
+            version,
+        })
+    }
 
-        if let Ok(output) = Command::new("flatpak")
-            .args(["run", "--command=kicad-cli", "org.kicad.KiCad", "--version"])
-            .output()
-        {
-            if output.status.success() {
-                return Some(("flatpak".into(), Self::build_kicad_cli_command("flatpak")));
-            }
-        }
-
-        if let Ok(output) = Command::new("snap")
-            .args(["run", "kicad.kicad-cli", "--version"])
-            .output()
-        {
-            if output.status.success() {
-                return Some(("snap".into(), Self::build_kicad_cli_command("snap")));
-            }
-        }
-
-        None
+    /// Probe every well-known install location and return one entry per
+    /// working install. Order is the default preference: stable PATH →
+    /// flatpak → snap → nightly PATH. The settings UI lets the user pick
+    /// a different one if they want.
+    pub fn discover_kicad_clis() -> Vec<KicadCandidate> {
+        ["path", "flatpak", "snap", "path-nightly"]
+            .iter()
+            .filter_map(|m| Self::probe_kicad_candidate(m))
+            .collect()
     }
 
     fn parse_kicad_version(stdout: &[u8], nightly: bool) -> Option<String> {
@@ -650,6 +704,22 @@ impl CopperForgeApp {
             if let Ok(json) = fs::read_to_string(&config_path) {
                 match serde_json::from_str::<DockState<Tab>>(&json) {
                     Ok(dock_state) => {
+                        // Migration: if the saved layout predates a newer TabKind
+                        // variant, reset so the default layout reinstates it.
+                        // Update this list whenever a tab is added that users
+                        // with an older config wouldn't otherwise see.
+                        let required: &[TabKind] = &[TabKind::GerberView3d];
+                        let missing = required.iter().any(|needed| {
+                            !dock_state
+                                .iter_all_tabs()
+                                .any(|(_, tab)| std::mem::discriminant(&tab.kind)
+                                    == std::mem::discriminant(needed))
+                        });
+                        if missing {
+                            eprintln!("dock_state.json is missing a newer tab — resetting to defaults");
+                            fs::remove_file(&config_path).ok();
+                            return None;
+                        }
                         return Some(dock_state);
                     }
                     Err(e) => {
@@ -684,6 +754,7 @@ impl CopperForgeApp {
         }
 
         let gerber_tab = Tab::new(TabKind::GerberView, SurfaceIndex::main(), NodeIndex(0));
+        let gerber_3d_tab = Tab::new(TabKind::GerberView3d, SurfaceIndex::main(), NodeIndex(0));
         let drc_tab = Tab::new(TabKind::DRC, SurfaceIndex::main(), NodeIndex(1));
         let view_settings_tab = Tab::new(TabKind::ViewSettings, SurfaceIndex::main(), NodeIndex(2));
 
@@ -692,10 +763,10 @@ impl CopperForgeApp {
 
         let logger_tab = Tab::new(TabKind::Logger, SurfaceIndex::main(), NodeIndex(5));
         let terminal_tab = Tab::new(TabKind::Terminal, SurfaceIndex::main(), NodeIndex(6));
-        let shell_tab = Tab::new(TabKind::Shell, SurfaceIndex::main(), NodeIndex(7));
-        let bom_tab = Tab::new(TabKind::BOM, SurfaceIndex::main(), NodeIndex(8));
+        let bom_tab = Tab::new(TabKind::BOM, SurfaceIndex::main(), NodeIndex(7));
 
-        let mut dock_state = DockState::new(vec![gerber_tab]);
+        // Gerber 2D + 3D share the main pane as sibling tabs.
+        let mut dock_state = DockState::new(vec![gerber_tab, gerber_3d_tab]);
         let surface = dock_state.main_surface_mut();
 
         // Projects + Settings share the left column top; there's no separate
@@ -707,7 +778,7 @@ impl CopperForgeApp {
         );
 
         let _ = left; // no bottom split; Projects already uses the full left.
-        surface.split_below(right, 0.5, vec![logger_tab, terminal_tab, shell_tab, bom_tab]);
+        surface.split_below(right, 0.5, vec![logger_tab, terminal_tab, bom_tab]);
         surface.split_right(right, 0.5, vec![drc_tab, view_settings_tab]);
         dock_state
     }
@@ -715,6 +786,12 @@ impl CopperForgeApp {
 
 impl eframe::App for CopperForgeApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Cache the glow context once — it lives for the app's lifetime, so
+        // subsequent frames skip this. Panels reach it via `app.gl_context`.
+        if self.gl_context.is_none() {
+            self.gl_context = _frame.gl().cloned();
+        }
+
         let show_system_info_clicked = ctx.memory(|mem| {
             mem.data.get_temp::<bool>(egui::Id::new("show_system_info")).unwrap_or(false)
         });
@@ -731,12 +808,29 @@ impl eframe::App for CopperForgeApp {
             self.services.layer_store.mark_clean();
         }
 
-        // Hotkeys (only when no text field has focus)
+        // Hotkeys (only when no text field has focus).
+        //
+        // Tab routing: keys that mean different things in the 2D gerber view
+        // (`F` = flip, `R` = rotate, `M` = measure, `A` = align-to-grid) vs
+        // the 3D view (planned: `F` = flip, `R` = 90° in-plane, `M` = 3D
+        // ruler) must not fire simultaneously on both. The active tab is
+        // tracked by egui_citizen — on_tab_button calls
+        // `dispatcher.activate()`, which flips the one-hot active bit on
+        // the matching `CitizenState`. Here we read that bit to gate the
+        // 2D handlers so hitting F while the 3D tab is active doesn't
+        // silently flip the 2D gerber behind it. When 3D F/R/M handlers
+        // land they gate on the inverse of the same check.
         let text_input_active = ctx.memory(|mem| mem.focused().is_some());
+        let three_d_active = self
+            .dispatcher
+            .get(&egui_citizen::message::CitizenId::new("gerber_view_3d"))
+            .map(|s| s.active.get())
+            .unwrap_or(false);
+        let two_d_view_active = !three_d_active;
 
         if !text_input_active {
             ctx.input(|i| {
-                if i.key_pressed(egui::Key::F) {
+                if two_d_view_active && i.key_pressed(egui::Key::F) {
                     self.services.display_manager.showing_top = !self.services.display_manager.showing_top;
 
                     use crate::layer_store::{LayerType, Side};
@@ -779,7 +873,7 @@ impl eframe::App for CopperForgeApp {
                     logger.log_info(&format!("Toggled units to {} (U key)", units_name));
                 }
 
-                if i.key_pressed(egui::Key::R) {
+                if two_d_view_active && i.key_pressed(egui::Key::R) {
                     self.services.rotation_degrees = (self.services.rotation_degrees + 90.0) % 360.0;
                     self.services.layer_store.mark_dirty();
 
@@ -790,13 +884,13 @@ impl eframe::App for CopperForgeApp {
                     );
                 }
 
-                if i.key_pressed(egui::Key::A) {
+                if two_d_view_active && i.key_pressed(egui::Key::A) {
                     display::align_to_grid(&mut self.services.view_state, &self.services.grid_settings);
                     let logger = ReactiveEventLogger::with_colors(&self.services.logger_state, &self.services.log_colors);
                     logger.log_info("Aligned view to grid (A key)");
                 }
 
-                if i.key_pressed(egui::Key::M) {
+                if two_d_view_active && i.key_pressed(egui::Key::M) {
                     if self.services.ruler_active {
                         if self.services.ruler_start.is_some() && self.services.ruler_end.is_some() {
                             self.services.latched_measurement_start = self.services.ruler_start;
@@ -816,6 +910,29 @@ impl eframe::App for CopperForgeApp {
 
                         let logger = ReactiveEventLogger::with_colors(&self.services.logger_state, &self.services.log_colors);
                         logger.log_info("Ruler mode activated (M key) - previous measurement cleared");
+                    }
+                }
+
+                // ── 3D-tab hotkeys ────────────────────────────────
+                if three_d_active {
+                    if i.key_pressed(egui::Key::F) {
+                        self.gerber_view_3d_panel.flip_view();
+                        let logger = ReactiveEventLogger::with_colors(&self.services.logger_state, &self.services.log_colors);
+                        logger.log_info("3D view flipped (F key)");
+                    }
+                    if i.key_pressed(egui::Key::R) {
+                        self.gerber_view_3d_panel.rotate_in_plane_90();
+                        let logger = ReactiveEventLogger::with_colors(&self.services.logger_state, &self.services.log_colors);
+                        logger.log_info("3D view rotated 90° in-plane (R key)");
+                    }
+                    if i.key_pressed(egui::Key::M) {
+                        let now_active = self.gerber_view_3d_panel.toggle_measure();
+                        let logger = ReactiveEventLogger::with_colors(&self.services.logger_state, &self.services.log_colors);
+                        logger.log_info(if now_active {
+                            "3D measure mode activated (M key) — left-drag to measure"
+                        } else {
+                            "3D measure mode exited (M key)"
+                        });
                     }
                 }
 

@@ -99,6 +99,39 @@ pub fn show_bom_panel(
                     egui::RichText::new(format!("{} components", bom_state.entries.len()))
                         .color(crate::theme::TokyoNight::CYAN)
                 );
+
+                // Fabrication exports — available once a BOM has been extracted.
+                // Files are written next to the .kicad_pcb.
+                if !bom_state.entries.is_empty() {
+                    ui.separator();
+                    let dir = pcb.parent().unwrap_or_else(|| std::path::Path::new("."));
+                    let stem = pcb.file_stem().and_then(|s| s.to_str()).unwrap_or("board");
+
+                    if ui.button("Centroid (CPL)").clicked() {
+                        let out = dir.join(format!("{stem}-centroid.csv"));
+                        match crate::export::centroid::write_cpl_csv(&bom_state.entries, &out) {
+                            Ok(()) => logger.log_info(
+                                &format!("Centroid file written: {}", out.display())),
+                            Err(e) => logger.log_error(&e),
+                        }
+                    }
+                    if ui.button("BOM CSV").clicked() {
+                        let out = dir.join(format!("{stem}-bom.csv"));
+                        match crate::export::bom::write_bom_csv(&bom_state.entries, &out) {
+                            Ok(()) => logger.log_info(
+                                &format!("BOM CSV written: {}", out.display())),
+                            Err(e) => logger.log_error(&e),
+                        }
+                    }
+                    if ui.button("BOM XLSX").clicked() {
+                        let out = dir.join(format!("{stem}-bom.xlsx"));
+                        match crate::export::bom::write_bom_xlsx(&bom_state.entries, &out) {
+                            Ok(()) => logger.log_info(
+                                &format!("BOM XLSX written: {}", out.display())),
+                            Err(e) => logger.log_error(&e),
+                        }
+                    }
+                }
             } else {
                 ui.label("No PCB file selected — open a project first");
                 return;

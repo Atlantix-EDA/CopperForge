@@ -56,7 +56,13 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 gerber_viewer = "0.5.0"
 gerber_types = { package = "gerber-types", version = "0.7.0" }
 gerber_parser = "0.4.0"
+lyon = "1"
 nalgebra = "0.34"
+
+# 3D renderer (Phase 1: glow-based axes gizmo; see develop/task3d-plan.md)
+glow = "0.16"
+egui_glow = { version = "0.33", default-features = false }
+bytemuck = "1.23"
 
 # Egui Mobius framework
 egui_mobius_reactive = { version = "0.3.0-alpha.33" }
@@ -92,3 +98,13 @@ egui_ltreeview = "0.6.0"
 
 # Release archives (gerber+drill zip)
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
+
+# XLSX BOM export
+rust_xlsxwriter = "0.95"
+
+# In-app shell: argument parsing (clap) + quote-aware tokenization (shlex).
+# `derive` pulls `clap_derive` so sub-commands can be declared inline;
+# `std` is default. Colors are disabled explicitly at call time so we don't
+# bleed ANSI into the shell's plain-text log.
+clap = { version = "4", features = ["derive"] }
+shlex = "1"

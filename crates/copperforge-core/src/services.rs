@@ -31,7 +31,8 @@ pub struct SharedServices {
     pub config: ProjectConfig,
     pub config_path: PathBuf,
     pub kicad_version: Option<String>,
-    /// One of "path" / "flatpak" / "snap". Used by
+    /// One of "path" (stable `kicad-cli` on PATH) / "path-nightly"
+    /// (`kicad-cli-nightly` on PATH) / "flatpak" / "snap". Used by
     /// `CopperForgeApp::kicad_cli_command()` to build Commands without probing.
     pub kicad_cli_method: Option<String>,
     pub project_db: ProjectDatabase,
@@ -43,6 +44,24 @@ pub struct SharedServices {
     pub ui_state: UiState,
     pub needs_initial_view: bool,
     pub rotation_degrees: f32,
+
+    // ── 3D pipeline geometry (FDD Stage 3-6 output) ───────────
+    /// Board-outline polygon IR extracted from the mechanical-outline
+    /// gerber. `None` until a project with an Edge.Cuts gerber loads.
+    /// Repopulated on every `load_gerbers_into_viewer` call.
+    pub board_outline: Option<crate::gerber_geom::OutlineData>,
+    /// F.Cu polygon IR — copper on the top side. Extracted from the top-
+    /// copper gerber, tessellated in the same world frame as the board
+    /// outline so the meshes align on the GPU.
+    pub top_copper: Option<crate::gerber_geom::CopperData>,
+    /// B.Cu polygon IR — copper on the bottom side.
+    pub bottom_copper: Option<crate::gerber_geom::CopperData>,
+    /// F.Mask polygon IR — soldermask on the top side. Already holes-cut,
+    /// i.e. a board-outline-shaped sheet with pad/via openings punched
+    /// out. Same world frame as the board and copper meshes.
+    pub top_mask: Option<crate::gerber_geom::MaskData>,
+    /// B.Mask polygon IR — soldermask on the bottom side.
+    pub bottom_mask: Option<crate::gerber_geom::MaskData>,
 
     // ── Display / DRC / grid ──────────────────────────────────
     pub display_manager: DisplayManager,

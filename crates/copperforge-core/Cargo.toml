@@ -17,7 +17,13 @@ image = { workspace = true }
 gerber_viewer = { workspace = true }
 gerber_types = { workspace = true }
 gerber_parser = { workspace = true }
+lyon = { workspace = true }
 nalgebra = { workspace = true }
+
+# 3D renderer
+glow = { workspace = true }
+egui_glow = { workspace = true }
+bytemuck = { workspace = true }
 
 # Egui Mobius framework
 egui_mobius_reactive = { workspace = true }
@@ -54,3 +60,10 @@ egui_ltreeview = { workspace = true }
 
 # Release archives (gerber+drill zip)
 zip = { workspace = true }
+
+# XLSX BOM export
+rust_xlsxwriter = { workspace = true }
+
+# In-app shell parsing.
+clap = { workspace = true }
+shlex = { workspace = true }

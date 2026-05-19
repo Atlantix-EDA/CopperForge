@@ -77,6 +77,11 @@ pub struct ProjectConfig {
     pub include_kiverse: bool,
     #[serde(default = "default_true")]
     pub include_atlantix_resistors: bool,
+    /// Explicit kicad-cli pick. If `Some`, overrides auto-discovery — value is
+    /// a method key (`"path"`, `"path-nightly"`, `"flatpak"`, `"snap"`) or
+    /// `"custom:/abs/path/to/kicad-cli"`. Set via the KiCad info modal.
+    #[serde(default)]
+    pub kicad_cli_override: Option<String>,
 }
 
 fn default_author() -> String {
@@ -103,6 +108,7 @@ impl Default for ProjectConfig {
             default_company: default_company(),
             include_kiverse: true,
             include_atlantix_resistors: true,
+            kicad_cli_override: None,
         }
     }
 }
