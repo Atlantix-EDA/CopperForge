@@ -43,46 +43,7 @@ to a fab.
 - **Shell / Terminal / Logger panels** — in-app command shell, a bash
   terminal, and a structured event log.
 
-## Architecture
-
-CopperForge is built with Rust + [egui](https://github.com/emilk/egui),
-on the [`egui_mobius`](https://github.com/saturn77/egui_mobius)
-ecosystem — specifically the
-[`egui_citizen`](https://github.com/saturn77/egui-citizen) pattern for
-panel lifecycle and reactive state, layered on
-[`egui_mobius_reactive`](https://github.com/saturn77/egui_mobius)'s
-`Dynamic<T>` and `Derived<T>` primitives. CopperForge serves as a
-real-world reference implementation of the citizen pattern; the
-egui_mobius book covers the design rationale and walks through smaller
-example apps end to end.
-
-```
-CopperForgeApp
-  +-- Dispatcher          (citizen lifecycle, flip-flop activation)
-  +-- SharedServices      (single source of truth for cross-panel state)
-  |     +-- project_state: Dynamic<ProjectState>  (reactive driver)
-  |     +-- layer_store, display_manager, drc_manager, ...
-  |     +-- project_db: redb handle
-  |     +-- kicad_cli_method  (cached at startup; no re-probing)
-  +-- Persisted citizen panels (Bom, Terminal, Shell, Logger, ...)
-```
-
-Explicit init sequence in `new()`: **LoadConfig → DiscoverKiCad →
-InitializeDb → wire SharedServices → register citizens**. Panics at any
-stage print a stage-aware diagnostic with actionable hints.
-
-### Dependencies
-
-| Category | Crates |
-|----------|--------|
-| UI | egui 0.33, eframe 0.33 (glow-only, no accesskit), egui_dock 0.18 |
-| Citizen pattern | egui_citizen, egui_mobius_reactive |
-| Gerber handling | gerber_viewer 0.5, gerber_parser 0.4, gerber-types 0.7 |
-| BOM parsing | kiparse (Atlantix-EDA/atlantix-eda) |
-| Storage | redb (project database, single file) |
-| Release / export | zip (deflate-only), rust_xlsxwriter (BOM XLSX) |
-
-### KiCad 10 support
+## KiCad 10 support
 
 CopperForge detects KiCad installed via PATH, Flatpak, or Snap. Discovery
 runs once at startup; subsequent gerber/drill operations reuse the
@@ -118,6 +79,25 @@ In flight / planned:
 - Vendor packaging (PCBWay, Sierra Proto Express, JLCPCB specifics)
 - DRC algorithm enhancements
 - Multi-rev diff view (outputs/rev_01 vs rev_02)
+
+## Architecture
+
+CopperForge is a native [egui](https://github.com/emilk/egui)
+application built on the
+[`egui_mobius`](https://github.com/saturn77/egui_mobius) framework — the
+`egui_citizen` pattern for panel lifecycle, layered on
+`egui_mobius_reactive`'s `Dynamic<T>` / `Derived<T>` reactive
+primitives. It serves as a real-world reference implementation of the
+citizen pattern.
+
+| Category | Crates |
+|----------|--------|
+| UI | egui 0.33, eframe 0.33 (glow-only, no accesskit), egui_dock 0.18 |
+| Citizen pattern | egui_citizen, egui_mobius_reactive |
+| Gerber handling | gerber_viewer 0.5, gerber_parser 0.4, gerber-types 0.7 |
+| BOM parsing | kiparse (Atlantix-EDA/atlantix-eda) |
+| Storage | redb (project database, single file) |
+| Release / export | zip (deflate-only), rust_xlsxwriter (BOM XLSX) |
 
 ## License
 
