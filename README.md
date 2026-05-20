@@ -13,7 +13,9 @@ Companion PCB Release & Manufacturing Tool for KiCad.
 
 ---
 
-![CopperForge in action](assets/media/citizen-copper.gif)
+<div align="center">
+<img src="./assets/media/citizen-copper.gif" alt="CopperForge in action" width="720">
+</div>
 
 ## What it does
 
