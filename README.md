@@ -1,5 +1,5 @@
 <div align="center">
-<img width="720" src="./assets/media/copperforge-hero.png" alt="CopperForge"></img>
+<img width="360" src="./assets/media/copperforge-hero.png" alt="CopperForge"></img>
 
 Companion PCB Release & Manufacturing Tool for KiCad.
 
