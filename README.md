@@ -40,8 +40,11 @@ to a fab.
   `kiparse` (no live IPC to KiCad needed); export a grouped BOM to CSV
   and XLSX — enriched with Manufacturer / MPN from your KiCad symbol
   libraries — plus a PCBWay / JLCPCB-style centroid (CPL) file.
-- **Design rule checks** — a DRC panel that inspects copper geometry,
-  including corner-rounding overlays, across every layer of the board.
+- **Fab-preset DRC** — pick a manufacturer (Advanced Circuits, JLC PCB,
+  or a Conservative default) and CopperForge loads that vendor's
+  trace/space, annular ring, and edge-clearance rules in one click; a
+  Custom editor lets you dial in your own. Checks run across every
+  copper layer, with corner-rounding overlays for visual fix-up.
 - **Project database** — embedded [redb](https://github.com/cberner/redb)
   store tracks imported projects, BOM snapshots, and release history.
 - **Shell / Terminal / Logger panels** — in-app command shell, a bash
