@@ -21,3 +21,6 @@ target/
 
 # Internal planning / strategy notes — local only, not public
 develop/
+
+# Internal design docs (FDD) — local only, not public
+docs/
