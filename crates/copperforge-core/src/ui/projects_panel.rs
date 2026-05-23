@@ -430,6 +430,18 @@ pub fn show_projects_panel<'a>(
                         pcb_path: project.metadata.pcb_file_path.clone(),
                     });
 
+                    // 1b. Clear gerber-derived state so the previous project's
+                    // geometry doesn't linger in 2D or 3D until the new project's
+                    // gerbers are loaded (via Generate, Load, or right-click a
+                    // release → Load Release Gerbers).
+                    app.services.layer_store.clear_all();
+                    app.services.board_outline = None;
+                    app.services.top_copper = None;
+                    app.services.bottom_copper = None;
+                    app.services.top_mask = None;
+                    app.services.bottom_mask = None;
+                    app.services.needs_initial_view = true;
+
                     // 2. Restore BOM components if available
                     if !project.bom_components.is_empty() {
                         if let Some(ref mut bom_state) = app.bom_panel.state {
@@ -454,9 +466,29 @@ pub fn show_projects_panel<'a>(
 
                     // 3. Log PCB file status
                     if project.metadata.pcb_file_path.exists() {
-                        logger.log_info(&format!("PCB file found at: {}. Click 'Generate Gerbers' in PCB File tab to load gerbers.", project.metadata.pcb_file_path.display()));
+                        logger.log_info(&format!("PCB file: {}", project.metadata.pcb_file_path.display()));
                     } else {
                         logger.log_warning(&format!("PCB file not found at: {}", project.metadata.pcb_file_path.display()));
+                    }
+
+                    // 4. Auto-load the most recent release's gerbers (if any)
+                    // so the viewer immediately shows the new project's
+                    // geometry. Routes through the existing load_release_intent
+                    // — pickup in the Gerber Viewer tab fires the load next
+                    // frame, so this sidesteps borrow conflicts with
+                    // manager_state. If there are no releases yet, the user
+                    // Generates / Loads manually from the PCB File tab.
+                    if let Some(latest) = project.releases.iter()
+                        .max_by_key(|r| r.created_at)
+                    {
+                        let composite = format!("{}:rev:{}", project_id, latest.tag);
+                        ui.ctx().memory_mut(|mem| {
+                            mem.data.insert_temp(
+                                egui::Id::new("load_release_intent"),
+                                composite,
+                            );
+                        });
+                        logger.log_info(&format!("Auto-loading latest release: {}", latest.tag));
                     }
 
                     logger.log_info(&format!("✅ Loaded project: {}", project_name));
