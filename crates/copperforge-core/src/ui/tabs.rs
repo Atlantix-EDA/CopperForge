@@ -315,6 +315,20 @@ fn render_pcb_workflow_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
         open_regenerate_release_modal(app, &composite);
     }
 
+    // Pick up a pending "load-release-gerbers" intent (set by right-click
+    // → Load Release Gerbers on a rev node). Extract the release ZIP into
+    // the user cache dir (skipped if already up-to-date) and load those
+    // gerbers into the viewer — no kicad-cli, no regenerate.
+    let load_tag = ui.ctx().memory(|mem| {
+        mem.data.get_temp::<String>(egui::Id::new("load_release_intent"))
+    });
+    if let Some(composite) = load_tag {
+        ui.ctx().memory_mut(|mem| {
+            mem.data.remove::<String>(egui::Id::new("load_release_intent"));
+        });
+        load_release_gerbers(app, &composite);
+    }
+
     ui.separator();
 
     if ui.add_enabled(has_pcb, egui::Button::new("✖ Clear")).clicked() {
@@ -346,6 +360,90 @@ fn open_release_modal(app: &mut CopperForgeApp) {
         error: None,
         overwrite_existing: false,
     });
+}
+
+/// Resolve a `load_release` intent — parse the composite, look up the
+/// release archive + project PCB path, extract the ZIP (cached), and
+/// drive the existing gerber loader. Composite is "proj_X:rev:rev_02".
+fn load_release_gerbers(app: &mut CopperForgeApp, composite: &str) {
+    // Clone the reactive logger handles into owned locals so the logger
+    // doesn't keep a borrow on `app.services` for the whole function — that
+    // would collide with the `&mut app` passed to `load_gerbers_into_viewer`
+    // below. Same pattern the existing tabs.rs handlers use.
+    let logger_state = app.services.logger_state.clone();
+    let log_colors = app.services.log_colors.clone();
+    let logger = ReactiveEventLogger::with_colors(&logger_state, &log_colors);
+
+    let mut parts = composite.splitn(3, ':');
+    let project_id = match parts.next() { Some(s) => s.to_string(), None => return };
+    let _marker = parts.next();
+    let rev_tag = match parts.next() { Some(s) => s.to_string(), None => return };
+
+    // Resolve the release (carries archive_path).
+    let archive_path = app.project_manager_state
+        .as_ref()
+        .and_then(|pm| pm.project_releases.get(&project_id))
+        .and_then(|releases| releases.iter().find(|r| r.tag == rev_tag))
+        .map(|r| r.archive_path.clone());
+    let Some(archive_path) = archive_path else {
+        logger.log_error(&format!(
+            "Load release: no release '{rev_tag}' on project '{project_id}'"
+        ));
+        return;
+    };
+
+    // Resolve the project's PCB path (load_gerbers_into_viewer needs it
+    // to read layer names from the .kicad_pcb stackup).
+    let pcb_path = app.project_manager_state
+        .as_ref()
+        .and_then(|pm| pm.project_list.iter().find(|p| p.id == project_id))
+        .map(|p| p.pcb_file_path.clone());
+    let Some(pcb_path) = pcb_path else {
+        logger.log_error(&format!(
+            "Load release: no PCB file recorded for project '{project_id}'"
+        ));
+        return;
+    };
+
+    // Extract the ZIP's gerbers into the cache (skipped if already current).
+    let gerber_dir = match crate::release::extract_release_gerbers(&archive_path) {
+        Ok(dir) => {
+            logger.log_info(&format!(
+                "Extracted release '{rev_tag}' gerbers to {}",
+                dir.display()
+            ));
+            dir
+        }
+        Err(e) => {
+            logger.log_error(&format!(
+                "Load release: extraction of {} failed: {e}",
+                archive_path.display()
+            ));
+            return;
+        }
+    };
+
+    // Drive the existing loader + transition to Ready so the rest of the
+    // app behaves as it does after a normal Generate+Load cycle.
+    app.services.project_state.set(crate::project::ProjectState::LoadingGerbers {
+        pcb_path: pcb_path.clone(),
+        gerber_dir: gerber_dir.clone(),
+    });
+    crate::project::gerber_ops::load_gerbers_into_viewer(
+        app,
+        &pcb_path,
+        &gerber_dir,
+        &logger,
+    );
+    let last_modified = std::fs::metadata(&pcb_path)
+        .and_then(|m| m.modified())
+        .unwrap_or(std::time::SystemTime::now());
+    app.services.project_state.set(crate::project::ProjectState::Ready {
+        pcb_path,
+        gerber_dir,
+        last_modified,
+    });
+    logger.log_info(&format!("Loaded gerbers from release '{rev_tag}'"));
 }
 
 /// Open the release modal in Regenerate mode — seeded from the existing

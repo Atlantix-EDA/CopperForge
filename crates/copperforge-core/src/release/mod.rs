@@ -5,14 +5,14 @@
 //! RELEASE_NOTES.md, bundled into a single `.zip` under
 //! `<project_dir>/outputs/<rev_name>/`.
 
-use std::fs::File;
-use std::io::{Read, Write};
+use std::fs::{self, File};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Local, Utc};
 use serde::{Deserialize, Serialize};
 use zip::write::SimpleFileOptions;
-use zip::ZipWriter;
+use zip::{ZipArchive, ZipWriter};
 
 use crate::event_logger::ReactiveEventLogger;
 
@@ -419,4 +419,71 @@ fn add_to_zip(
     f.read_to_end(&mut buf)?;
     zw.write_all(&buf)?;
     Ok(())
+}
+
+/// Extract the `.gbr` / `.drl` entries from a release ZIP into a
+/// per-archive cache directory and return that directory.
+///
+/// Cache location: `<user_cache_dir>/copperforge/extracted/<archive_stem>/`.
+/// Re-extraction is skipped if the cache dir is at-or-newer than the
+/// ZIP (cheap mtime check), so the second-and-later "Load Release
+/// Gerbers" click on the same rev is effectively instant.
+///
+/// Only `.gbr` and `.drl` entries are extracted — BOM, centroid, and
+/// RELEASE_NOTES live alongside the ZIP and aren't needed by the
+/// gerber viewer. Sub-directories inside the archive are flattened
+/// (the bare filename is used for the on-disk path).
+pub fn extract_release_gerbers(archive_path: &Path) -> io::Result<PathBuf> {
+    let cache_root = dirs::cache_dir()
+        .ok_or_else(|| io::Error::other("no user cache directory available"))?
+        .join("copperforge")
+        .join("extracted");
+    let stem = archive_path
+        .file_stem()
+        .ok_or_else(|| io::Error::other("release archive has no file stem"))?;
+    let target = cache_root.join(stem);
+
+    // Up-to-date check — skip the whole extract if the cache dir's
+    // mtime is at-or-newer than the ZIP's. (Linux updates dir mtime on
+    // each create_dir_all so this naturally tracks "last extracted at".)
+    if let (Ok(cache_meta), Ok(zip_meta)) =
+        (fs::metadata(&target), fs::metadata(archive_path))
+    {
+        if let (Ok(cache_mtime), Ok(zip_mtime)) =
+            (cache_meta.modified(), zip_meta.modified())
+        {
+            if cache_mtime >= zip_mtime {
+                return Ok(target);
+            }
+        }
+    }
+
+    // Fresh extract — wipe + recreate to avoid stale entries from old runs.
+    if target.exists() {
+        let _ = fs::remove_dir_all(&target);
+    }
+    fs::create_dir_all(&target)?;
+
+    let file = File::open(archive_path)?;
+    let mut archive = ZipArchive::new(file).map_err(io::Error::other)?;
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).map_err(io::Error::other)?;
+        let name = entry.name().to_string();
+        let lower = name.to_ascii_lowercase();
+        // Only the manufacturing geometry — gerbers + drill. Everything
+        // else is irrelevant to the viewer.
+        if !lower.ends_with(".gbr") && !lower.ends_with(".drl") {
+            continue;
+        }
+        // Flatten any archive subdirs — flat dir of files is what
+        // `LayerStore::load_from_directory` expects.
+        let filename = Path::new(&name).file_name().ok_or_else(|| {
+            io::Error::other(format!("zip entry has no filename: {name}"))
+        })?;
+        let out_path = target.join(filename);
+        let mut out_file = File::create(&out_path)?;
+        io::copy(&mut entry, &mut out_file)?;
+    }
+
+    Ok(target)
 }

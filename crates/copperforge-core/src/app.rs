@@ -91,6 +91,12 @@ pub struct CopperForgeApp {
 
     // ── Modal states (UI ephemeral) ─────────────────────────────
     pub release_modal: Option<ReleaseModalState>,
+    /// Read-only Release Details modal — opened by right-click →
+    /// "ℹ View Release Info" on a rev node. Holds a cloned Release.
+    pub release_info_modal: Option<crate::release::Release>,
+    /// Confirmation modal for "🗑 Delete Release". Seeded by the
+    /// right-click intent; Confirm runs the DB + disk + cache delete.
+    pub delete_release_confirmation: Option<DeleteReleaseConfirmation>,
     pub project_edit_modal: Option<ProjectEditModalState>,
     pub project_import_modal: Option<ProjectImportModalState>,
     /// File dialog used exclusively by the Project Import modal (kept on the
@@ -130,6 +136,18 @@ pub struct ProjectEditModalState {
     pub error: Option<String>,
 }
 
+/// Form state for the Delete Release confirmation modal. Seeded from
+/// the right-click intent's composite id; carries enough info to run
+/// the delete (project_id + rev_tag for the DB; archive_path for the
+/// disk dir + cache lookup) and to display in the confirmation window.
+pub struct DeleteReleaseConfirmation {
+    pub project_id: String,
+    pub rev_tag: String,
+    pub archive_path: std::path::PathBuf,
+    /// Populated if the delete attempt failed; shown in the modal.
+    pub error: Option<String>,
+}
+
 /// Form state for the Release modal.
 pub struct ReleaseModalState {
     pub rev_tag: String,
@@ -149,6 +167,76 @@ impl Drop for CopperForgeApp {
         self.save_dock_state();
         self.save_settings();
     }
+}
+
+/// Delete a release: DB record (entry in `project.releases`) + the
+/// on-disk `outputs/<rev>/` folder + any cached extracted gerbers.
+/// Free function so it doesn't conflict with `&mut self` of the
+/// caller (modal-render method); takes the disjoint fields it needs.
+fn delete_release_artifacts(
+    project_db: &project_manager::database::ProjectDatabase,
+    pm_state: Option<&mut project_manager::ProjectManagerState>,
+    project_id: &str,
+    rev_tag: &str,
+    archive_path: &std::path::Path,
+    logger: &ReactiveEventLogger,
+) -> Result<(), String> {
+    // 1. DB: load → mutate → save.
+    let mut project = project_db
+        .load_project(project_id)
+        .map_err(|e| format!("load_project: {e}"))?
+        .ok_or_else(|| format!("project '{project_id}' not found in DB"))?;
+    let before = project.releases.len();
+    project.releases.retain(|r| r.tag != rev_tag);
+    if project.releases.len() == before {
+        logger.log_warning(&format!(
+            "Release '{rev_tag}' not found in DB record for '{project_id}' (already gone?)"
+        ));
+    }
+    project_db
+        .save_project(&project)
+        .map_err(|e| format!("save_project: {e}"))?;
+
+    // 2. In-memory cache (so the tree refreshes immediately).
+    if let Some(pm) = pm_state {
+        if let Some(releases) = pm.project_releases.get_mut(project_id) {
+            releases.retain(|r| r.tag != rev_tag);
+        }
+        if let Some(cp) = pm.current_project.as_mut() {
+            if cp.metadata.id == project_id {
+                cp.releases.retain(|r| r.tag != rev_tag);
+            }
+        }
+    }
+
+    // 3. Disk: the outputs/<rev>/ folder.
+    if let Some(rev_dir) = archive_path.parent() {
+        match std::fs::remove_dir_all(rev_dir) {
+            Ok(()) => logger.log_info(&format!("Removed {}", rev_dir.display())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                logger.log_warning(&format!("{} was already gone", rev_dir.display()));
+            }
+            Err(e) => {
+                logger.log_warning(&format!(
+                    "Could not remove {}: {} (DB entry still removed)",
+                    rev_dir.display(),
+                    e
+                ));
+            }
+        }
+    }
+
+    // 4. Cached extract under the user cache dir (if it exists).
+    if let Some(stem) = archive_path.file_stem() {
+        if let Some(cache_dir) = dirs::cache_dir() {
+            let cached = cache_dir.join("copperforge").join("extracted").join(stem);
+            if cached.exists() {
+                let _ = std::fs::remove_dir_all(&cached);
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Panic with a lengthy, stage-aware diagnostic when init fails.
@@ -351,6 +439,8 @@ impl CopperForgeApp {
             gl_context: None,
             project_manager_state: None,
             release_modal: None,
+            release_info_modal: None,
+            delete_release_confirmation: None,
             project_edit_modal: None,
             project_import_modal: None,
             project_import_dialog: egui_file_dialog::FileDialog::new(),
@@ -1151,6 +1241,10 @@ impl eframe::App for CopperForgeApp {
         }
 
         self.show_release_modal(ctx);
+        self.handle_release_info_intent(ctx);
+        self.show_release_info_modal(ctx);
+        self.handle_delete_release_intent(ctx);
+        self.show_delete_release_confirmation(ctx);
         self.handle_project_edit_open(ctx);
         self.show_project_edit_modal(ctx);
         self.handle_release_open_intent(ctx);
@@ -1438,6 +1532,254 @@ impl CopperForgeApp {
             releases: data.releases.clone(),
             error: None,
         });
+    }
+
+    // ─── Release Info modal (read-only pedigree) ────────────────────
+
+    /// Pick up "release_info_intent" (value: "proj_X:rev:rev_01") and
+    /// seed the read-only Release Details window.
+    fn handle_release_info_intent(&mut self, ctx: &egui::Context) {
+        let intent = ctx.memory(|mem| {
+            mem.data.get_temp::<String>(egui::Id::new("release_info_intent"))
+        });
+        let Some(intent) = intent else { return; };
+        ctx.memory_mut(|mem| {
+            mem.data.remove::<String>(egui::Id::new("release_info_intent"));
+        });
+
+        let mut parts = intent.splitn(3, ':');
+        let project_id = match parts.next() { Some(s) => s, None => return };
+        let _marker = parts.next();
+        let rev_tag = match parts.next() { Some(s) => s, None => return };
+
+        let release = self.project_manager_state
+            .as_ref()
+            .and_then(|pm| pm.project_releases.get(project_id))
+            .and_then(|releases| releases.iter().find(|r| r.tag == rev_tag))
+            .cloned();
+        if let Some(r) = release {
+            self.release_info_modal = Some(r);
+        }
+    }
+
+    fn show_release_info_modal(&mut self, ctx: &egui::Context) {
+        let Some(release) = self.release_info_modal.clone() else { return; };
+        let mut close = false;
+        egui::Window::new(format!("Release: {}", release.tag))
+            .collapsible(false)
+            .resizable(true)
+            .default_width(540.0)
+            .default_pos(egui::pos2(
+                ctx.content_rect().center().x - 270.0,
+                ctx.content_rect().center().y - 220.0,
+            ))
+            .show(ctx, |ui| {
+                ui.add_space(6.0);
+                egui::Grid::new("release_info_grid")
+                    .num_columns(2)
+                    .spacing([14.0, 6.0])
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new("Tag").strong());
+                        ui.label(egui::RichText::new(&release.tag).monospace());
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("Created").strong());
+                        ui.label(release.created_at.format("%Y-%m-%d %H:%M:%S UTC").to_string());
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("KiCad version").strong());
+                        ui.label(release.kicad_version.clone().unwrap_or_else(|| "(unknown)".into()));
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("Git commit").strong());
+                        ui.label(
+                            egui::RichText::new(
+                                release.git_hash.clone().unwrap_or_else(|| "(not in a git repo)".into())
+                            )
+                            .monospace()
+                        );
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("Date in name").strong());
+                        ui.label(if release.include_date_in_name { "yes" } else { "no" });
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("Notes in zip").strong());
+                        ui.label(if release.include_notes_in_zip { "yes" } else { "no" });
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("Archive").strong());
+                        ui.label(
+                            egui::RichText::new(release.archive_path.display().to_string())
+                                .monospace()
+                                .small(),
+                        );
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("Notes").strong());
+                        ui.label(
+                            egui::RichText::new(release.notes_path.display().to_string())
+                                .monospace()
+                                .small(),
+                        );
+                        ui.end_row();
+                    });
+
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("Description").strong());
+                ui.add_space(2.0);
+                ui.label(if release.description.is_empty() { "(none)" } else { release.description.as_str() });
+
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("Changes").strong());
+                ui.add_space(2.0);
+                egui::ScrollArea::vertical()
+                    .max_height(160.0)
+                    .show(ui, |ui| {
+                        ui.label(if release.changes.is_empty() { "(none)" } else { release.changes.as_str() });
+                    });
+
+                ui.add_space(10.0);
+                ui.separator();
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Close").clicked() {
+                            close = true;
+                        }
+                    });
+                });
+            });
+        if close {
+            self.release_info_modal = None;
+        }
+    }
+
+    // ─── Delete Release confirmation ───────────────────────────────
+
+    /// Pick up "delete_release_intent" and seed the confirmation modal.
+    fn handle_delete_release_intent(&mut self, ctx: &egui::Context) {
+        let intent = ctx.memory(|mem| {
+            mem.data.get_temp::<String>(egui::Id::new("delete_release_intent"))
+        });
+        let Some(intent) = intent else { return; };
+        ctx.memory_mut(|mem| {
+            mem.data.remove::<String>(egui::Id::new("delete_release_intent"));
+        });
+
+        let mut parts = intent.splitn(3, ':');
+        let project_id = match parts.next() { Some(s) => s.to_string(), None => return };
+        let _marker = parts.next();
+        let rev_tag = match parts.next() { Some(s) => s.to_string(), None => return };
+
+        let archive_path = self.project_manager_state
+            .as_ref()
+            .and_then(|pm| pm.project_releases.get(&project_id))
+            .and_then(|releases| releases.iter().find(|r| r.tag == rev_tag))
+            .map(|r| r.archive_path.clone());
+        let Some(archive_path) = archive_path else { return; };
+
+        self.delete_release_confirmation = Some(DeleteReleaseConfirmation {
+            project_id,
+            rev_tag,
+            archive_path,
+            error: None,
+        });
+    }
+
+    fn show_delete_release_confirmation(&mut self, ctx: &egui::Context) {
+        if self.delete_release_confirmation.is_none() {
+            return;
+        }
+        let (project_id, rev_tag, archive_path, error) = {
+            let c = self.delete_release_confirmation.as_ref().unwrap();
+            (c.project_id.clone(), c.rev_tag.clone(), c.archive_path.clone(), c.error.clone())
+        };
+
+        let mut cancel = false;
+        let mut confirm = false;
+
+        egui::Window::new(format!("Delete release '{}'?", rev_tag))
+            .collapsible(false)
+            .resizable(false)
+            .default_width(480.0)
+            .default_pos(egui::pos2(
+                ctx.content_rect().center().x - 240.0,
+                ctx.content_rect().center().y - 140.0,
+            ))
+            .show(ctx, |ui| {
+                ui.add_space(8.0);
+                ui.label("This removes:");
+                ui.label(egui::RichText::new("  • The release entry from the project database").small());
+                ui.label(egui::RichText::new("  • The outputs/<rev>/ folder on disk (zip, BOM, notes)").small());
+                ui.label(egui::RichText::new("  • The cached extracted gerbers (if any)").small());
+                ui.add_space(6.0);
+                if let Some(parent) = archive_path.parent() {
+                    ui.label(egui::RichText::new("Path:").strong().small());
+                    ui.label(egui::RichText::new(parent.display().to_string()).monospace().small());
+                }
+                ui.add_space(8.0);
+                ui.label(
+                    egui::RichText::new("This cannot be undone.")
+                        .italics()
+                        .color(egui::Color32::from_rgb(220, 180, 80)),
+                );
+
+                if let Some(err) = error.as_ref() {
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new(err).color(egui::Color32::from_rgb(220, 100, 100)));
+                }
+
+                ui.add_space(10.0);
+                ui.separator();
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button(
+                            egui::RichText::new("🗑 Delete")
+                                .color(egui::Color32::from_rgb(220, 100, 100))
+                                .strong(),
+                        ).clicked() {
+                            confirm = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            cancel = true;
+                        }
+                    });
+                });
+            });
+
+        if cancel {
+            self.delete_release_confirmation = None;
+            return;
+        }
+
+        if confirm {
+            let logger_state = self.services.logger_state.clone();
+            let log_colors = self.services.log_colors.clone();
+            let logger = ReactiveEventLogger::with_colors(&logger_state, &log_colors);
+
+            let result = delete_release_artifacts(
+                &self.services.project_db,
+                self.project_manager_state.as_mut(),
+                &project_id,
+                &rev_tag,
+                &archive_path,
+                &logger,
+            );
+            match result {
+                Ok(()) => {
+                    logger.log_info(&format!("Deleted release '{}'", rev_tag));
+                    self.delete_release_confirmation = None;
+                }
+                Err(e) => {
+                    if let Some(c) = self.delete_release_confirmation.as_mut() {
+                        c.error = Some(format!("Delete failed: {e}"));
+                    }
+                    logger.log_error(&format!("Delete release '{}' failed: {}", rev_tag, e));
+                }
+            }
+        }
     }
 
     fn show_project_edit_modal(&mut self, ctx: &egui::Context) {

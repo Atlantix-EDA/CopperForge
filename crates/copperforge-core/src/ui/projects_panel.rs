@@ -167,8 +167,32 @@ pub fn show_projects_panel<'a>(
                                         set_project_intent(ui.ctx(), "open_release", &sel);
                                         ui.close();
                                     }
+                                    if ui.button("📥 Load Release Gerbers").clicked() {
+                                        // Same composite id; pickup extracts the release ZIP
+                                        // (cached after first time) and loads the gerbers into
+                                        // the viewer without invoking kicad-cli.
+                                        set_project_intent(ui.ctx(), "load_release", &sel);
+                                        ui.close();
+                                    }
+                                    if ui.button("ℹ View Release Info").clicked() {
+                                        // Opens a read-only modal showing the Release's
+                                        // pedigree (tag, created_at, version, git hash,
+                                        // description, changes, archive/notes paths).
+                                        set_project_intent(ui.ctx(), "release_info", &sel);
+                                        ui.close();
+                                    }
                                     if ui.button("🔄 Regenerate Release").clicked() {
                                         set_project_intent(ui.ctx(), "regen_release", &sel);
+                                        ui.close();
+                                    }
+                                    ui.separator();
+                                    if ui.button(
+                                        egui::RichText::new("🗑 Delete Release")
+                                            .color(egui::Color32::from_rgb(220, 100, 100)),
+                                    ).clicked() {
+                                        // Opens a confirmation modal — actual delete (DB +
+                                        // disk + cache) happens only when the user confirms.
+                                        set_project_intent(ui.ctx(), "delete_release", &sel);
                                         ui.close();
                                     }
                                 }
@@ -289,6 +313,35 @@ pub fn show_projects_panel<'a>(
                     ui.ctx().memory_mut(|mem| {
                         mem.data.insert_temp(
                             egui::Id::new("regen_release_intent"),
+                            project_id.clone(),
+                        );
+                    });
+                }
+                "load_release" => {
+                    // Handed off to the Gerber Viewer's load_release_gerbers,
+                    // which extracts the release ZIP (cached) and loads those
+                    // gerbers into the viewer with no kicad-cli invocation.
+                    ui.ctx().memory_mut(|mem| {
+                        mem.data.insert_temp(
+                            egui::Id::new("load_release_intent"),
+                            project_id.clone(),
+                        );
+                    });
+                }
+                "release_info" => {
+                    // Picked up by app.rs::handle_release_info_intent.
+                    ui.ctx().memory_mut(|mem| {
+                        mem.data.insert_temp(
+                            egui::Id::new("release_info_intent"),
+                            project_id.clone(),
+                        );
+                    });
+                }
+                "delete_release" => {
+                    // Picked up by app.rs::handle_delete_release_intent.
+                    ui.ctx().memory_mut(|mem| {
+                        mem.data.insert_temp(
+                            egui::Id::new("delete_release_intent"),
                             project_id.clone(),
                         );
                     });
