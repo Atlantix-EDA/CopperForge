@@ -25,6 +25,7 @@ pub struct SymbolMeta {
     pub description: String,
     pub manufacturer: String,
     pub mpn: String,
+    pub datasheet: String,
 }
 
 /// Index keyed by `(value, footprint-name)`.
@@ -93,6 +94,7 @@ struct SymbolBuild {
     description: String,
     manufacturer: String,
     mpn: String,
+    datasheet: String,
 }
 
 impl SymbolBuild {
@@ -107,6 +109,7 @@ impl SymbolBuild {
                 description: self.description,
                 manufacturer: self.manufacturer,
                 mpn: self.mpn,
+                datasheet: self.datasheet,
             },
         );
     }
@@ -182,6 +185,12 @@ fn index_kicad_sym(path: &Path, index: &mut SymbolIndex) {
                                 if b.mpn.is_empty() =>
                             {
                                 b.mpn = clean(&val)
+                            }
+                            "DATASHEET" if b.datasheet.is_empty() => {
+                                // KiCad's default placeholder; treat as empty.
+                                if val != "~" {
+                                    b.datasheet = clean(&val)
+                                }
                             }
                             _ => {}
                         }

@@ -28,6 +28,9 @@ pub struct BomLine {
     /// Manufacturer part number, from the library symbol metadata.
     pub mpn: String,
     pub description: String,
+    /// Datasheet URL, from the library symbol metadata (empty if not set
+    /// or the KiCad placeholder `~`).
+    pub datasheet: String,
     pub designators: Vec<String>,
 }
 
@@ -67,6 +70,7 @@ pub fn group_bom(entries: &[BomEntry], meta: &SymbolIndex) -> Vec<BomLine> {
                 manufacturer: sym.map(|m| m.manufacturer.clone()).unwrap_or_default(),
                 mpn: sym.map(|m| m.mpn.clone()).unwrap_or_default(),
                 description,
+                datasheet: sym.map(|m| m.datasheet.clone()).unwrap_or_default(),
                 designators: vec![e.reference.clone()],
             });
             index.insert(key, line_idx);
@@ -78,7 +82,7 @@ pub fn group_bom(entries: &[BomEntry], meta: &SymbolIndex) -> Vec<BomLine> {
     lines
 }
 
-const HEADERS: [&str; 8] = [
+const HEADERS: [&str; 9] = [
     "Item",
     "Quantity",
     "Value",
@@ -86,6 +90,7 @@ const HEADERS: [&str; 8] = [
     "Manufacturer",
     "Manufacturer P/N",
     "Description",
+    "Datasheet",
     "Designators",
 ];
 
@@ -99,7 +104,7 @@ pub fn write_bom_csv(entries: &[BomEntry], path: &Path) -> Result<(), String> {
     out.push('\n');
     for l in &lines {
         out.push_str(&format!(
-            "{},{},{},{},{},{},{},{}\n",
+            "{},{},{},{},{},{},{},{},{}\n",
             l.item,
             l.quantity,
             csv_field(&l.value),
@@ -107,6 +112,7 @@ pub fn write_bom_csv(entries: &[BomEntry], path: &Path) -> Result<(), String> {
             csv_field(&l.manufacturer),
             csv_field(&l.mpn),
             csv_field(&l.description),
+            csv_field(&l.datasheet),
             csv_field(&l.designators.join(" ")),
         ));
     }
@@ -139,8 +145,19 @@ pub fn write_bom_xlsx(entries: &[BomEntry], path: &Path) -> Result<(), String> {
         sheet.write_string(r, 4, &l.manufacturer).map_err(xlsx_err)?;
         sheet.write_string(r, 5, &l.mpn).map_err(xlsx_err)?;
         sheet.write_string(r, 6, &l.description).map_err(xlsx_err)?;
+        // Datasheet: emit as a clickable URL when it looks like one,
+        // otherwise as a plain string. Empty values write nothing.
+        if !l.datasheet.is_empty() {
+            if l.datasheet.starts_with("http://") || l.datasheet.starts_with("https://") {
+                sheet
+                    .write_url(r, 7, l.datasheet.as_str())
+                    .map_err(xlsx_err)?;
+            } else {
+                sheet.write_string(r, 7, &l.datasheet).map_err(xlsx_err)?;
+            }
+        }
         sheet
-            .write_string(r, 7, &l.designators.join(" "))
+            .write_string(r, 8, &l.designators.join(" "))
             .map_err(xlsx_err)?;
     }
     workbook
