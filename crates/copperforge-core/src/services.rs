@@ -26,6 +26,10 @@ pub struct SharedServices {
     pub project_state: Dynamic<ProjectState>,
     pub logger_state: Dynamic<ReactiveEventLoggerState>,
     pub log_colors: Dynamic<LogColors>,
+    /// Liveness of the private `cuforge-services` backend. Updated in
+    /// the background by `cuforge_client::spawn_health_poller`; the
+    /// ribbon's connection indicator reads off this cell.
+    pub cuforge_status: Dynamic<crate::cuforge_client::CuforgeStatus>,
 
     // ── Init-time facts (set once, rarely mutate) ─────────────
     pub config: ProjectConfig,
@@ -91,6 +95,9 @@ pub struct SharedServices {
     // ── Modal flags ───────────────────────────────────────────
     pub show_about_modal: bool,
     pub show_kicad_version_modal: bool,
+    /// Toggled by clicking the ribbon's CuForge Services indicator;
+    /// renders the connection-details modal (URL, version, recheck).
+    pub show_cuforge_services_modal: bool,
 
     // ── Cross-panel summaries ─────────────────────────────────
     /// Count of BOM entries loaded in the BOM panel. Mirror so other panels

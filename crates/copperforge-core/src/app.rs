@@ -312,7 +312,11 @@ impl CopperForgeApp {
             latched_measurement_end: None,
             show_about_modal: false,
             show_kicad_version_modal: false,
+            show_cuforge_services_modal: false,
             bom_component_count: 0,
+            cuforge_status: egui_mobius_reactive::Dynamic::new(
+                crate::cuforge_client::CuforgeStatus::Unknown,
+            ),
             config,
         };
 
@@ -786,6 +790,19 @@ impl CopperForgeApp {
 
 impl eframe::App for CopperForgeApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // First-frame: spawn the cuforge-services health poller. Single
+        // background thread; updates self.services.cuforge_status and
+        // calls ctx.request_repaint() on every status change.
+        use std::sync::OnceLock;
+        static CUFORGE_POLLER: OnceLock<()> = OnceLock::new();
+        CUFORGE_POLLER.get_or_init(|| {
+            crate::cuforge_client::spawn_health_poller(
+                crate::cuforge_client::base_url(),
+                self.services.cuforge_status.clone(),
+                ctx.clone(),
+            );
+        });
+
         // Cache the glow context once — it lives for the app's lifetime, so
         // subsequent frames skip this. Panels reach it via `app.gl_context`.
         if self.gl_context.is_none() {
@@ -1000,9 +1017,19 @@ impl eframe::App for CopperForgeApp {
                     });
                 });
 
-                // Right-aligned section: clock/version first (rightmost), then
-                // Hotkeys added LAST so it ends up just to the left of the clock.
+                // Right-aligned section: cuforge-services status indicator
+                // first (rightmost, OS-statusbar style — click for details
+                // modal), then the clock, then Hotkeys (further left).
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if crate::cuforge_client::show_status_indicator(
+                        ui,
+                        &self.services.cuforge_status,
+                    )
+                    .clicked()
+                    {
+                        self.services.show_cuforge_services_modal = true;
+                    }
+                    ui.separator();
                     self.show_clock_display(ui);
                     ui.separator();
                     ui.menu_button("📋 Hotkeys", |ui| {
@@ -1071,6 +1098,12 @@ impl eframe::App for CopperForgeApp {
         }
         self.dispatcher = dispatcher;
         self.dock_state = dock_state;
+
+        crate::cuforge_client::show_modal_if_open(
+            ctx,
+            &mut self.services.show_cuforge_services_modal,
+            &self.services.cuforge_status,
+        );
 
         if self.services.show_about_modal {
             egui::Window::new("About CopperForge")

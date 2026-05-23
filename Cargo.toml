@@ -114,6 +114,10 @@ zip = { version = "2.2", default-features = false, features = ["deflate"] }
 # XLSX BOM export
 rust_xlsxwriter = "0.95"
 
+# HTTP client for the cuforge-services health poller. Small blocking
+# client — fine for the background-thread ping pattern; no async runtime.
+ureq = { version = "2", features = ["json"] }
+
 # In-app shell: argument parsing (clap) + quote-aware tokenization (shlex).
 # `derive` pulls `clap_derive` so sub-commands can be declared inline;
 # `std` is default. Colors are disabled explicitly at call time so we don't

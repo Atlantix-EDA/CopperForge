@@ -75,3 +75,6 @@ rust_xlsxwriter = { workspace = true }
 # In-app shell parsing.
 clap = { workspace = true }
 shlex = { workspace = true }
+
+# HTTP client for the cuforge-services health poller.
+ureq = { workspace = true }

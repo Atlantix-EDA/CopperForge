@@ -12,6 +12,7 @@ pub mod messages;
 pub mod panels;
 pub mod render3d;
 pub mod services;
+pub mod cuforge_client;
 // layer_operations module removed - all functionality moved to layer_store
 pub mod navigation;
 pub mod platform;
