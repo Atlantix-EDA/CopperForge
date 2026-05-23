@@ -22,7 +22,12 @@ use serde::Deserialize;
 
 const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8421";
 const ENV_VAR: &str = "CUFORGE_SERVICES_URL";
-const POLL_INTERVAL: Duration = Duration::from_secs(30);
+/// Poll cadence when the service responded last time — just tracking
+/// liveness, no rush.
+const POLL_INTERVAL_CONNECTED: Duration = Duration::from_secs(30);
+/// Poll cadence when the service is down — fast so the badge flips
+/// green within a few seconds of the user starting the server.
+const POLL_INTERVAL_DISCONNECTED: Duration = Duration::from_secs(3);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Latest known state of the cuforge-services backend.
@@ -79,13 +84,30 @@ pub fn spawn_health_poller(
     thread::spawn(move || {
         let agent = ureq::AgentBuilder::new().timeout(REQUEST_TIMEOUT).build();
         let health_url = format!("{}/health", base_url.trim_end_matches('/'));
+
+        // First ping only: signal Checking so the UI shows immediate
+        // feedback on startup. Subsequent polls skip the Checking flash
+        // so the badge doesn't twitch yellow every few seconds while
+        // offline — explicit user rechecks (check_now) still show it.
+        status.set(CuforgeStatus::Checking);
+        ctx.request_repaint();
+
         loop {
-            status.set(CuforgeStatus::Checking);
-            ctx.request_repaint();
             let new_status = do_health_check(&agent, &health_url);
-            status.set(new_status);
-            ctx.request_repaint();
-            thread::sleep(POLL_INTERVAL);
+            let is_connected = matches!(new_status, CuforgeStatus::Connected { .. });
+
+            // Only push + repaint on actual state change. Steady-state
+            // polling is invisible.
+            if status.get() != new_status {
+                status.set(new_status);
+                ctx.request_repaint();
+            }
+
+            thread::sleep(if is_connected {
+                POLL_INTERVAL_CONNECTED
+            } else {
+                POLL_INTERVAL_DISCONNECTED
+            });
         }
     });
 }
@@ -144,7 +166,10 @@ pub fn show_status_indicator(
             format!("CuForge Services v{version}"),
         ),
         CuforgeStatus::Disconnected { .. } => (
-            egui::Color32::from_rgb(220, 100, 100),
+            // Muted/translucent red — for most users "offline" is the
+            // normal state (no subscription), not an error, so saturated
+            // red mis-signals. Softer alpha reads as "neutral state".
+            egui::Color32::from_rgba_unmultiplied(200, 130, 130, 170),
             "Services: offline".to_string(),
         ),
     };
@@ -210,7 +235,8 @@ pub fn show_modal_if_open(
                         (egui::Color32::from_rgb(120, 200, 120), "Connected")
                     }
                     CuforgeStatus::Disconnected { .. } => {
-                        (egui::Color32::from_rgb(220, 100, 100), "Offline")
+                        // Muted red — see show_status_indicator for the why.
+                        (egui::Color32::from_rgba_unmultiplied(200, 130, 130, 170), "Offline")
                     }
                 };
                 let (rect, _) = ui.allocate_exact_size(
