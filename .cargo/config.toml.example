@@ -13,3 +13,11 @@
 #   cp .cargo/config.toml.example .cargo/config.toml
 
 paths = ["../egui_mobius"]
+
+# WASM browser build (Phase A of develop/wasm-demo-plan.md).
+# getrandom 0.3 refuses to compile for wasm32-unknown-unknown without
+# this cfg explicitly opting into the browser RNG backend. Required
+# for any `cargo check / build --target wasm32-unknown-unknown` pass.
+# See https://docs.rs/getrandom/0.3.3/#webassembly-support
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

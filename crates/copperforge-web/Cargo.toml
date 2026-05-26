@@ -1,0 +1,62 @@
+[package]
+name        = "copperforge-web"
+version.workspace      = true
+edition.workspace      = true
+authors.workspace      = true
+repository.workspace   = true
+license.workspace      = true
+description = "CopperForge browser demo — wasm32 entrypoint (Phase B of develop/wasm-demo-plan.md)"
+
+# Not distributed by cargo-dist — this is the wasm entry; native users get
+# the top-level `copperforge` binary.
+[package.metadata.dist]
+dist = false
+
+[[bin]]
+name = "copperforge-web"
+path = "src/main.rs"
+
+[dependencies]
+egui   = { workspace = true }
+eframe = { workspace = true }
+log    = { workspace = true }
+
+# Gerber parsing + GerberRenderer (egui::Painter dispatch). Same crate the
+# native viewer uses — re-using it means the wasm and native views render
+# identically. Default features include `parser` + `egui` so we get both
+# the parse pipeline and the painter-driven renderer.
+gerber_viewer = { workspace = true }
+nalgebra     = { workspace = true }
+
+# Browser app composes against the shared library — same wasm-compatible
+# code that runs in the native app.
+copperforge-core = { path = "../copperforge-core" }
+
+# WASM entrypoint plumbing — eframe::WebRunner needs all of these.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen          = "0.2"
+wasm-bindgen-futures  = "0.4"
+web-sys = { version = "0.3", features = [
+    "Window", "Document", "HtmlCanvasElement",
+] }
+console_error_panic_hook = "0.1"
+
+# Force the browser-RNG features into the resolved getrandom tree
+# (same fix as copperforge-core; see .cargo/config.toml for the cfg flag).
+getrandom    = { version = "0.2", features = ["js"] }
+getrandom_v3 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
+
+# Browser file picker — opens the native <input type="file"> dialog and
+# returns a FileHandle whose `read().await` produces Vec<u8>.
+#
+# Pinned to 0.14: rfd 0.15's build.rs unconditionally demands a
+# native backend feature (`gtk3` or `xdg-portal`) + a Linux async
+# runtime (`tokio` / `async-std`), even when the target is wasm32 where
+# none of that code is compiled. 0.14 is happy with `default-features
+# = false` on wasm.
+rfd = { version = "0.14", default-features = false, features = ["xdg-portal", "tokio"] }
+
+# In-memory release ZIP extraction. The workspace dep already has
+# default-features off + deflate, which is the only compression CopperForge
+# emits (write_release_zip uses CompressionMethod::Deflated).
+zip = { workspace = true }

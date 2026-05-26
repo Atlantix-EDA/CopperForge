@@ -76,5 +76,20 @@ rust_xlsxwriter = { workspace = true }
 clap = { workspace = true }
 shlex = { workspace = true }
 
-# HTTP client for the cuforge-services health poller.
+# HTTP client for the cuforge-services health poller — NATIVE ONLY.
+# The browser demo (Phase B) doesn't poll a local server, so ureq
+# (and its rustls dep tree) is gated out of wasm builds.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ureq = { workspace = true }
+
+# WASM-only deps for the browser build (Phase A of develop/wasm-demo-plan.md).
+# `getrandom` with the `js` feature forces transitive uses (egui, etc.) to
+# pick the browser-RNG backend. The actual wasm entry-point deps
+# (wasm-bindgen-futures, web-sys, console_error_panic_hook) get added when
+# copperforge-web is stood up in Phase B.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Both 0.2 and 0.3 are in the dep tree (different majors coexist).
+# Each major needs the browser-RNG feature enabled independently;
+# the cfg in .cargo/config.toml only unlocks the 0.3 backend.
+getrandom = { version = "0.2", features = ["js"] }
+getrandom_v3 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }

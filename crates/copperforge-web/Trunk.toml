@@ -1,0 +1,18 @@
+[build]
+target = "index.html"
+release = false
+filehash = false
+
+[watch]
+ignore = ["./dist"]
+
+[serve]
+address = "127.0.0.1"
+port = 8080
+open = true
+
+# wasm-opt is run automatically by trunk on --release builds; the
+# `data-wasm-opt="z"` attribute on the <link> tag in index.html selects
+# size-aggressive optimisation. Do NOT set `wasm_opt = "z"` under
+# `[tools]` — that field configures the *version tag* of wasm-opt to
+# download, not the optimisation level.

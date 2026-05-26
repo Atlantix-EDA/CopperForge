@@ -14,6 +14,12 @@
 //! framework, just `ureq` on a worker thread and a `Dynamic` for the
 //! result.
 
+// On wasm, the native-only items (poll consts, HealthResponse struct,
+// thread import) are gated out via cfg attributes on the functions
+// that use them. Silence the resulting dead_code / unused_imports
+// warnings rather than sprinkling cfg on every item.
+#![cfg_attr(target_arch = "wasm32", allow(dead_code, unused_imports))]
+
 use std::thread;
 use std::time::Duration;
 
@@ -76,6 +82,7 @@ pub fn base_url() -> String {
 /// `GET {base_url}/health` immediately, then every `POLL_INTERVAL`.
 /// Calls `ctx.request_repaint()` on every status change so the UI
 /// refreshes without waiting for the next user input.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn spawn_health_poller(
     base_url: String,
     status: Dynamic<CuforgeStatus>,
@@ -112,8 +119,19 @@ pub fn spawn_health_poller(
     });
 }
 
+/// Wasm build: no-op. The browser demo doesn't poll a local server,
+/// so status stays Unknown (ribbon shows gray "Services: —").
+#[cfg(target_arch = "wasm32")]
+pub fn spawn_health_poller(
+    _base_url: String,
+    _status: Dynamic<CuforgeStatus>,
+    _ctx: egui::Context,
+) {
+}
+
 /// One-shot health check, used by the modal's "Recheck now" button.
 /// Independent of (and races harmlessly with) the periodic poller.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn check_now(base_url: String, status: Dynamic<CuforgeStatus>, ctx: egui::Context) {
     thread::spawn(move || {
         let agent = ureq::AgentBuilder::new().timeout(REQUEST_TIMEOUT).build();
@@ -126,8 +144,15 @@ pub fn check_now(base_url: String, status: Dynamic<CuforgeStatus>, ctx: egui::Co
     });
 }
 
+/// Wasm build: no-op (no native server to recheck).
+#[cfg(target_arch = "wasm32")]
+pub fn check_now(_base_url: String, _status: Dynamic<CuforgeStatus>, _ctx: egui::Context) {
+}
+
 /// Single check against the configured health endpoint. Shared by the
-/// periodic poller and the on-demand `check_now`.
+/// periodic poller and the on-demand `check_now`. Native only — wasm
+/// stubs above no-op.
+#[cfg(not(target_arch = "wasm32"))]
 fn do_health_check(agent: &ureq::Agent, health_url: &str) -> CuforgeStatus {
     match agent.get(health_url).call() {
         Ok(resp) => match resp.into_json::<HealthResponse>() {
@@ -333,6 +358,7 @@ pub fn show_modal_if_open(
 }
 
 /// Short, human-friendly error string for the status tooltip.
+#[cfg(not(target_arch = "wasm32"))]
 fn short_error(e: &ureq::Error) -> String {
     match e {
         ureq::Error::Status(code, _) => format!("HTTP {code}"),

@@ -24,3 +24,4 @@ develop/
 
 # Internal design docs (FDD) — local only, not public
 docs/
+/crates/copperforge-web/dist/
