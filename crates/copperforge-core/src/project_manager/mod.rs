@@ -97,16 +97,63 @@ impl ProjectManagerState {
         Ok(())
     }
 
-    /// Rebuild the per-project release cache from the DB.
-    /// O(N) full-project loads; fine at the scale we expect (dozens of
-    /// projects at most). Silently skips any project that fails to load.
+    /// Rebuild the per-project release cache from the DB, then merge in
+    /// any `outputs/rev_*/` directories found on disk that the DB record
+    /// didn't know about. Disk-discovered releases get persisted back to
+    /// the DB so the next load doesn't need to re-discover them.
+    ///
+    /// Self-healing: if a release entry was lost from the DB (manual
+    /// edit, schema migration that dropped releases, restored DB
+    /// snapshot, etc.) but the zip is still on disk, it reappears in
+    /// the project tree on next reload. Disk is the source of truth.
     pub fn reload_all_releases(&mut self, db: &ProjectDatabase) {
         self.project_releases.clear();
-        for meta in &self.project_list {
-            if let Ok(Some(data)) = db.load_project(&meta.id) {
-                if !data.releases.is_empty() {
-                    self.project_releases.insert(meta.id.clone(), data.releases);
+        // Clone to drop the borrow of `self` before we mutate
+        // `project_releases` and `db.save_project` below.
+        let metas = self.project_list.clone();
+        for meta in &metas {
+            let Ok(Some(mut data)) = db.load_project(&meta.id) else {
+                continue;
+            };
+
+            // Discover anything on disk the DB hasn't recorded yet.
+            let on_disk = crate::release::discover_releases_on_disk(&meta.pcb_file_path);
+            let known: std::collections::HashSet<String> =
+                data.releases.iter().map(|r| r.tag.clone()).collect();
+            let new_from_disk: Vec<_> = on_disk
+                .into_iter()
+                .filter(|r| !known.contains(&r.tag))
+                .collect();
+
+            if !new_from_disk.is_empty() {
+                log::info!(
+                    "Project '{}' (id {}): recovered {} release(s) from disk: {}",
+                    meta.name,
+                    meta.id,
+                    new_from_disk.len(),
+                    new_from_disk
+                        .iter()
+                        .map(|r| r.tag.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                );
+                data.releases.extend(new_from_disk);
+                // Keep the order stable: ascending by creation time so
+                // the tree shows rev_01, rev_02, ...
+                data.releases.sort_by_key(|r| r.created_at);
+                // Persist the recovery so subsequent loads don't need to
+                // re-discover. Non-fatal if the write fails.
+                if let Err(e) = db.save_project(&data) {
+                    log::warn!(
+                        "Could not write recovered releases for '{}' back to DB: {}",
+                        meta.name,
+                        e,
+                    );
                 }
+            }
+
+            if !data.releases.is_empty() {
+                self.project_releases.insert(meta.id.clone(), data.releases);
             }
         }
     }

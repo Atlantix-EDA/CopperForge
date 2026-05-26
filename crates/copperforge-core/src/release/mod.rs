@@ -15,6 +15,7 @@ use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
 
 use crate::event_logger::ReactiveEventLogger;
+use crate::vendor::VendorKind;
 
 /// A tagged fabrication release. Persisted under `ProjectData.releases`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,6 +40,11 @@ pub struct Release {
     pub include_date_in_name: bool,
     /// Whether RELEASE_NOTES.md was bundled into the zip.
     pub include_notes_in_zip: bool,
+    /// Vendor target. `None` = vendor-neutral standard release; `Some(...)`
+    /// adds vendor-specific files to the zip (e.g. PCBWay's fab specs).
+    /// `#[serde(default)]` keeps old DB records loadable as Standard.
+    #[serde(default)]
+    pub target: Option<VendorKind>,
 }
 
 /// Input collected from the Release modal.
@@ -48,6 +54,7 @@ pub struct ReleaseRequest {
     pub changes: String,
     pub include_date_in_name: bool,
     pub include_notes_in_zip: bool,
+    pub target: Option<VendorKind>,
 }
 
 /// Where source artifacts are found; supplied by the caller after a normal
@@ -184,6 +191,52 @@ pub fn create_release(
         )),
     }
 
+    // 4c. Vendor-specific extras (PCBWay fab-specs sheet, etc.). Treated
+    //     the same as the generic fab_files above — non-fatal if it
+    //     fails, and just gets appended to the zip.
+    if let Some(vendor) = req.target {
+        match vendor {
+            VendorKind::PcbWay => {
+                match crate::vendor::pcbway::compute_fab_stats(sources.pcb_path) {
+                    Ok(stats) => {
+                        let path = rev_dir.join("PCBWAY_FAB_SPECS.md");
+                        match crate::vendor::pcbway::write_fab_specs_md(
+                            &stats, project_stem, &req.rev_tag, &path,
+                        ) {
+                            Ok(()) => {
+                                let dims = match (stats.board_width_mm, stats.board_height_mm) {
+                                    (Some(w), Some(h)) => format!(", {:.2}×{:.2} mm", w, h),
+                                    _ => String::new(),
+                                };
+                                logger.log_info(&format!(
+                                    "PCBWay fab specs: {} (smt {}, tht {}, smt pads {}, top {}, bot {}{})",
+                                    path.display(),
+                                    stats.smt_parts,
+                                    stats.tht_parts,
+                                    stats.smt_pads,
+                                    stats.parts_top,
+                                    stats.parts_bottom,
+                                    dims,
+                                ));
+                                fab_files.push(path);
+                            }
+                            Err(e) => logger.log_warning(
+                                &format!("PCBWay fab specs skipped: {}", e),
+                            ),
+                        }
+                    }
+                    Err(e) => logger.log_warning(
+                        &format!("PCBWay fab specs skipped — could not scan PCB: {}", e),
+                    ),
+                }
+            }
+            // Other vendors (Sierra, JLCPCB, OshPark, Custom) fall through
+            // to the standard release — their extras will land here when
+            // the corresponding vendor submodules ship.
+            _ => {}
+        }
+    }
+
     // 5. Build the archive.
     let notes_for_zip = if req.include_notes_in_zip {
         Some((notes_path.as_path(), "RELEASE_NOTES.md"))
@@ -213,9 +266,105 @@ pub fn create_release(
         git_hash,
         include_date_in_name: req.include_date_in_name,
         include_notes_in_zip: req.include_notes_in_zip,
+        target: req.target,
     };
 
     Ok(ReleaseOutcome { release })
+}
+
+/// Scan a project's `outputs/` directory and return one `Release` per
+/// `rev_*/` subdirectory that contains a `.zip`.
+///
+/// Self-healing: lets the project tree show releases whose DB record was
+/// lost (manual DB edits, schema migration that dropped releases, etc.).
+/// Disk is the source of truth — if the zip is there, the release
+/// existed. The caller decides whether to merge these into the DB.
+///
+/// Fields the DB record would have carried (description, changes,
+/// git_hash, kicad_version) come back as empty/None — we only have the
+/// filesystem here. `include_date_in_name` is inferred from the zip's
+/// filename pattern.
+pub fn discover_releases_on_disk(pcb_path: &Path) -> Vec<Release> {
+    let Some(project_dir) = pcb_path.parent() else {
+        return Vec::new();
+    };
+    let outputs_dir = project_dir.join("outputs");
+    if !outputs_dir.is_dir() {
+        return Vec::new();
+    }
+
+    let project_stem = pcb_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("project");
+
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(&outputs_dir) else {
+        return Vec::new();
+    };
+    for entry in entries.flatten() {
+        let rev_dir = entry.path();
+        if !rev_dir.is_dir() {
+            continue;
+        }
+        let Some(tag) = rev_dir.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        // Only consider tags that look like release tags. rev_<digits>[suffix].
+        if !tag.starts_with("rev_") {
+            continue;
+        }
+
+        // Find the .zip inside (there should be exactly one).
+        let zip_entry = std::fs::read_dir(&rev_dir).ok().and_then(|it| {
+            it.flatten()
+                .map(|e| e.path())
+                .find(|p| {
+                    p.is_file()
+                        && p.extension().and_then(|e| e.to_str()) == Some("zip")
+                        && p.file_name()
+                            .and_then(|n| n.to_str())
+                            .is_some_and(|n| n.starts_with(&format!("{}_{}", project_stem, tag)))
+                })
+        });
+        let Some(archive_path) = zip_entry else {
+            continue;
+        };
+
+        let zip_name = archive_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        // include_date_in_name = filename has a trailing _DDMmmYYYY chunk.
+        // Simple heuristic: more underscores than just project + tag means a date.
+        let expected_base = format!("{}_{}", project_stem, tag);
+        let include_date_in_name = zip_name != expected_base
+            && zip_name.starts_with(&format!("{}_", expected_base));
+
+        // Use the zip's mtime as a reasonable created_at.
+        let created_at = std::fs::metadata(&archive_path)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| DateTime::<Utc>::from(t).into())
+            .unwrap_or_else(Utc::now);
+
+        let notes_path = rev_dir.join("RELEASE_NOTES.md");
+
+        out.push(Release {
+            tag: tag.to_string(),
+            created_at,
+            archive_path,
+            notes_path,
+            description: String::new(),
+            changes: String::new(),
+            kicad_version: None,
+            git_hash: None,
+            include_date_in_name,
+            include_notes_in_zip: true,
+            target: None,
+        });
+    }
+    out
 }
 
 /// Suggest the next rev tag based on the project's existing releases.

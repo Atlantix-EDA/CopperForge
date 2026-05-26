@@ -160,6 +160,11 @@ pub struct ReleaseModalState {
     /// Skips the tag-collision check and updates the existing Release entry
     /// in place rather than appending a new one.
     pub overwrite_existing: bool,
+    /// Vendor target. `None` = standard release; `Some(...)` triggers
+    /// vendor-specific extras during `create_release` (e.g. PCBWay's
+    /// fab-specs README). Set when the modal is opened via the vendor
+    /// button (e.g. "🏭 Release for PCBWay").
+    pub target: Option<crate::vendor::VendorKind>,
 }
 
 impl Drop for CopperForgeApp {
@@ -1417,6 +1422,7 @@ impl CopperForgeApp {
             changes: modal.changes.clone(),
             include_date_in_name: modal.include_date_in_name,
             include_notes_in_zip: modal.include_notes_in_zip,
+            target: modal.target,
         };
         let sources = crate::release::ReleaseSources {
             pcb_path: &pcb_path,
@@ -1937,6 +1943,7 @@ impl CopperForgeApp {
 
     /// Pick up "open_release_intent" (value: "proj_X:rev:rev_01") and open the
     /// containing release dir via xdg-open / open / explorer.
+    #[cfg(not(target_arch = "wasm32"))]
     fn handle_release_open_intent(&self, ctx: &egui::Context) {
         let intent = ctx.memory(|mem| {
             mem.data.get_temp::<String>(egui::Id::new("open_release_intent"))
@@ -1986,6 +1993,12 @@ impl CopperForgeApp {
             Ok(_) => logger.log_info(&format!("Opened release folder: {}", rev_dir.display())),
             Err(e) => logger.log_error(&format!("Failed to open {}: {}", rev_dir.display(), e)),
         }
+    }
+
+    /// Wasm build: no native shell to launch a file manager, so the
+    /// "open release folder" intent is a no-op in the browser.
+    #[cfg(target_arch = "wasm32")]
+    fn handle_release_open_intent(&self, _ctx: &egui::Context) {
     }
 
     // ─── Project Import modal ──────────────────────────────────────
@@ -2237,6 +2250,7 @@ impl crate::app::ReleaseModalState {
             changes: self.changes.clone(),
             include_date_in_name: self.include_date_in_name,
             include_notes_in_zip: self.include_notes_in_zip,
+            target: self.target,
         }
     }
 }
@@ -2247,4 +2261,5 @@ struct ReleaseModalSnapshot {
     changes: String,
     include_date_in_name: bool,
     include_notes_in_zip: bool,
+    target: Option<crate::vendor::VendorKind>,
 }

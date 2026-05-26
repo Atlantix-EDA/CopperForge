@@ -78,20 +78,83 @@ pub fn extract_bom(pcb_path: &Path) -> Result<Vec<BomEntry>, String> {
 }
 
 /// Extract board dimensions from Edge.Cuts outline.
+///
+/// Walks every `(gr_line | gr_arc | gr_rect | gr_circle | gr_poly ...)`
+/// block on layer `Edge.Cuts` and returns the axis-aligned bounding box
+/// of all referenced coordinates. Arcs are approximated by their start,
+/// mid, and end points — accurate for corner rounds; circle outlines
+/// are rare enough not to matter for sizing.
+///
+/// kiparse's `extract_board_outline` only matches `gr_line`, which gives
+/// nonsense numbers on any board with rounded corners or rect-style
+/// outlines (the alpha_gan_adc rev_01 bug: 1.12 × 0.00 instead of 66.7
+/// × 36.75). Owning the parse here lets every consumer — BoM panel,
+/// PCBWay fab specs, future fab targets — share the same fix.
 pub fn extract_board_dimensions(pcb_path: &Path) -> Result<Option<BoardDimensions>, String> {
     let content = std::fs::read_to_string(pcb_path)
         .map_err(|e| format!("Failed to read PCB file: {}", e))?;
+    Ok(compute_board_dimensions_from_str(&content))
+}
 
-    let parser = DetailParser::new(&content);
-    match parser.extract_board_outline() {
-        Ok(Some(outline)) => Ok(Some(BoardDimensions {
-            width_mm: outline.width_mm,
-            height_mm: outline.height_mm,
-            area_mm2: outline.width_mm * outline.height_mm,
-        })),
-        Ok(None) => Ok(None),
-        Err(e) => Err(format!("Failed to parse board outline: {}", e)),
+/// String-input variant — same logic, no file I/O. Used by tests and by
+/// any caller that already has the .kicad_pcb content in memory.
+pub fn compute_board_dimensions_from_str(content: &str) -> Option<BoardDimensions> {
+    use once_cell::sync::Lazy;
+    use regex::Regex;
+
+    // Anchor for each graphical shape on the board (not inside footprints,
+    // which use `fp_*` instead — those have their own layer per element
+    // and aren't board outlines).
+    static SHAPE_START: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r#"\n\s*\(gr_(line|arc|rect|circle|poly)\b"#).unwrap()
+    });
+    // Pull any (start | end | mid | center | xy) coord pair from the block.
+    // Covers gr_line (start/end), gr_arc (start/mid/end), gr_rect (start/end
+    // corners), gr_circle (center + a point on the perimeter as `end`),
+    // and gr_poly (a list of `xy` inside `pts`).
+    static COORD: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r#"\((start|end|mid|center|xy)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\)"#).unwrap()
+    });
+    // Layer must be exactly Edge.Cuts — silkscreen/courtyard/etc gr_* shapes
+    // would otherwise distort the bbox.
+    static EDGE_CUTS_LAYER: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r#"\(layer\s+"Edge\.Cuts"\)"#).unwrap()
+    });
+
+    let starts: Vec<usize> = SHAPE_START.find_iter(content).map(|m| m.start()).collect();
+    let mut min_x = f64::INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    let mut any = false;
+
+    for (i, &start) in starts.iter().enumerate() {
+        let end = starts.get(i + 1).copied().unwrap_or(content.len());
+        let block = &content[start..end];
+        if !EDGE_CUTS_LAYER.is_match(block) {
+            continue;
+        }
+        for cap in COORD.captures_iter(block) {
+            let x: f64 = cap[2].parse().unwrap_or(0.0);
+            let y: f64 = cap[3].parse().unwrap_or(0.0);
+            min_x = min_x.min(x);
+            max_x = max_x.max(x);
+            min_y = min_y.min(y);
+            max_y = max_y.max(y);
+            any = true;
+        }
     }
+
+    if !any {
+        return None;
+    }
+    let width_mm = max_x - min_x;
+    let height_mm = max_y - min_y;
+    Some(BoardDimensions {
+        width_mm,
+        height_mm,
+        area_mm2: width_mm * height_mm,
+    })
 }
 
 /// Component summary — count by reference prefix (R, C, U, J, etc.)
@@ -107,6 +170,77 @@ pub fn component_summary(entries: &[BomEntry]) -> Vec<(String, usize)> {
     let mut sorted: Vec<_> = counts.into_iter().collect();
     sorted.sort_by(|a, b| b.1.cmp(&a.1));
     sorted
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gr_rect_outline_gives_real_size() {
+        // alpha_gan_adc shape: a single gr_rect on Edge.Cuts. kiparse's
+        // gr_line-only matcher returned 1.12 × 0.00; ours must give
+        // (182.24 - 115.54) × (110.0005 - 73.2505) = 66.7 × 36.75.
+        let pcb = r#"(kicad_pcb
+  (gr_rect
+    (start 115.54 73.2505)
+    (end 182.24 110.0005)
+    (stroke (width 0.05) (type default))
+    (fill no)
+    (layer "Edge.Cuts")
+  )
+)"#;
+        let d = compute_board_dimensions_from_str(pcb).expect("dims");
+        assert!((d.width_mm - 66.7).abs() < 0.001, "width={}", d.width_mm);
+        assert!((d.height_mm - 36.75).abs() < 0.001, "height={}", d.height_mm);
+    }
+
+    #[test]
+    fn ignores_non_edge_cuts_shapes() {
+        // gr_line on silkscreen should NOT enlarge the board bbox.
+        let pcb = r#"(kicad_pcb
+  (gr_rect
+    (start 0 0)
+    (end 10 5)
+    (layer "Edge.Cuts")
+  )
+  (gr_line
+    (start -100 -100)
+    (end 100 100)
+    (layer "F.SilkS")
+  )
+)"#;
+        let d = compute_board_dimensions_from_str(pcb).expect("dims");
+        assert!((d.width_mm - 10.0).abs() < 0.001);
+        assert!((d.height_mm - 5.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn rounded_corners_with_arcs() {
+        // Edge.Cuts made of 4 gr_lines + 4 gr_arcs (rounded rectangle).
+        // Arc bbox is approximated by start/mid/end — close enough for sizing.
+        let pcb = r#"(kicad_pcb
+  (gr_line (start 1 0)  (end 9 0)  (layer "Edge.Cuts"))
+  (gr_line (start 10 1) (end 10 4) (layer "Edge.Cuts"))
+  (gr_line (start 9 5)  (end 1 5)  (layer "Edge.Cuts"))
+  (gr_line (start 0 4)  (end 0 1)  (layer "Edge.Cuts"))
+  (gr_arc (start 1 0) (mid 0.29 0.29) (end 0 1) (layer "Edge.Cuts"))
+  (gr_arc (start 10 1) (mid 9.71 0.29) (end 9 0) (layer "Edge.Cuts"))
+  (gr_arc (start 9 5) (mid 9.71 4.71) (end 10 4) (layer "Edge.Cuts"))
+  (gr_arc (start 0 4) (mid 0.29 4.71) (end 1 5) (layer "Edge.Cuts"))
+)"#;
+        let d = compute_board_dimensions_from_str(pcb).expect("dims");
+        assert!((d.width_mm - 10.0).abs() < 0.001, "width={}", d.width_mm);
+        assert!((d.height_mm - 5.0).abs() < 0.001, "height={}", d.height_mm);
+    }
+
+    #[test]
+    fn no_edge_cuts_returns_none() {
+        let pcb = r#"(kicad_pcb
+  (gr_line (start 0 0) (end 1 1) (layer "F.SilkS"))
+)"#;
+        assert!(compute_board_dimensions_from_str(pcb).is_none());
+    }
 }
 
 /// Natural sort key: splits "R10" into ("R", 10).

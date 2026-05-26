@@ -302,6 +302,23 @@ fn render_pcb_workflow_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
         open_release_modal(app);
     }
 
+    // PCBWay-targeted release — identical pipeline + PCBWAY_FAB_SPECS.md
+    // (SMT/THT part + pad counts) added to the zip for the assembly quote.
+    let pcbway_btn = ui.add_enabled(release_enabled, egui::Button::new("🏭 Release for PCBWay"));
+    let pcbway_btn = if !has_current_project && is_ready {
+        pcbway_btn.on_disabled_hover_text("Open or create a project record in the Projects tab first.")
+    } else if !is_ready {
+        pcbway_btn.on_disabled_hover_text("Load gerbers (Generate + Load) before cutting a release.")
+    } else {
+        pcbway_btn.on_hover_text(
+            "Same as Release, but bundles PCBWAY_FAB_SPECS.md \
+             (SMT/THT part + pad counts, top/bottom split) into the zip.",
+        )
+    };
+    if pcbway_btn.clicked() {
+        open_release_modal_for(app, Some(crate::vendor::VendorKind::PcbWay));
+    }
+
     // Pick up a pending "regenerate-release" intent from the Projects tab
     // (set by right-click → Regenerate on a rev node). We open the release
     // modal pre-filled with the existing rev's fields + overwrite flag.
@@ -343,8 +360,16 @@ fn render_pcb_workflow_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
 }
 
 /// Seed the release modal with sensible defaults: next rev tag + current
-/// project description prefilled.
+/// project description prefilled. Vendor-neutral (standard release).
 fn open_release_modal(app: &mut CopperForgeApp) {
+    open_release_modal_for(app, None);
+}
+
+/// Same as `open_release_modal` but targets a specific vendor — the
+/// modal's `target` field flows through `ReleaseRequest` into
+/// `create_release`, which injects the vendor-specific extras (e.g.
+/// `PCBWAY_FAB_SPECS.md`) into the zip.
+fn open_release_modal_for(app: &mut CopperForgeApp, target: Option<crate::vendor::VendorKind>) {
     let (existing_releases, description_prefill) = app.project_manager_state
         .as_ref()
         .and_then(|s| s.current_project.as_ref())
@@ -359,6 +384,7 @@ fn open_release_modal(app: &mut CopperForgeApp) {
         include_notes_in_zip: true,
         error: None,
         overwrite_existing: false,
+        target,
     });
 }
 
@@ -469,6 +495,9 @@ fn open_regenerate_release_modal(app: &mut CopperForgeApp, composite: &str) {
         include_notes_in_zip: existing.include_notes_in_zip,
         error: None,
         overwrite_existing: true,
+        // Regenerate preserves the original vendor target — so re-cutting
+        // a PCBWay rev re-emits the PCBWay fab-specs sheet.
+        target: existing.target,
     });
 }
 
@@ -792,15 +821,28 @@ fn setup_viewport(ui: &mut egui::Ui, app: &mut CopperForgeApp) -> (Rect, egui::R
 
 fn handle_viewport_interactions(ui: &mut egui::Ui, app: &mut CopperForgeApp, viewport: &Rect, response: &egui::Response) {
     let mouse_pos_screen = ui.input(|i| i.pointer.hover_pos());
-    
-    // Handle zoom window
+
+    // KiCad mouse convention:
+    //   Left-drag  = zoom-to-area (rubber-band)
+    //   Right-drag = pan
+    //   Wheel      = zoom in/out
+    // Order matters: zoom-window runs first so its `zoom_window_dragging`
+    // flag gates the upstream gerber_viewer pan (which is hard-bound to
+    // left-button) out of the way during a rubber-band drag.
     handle_zoom_window(ui, app, viewport, mouse_pos_screen, response);
-    
+
     // Handle mouse wheel zoom
     handle_mouse_wheel_zoom(ui, app, viewport, response);
-    
+
     // Update UI state if not dragging zoom window
     if !app.services.zoom_window_dragging {
+        // Local right-button pan (KiCad convention). Done before
+        // ui_state.update so the updated translation is what the rest of
+        // the frame sees. Upstream gerber_viewer's left-pan handler still
+        // fires from inside ui_state.update, but it's a no-op here because
+        // the user is dragging Secondary, not Primary.
+        handle_right_pan(ui, app, response);
+
         app.services.ui_state.update(ui, viewport, response, &mut app.services.view_state);
         
         let viewport_center = viewport.center();
@@ -906,21 +948,42 @@ fn handle_viewport_interactions(ui: &mut egui::Ui, app: &mut CopperForgeApp, vie
     }
 }
 
+/// Pan the gerber view by right-mouse drag (KiCad convention).
+///
+/// Upstream `gerber_viewer::UiState::handle_panning` is hard-bound to the
+/// primary button — we can't reconfigure it, so this lives alongside as
+/// the right-button equivalent. Skipped while the ruler tool is active
+/// since ruler placement already binds right-drag.
+fn handle_right_pan(ui: &mut egui::Ui, app: &mut CopperForgeApp, response: &egui::Response) {
+    if app.services.ruler_active {
+        return;
+    }
+    if response.dragged_by(egui::PointerButton::Secondary) {
+        let delta = response.drag_delta();
+        if delta != Vec2::ZERO {
+            app.services.view_state.translation += delta;
+            ui.ctx().clear_animations();
+        }
+    }
+}
+
 fn handle_zoom_window(ui: &mut egui::Ui, app: &mut CopperForgeApp, viewport: &Rect, mouse_pos_screen: Option<Pos2>, response: &egui::Response) {
-    let right_button = egui::PointerButton::Secondary;
-    
+    // KiCad: left-drag = rubber-band zoom-to-area. (Was Secondary before
+    // the right-drag-pans switch — see handle_viewport_interactions.)
+    let zoom_button = egui::PointerButton::Primary;
+
     // Start zoom window
     if response.contains_pointer() {
-        if ui.input(|i| i.pointer.button_pressed(right_button)) {
+        if ui.input(|i| i.pointer.button_pressed(zoom_button)) {
             if let Some(pos) = mouse_pos_screen {
                 app.services.zoom_window_start = Some(pos);
                 app.services.zoom_window_dragging = true;
             }
         }
     }
-    
+
     // Complete zoom window
-    if app.services.zoom_window_dragging && ui.input(|i| i.pointer.button_released(right_button)) {
+    if app.services.zoom_window_dragging && ui.input(|i| i.pointer.button_released(zoom_button)) {
         if let (Some(start), Some(end)) = (app.services.zoom_window_start, ui.input(|i| i.pointer.hover_pos())) {
             let zoom_rect = Rect::from_two_pos(start, end);
             

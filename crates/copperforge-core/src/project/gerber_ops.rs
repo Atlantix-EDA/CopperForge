@@ -30,6 +30,40 @@ pub fn generate_gerbers_from_pcb(
         return None;
     }
 
+    // Clean stale gerber/job files from prior generations. kicad-cli only
+    // writes the layers in the current stackup — it does NOT delete files
+    // for layers that have since been removed. Without this, dropping a
+    // 4-layer board to 2 leaves In1_Cu.gbr / In2_Cu.gbr behind and the
+    // viewer faithfully shows 4 layers. Drill .gbr files are also wiped
+    // (regenerated in Pass 2 below). Non-gerber sidecars left alone.
+    let stale = std::fs::read_dir(&output_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_file()
+                && p.extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|ext| matches!(ext, "gbr" | "gbrjob"))
+        })
+        .collect::<Vec<_>>();
+    if !stale.is_empty() {
+        logger.log_info(&format!(
+            "Removing {} stale gerber file(s) from prior generation",
+            stale.len()
+        ));
+        for path in &stale {
+            if let Err(e) = std::fs::remove_file(path) {
+                logger.log_warning(&format!(
+                    "Could not remove {}: {}",
+                    path.display(),
+                    e
+                ));
+            }
+        }
+    }
+
     logger.log_info(&format!("Output directory: {}", output_dir.display()));
 
     // ── Pass 1: main gerbers ───────────────────────────────────────
