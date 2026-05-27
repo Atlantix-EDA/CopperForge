@@ -11,11 +11,18 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use copperforge_core::display::{draw_grid, GridSettings};
-use gerber_viewer::ViewState;
-use nalgebra::Point2;
+use gerber_viewer::{GerberTransform, Mirroring, ViewState};
+use nalgebra::{Point2, Vector2};
 
+use std::collections::HashMap;
+
+use crate::board_weight::{self, WeightInputs};
+use crate::bom::{self, Mount};
 use crate::canvas::model::LayerSide;
 use crate::canvas::{paint as paint_canvas, GerberScene};
+use crate::centroid::{self, CentroidEntry};
+use crate::pad_count::{self, SmtPadCount};
+use crate::release_pkg;
 
 // ── Upload result types ─────────────────────────────────────────────────
 
@@ -79,6 +86,56 @@ pub struct WebApp {
     ruler_active: bool,
     ruler_start: Option<Point2<f64>>,
     ruler_end: Option<Point2<f64>>,
+
+    /// Zoom-to-region: `Some(start_screen_pos)` while the left button
+    /// is held mid-drag. On release with > 10px drag, `fit_view` is
+    /// called against the gerber-space bbox of the rubber-band rect.
+    /// Clicks (no significant drag) pass through to the ruler tool.
+    zoom_rect_start: Option<egui::Pos2>,
+
+    /// Image-level mirror toggles, applied uniformly to every layer
+    /// during paint (pivot = scene bbox center, same as the native
+    /// viewer's display_manager.mirroring).
+    mirror_x: bool,
+    mirror_y: bool,
+
+    /// Stats / board panel: show dimensions in mil when true, mm when
+    /// false.
+    units_mils: bool,
+
+    /// About dialog visibility (opened by clicking the brand label).
+    about_open: bool,
+
+    /// Parsed CPL/centroid rows from the uploaded zip (if present).
+    /// Drives the component-count rows in the Board stats panel and the
+    /// PCBWAY_FAB_SPECS.md table.
+    centroid: Vec<CentroidEntry>,
+    /// `designator → Mount` from parsing the BOM CSV in the upload.
+    /// Joined against `centroid` to derive SMT / THT totals.
+    bom_mount: HashMap<String, Mount>,
+    /// SMT pad count per side, parsed from F.Paste / B.Paste flashes.
+    /// Independent of the BOM — works on any release zip with paste
+    /// layers present.
+    smt_pads: SmtPadCount,
+
+    /// Bare-board weight inputs (thickness, copper oz, fill %).
+    /// Knob-driven approximation — gerber_viewer doesn't expose the
+    /// primitives needed for an exact polygon-area tessellation, so
+    /// we follow the standard PCB-calculator method of `bbox × fill %`.
+    weight_inputs: WeightInputs,
+
+    /// Manual board origin in gerber coords (mm). `(0, 0)` keeps the
+    /// raw gerber coordinate frame; any other value shifts the cursor
+    /// readout so distances are reported relative to that point.
+    /// Matches KiCad's "Set Drill/Place Origin" feature.
+    design_offset: Point2<f64>,
+    /// True between toggling "📍 Origin" on and the next left-click
+    /// (or Escape). One-shot mode — click, set, exit.
+    setting_origin: bool,
+    /// Last-known gerber-coord position under the cursor (mm). Painted
+    /// in the bottom status bar; updated each frame the canvas is
+    /// hovered.
+    cursor_world: Option<Point2<f64>>,
 }
 
 impl Default for WebApp {
@@ -95,7 +152,56 @@ impl Default for WebApp {
             ruler_active: false,
             ruler_start: None,
             ruler_end: None,
+            zoom_rect_start: None,
+            mirror_x: false,
+            mirror_y: false,
+            units_mils: false,
+            about_open: false,
+            centroid: Vec::new(),
+            bom_mount: HashMap::new(),
+            smt_pads: SmtPadCount::default(),
+            weight_inputs: WeightInputs::default(),
+            design_offset: Point2::new(0.0, 0.0),
+            setting_origin: false,
+            cursor_world: None,
         }
+    }
+}
+
+/// Component-count rollup derived by joining the centroid (designator →
+/// side) with the BOM (designator → mount). `total` always reflects
+/// centroid rows; `smt + tht + unknown_mount` equals `total` when both
+/// CSVs are present and refdes lists line up. If the BOM is missing,
+/// `smt = tht = 0` and `unknown_mount = total`.
+#[derive(Debug, Clone, Default)]
+struct ComponentStats {
+    total: usize,
+    top: usize,
+    bottom: usize,
+    smt: usize,
+    tht: usize,
+    unknown_mount: usize,
+}
+
+impl ComponentStats {
+    fn build(
+        centroid: &[CentroidEntry],
+        bom_mount: &HashMap<String, Mount>,
+    ) -> Self {
+        let mut s = Self::default();
+        for c in centroid {
+            s.total += 1;
+            match c.side {
+                crate::centroid::Side::Top => s.top += 1,
+                crate::centroid::Side::Bottom => s.bottom += 1,
+            }
+            match bom_mount.get(&c.designator).copied().unwrap_or(Mount::Unknown) {
+                Mount::Smt => s.smt += 1,
+                Mount::Tht => s.tht += 1,
+                Mount::Unknown => s.unknown_mount += 1,
+            }
+        }
+        s
     }
 }
 
@@ -126,8 +232,30 @@ impl WebApp {
             Ok(loaded) => {
                 let scene = GerberScene::from_entries(&loaded.entries);
                 let total_layers = scene.layers.len();
+                // Centroid: designator → side.  BOM: designator → mount.
+                // Both feed the joined ComponentStats in the panel and
+                // the PCBWay fab-specs sheet.
+                let centroid = centroid::find_and_parse(&loaded.entries)
+                    .unwrap_or_default();
+                let bom_mount = bom::find_and_parse(&loaded.entries);
+                let smt_pads = pad_count::count_from_entries(&loaded.entries);
+                if !centroid.is_empty() {
+                    log::info!(
+                        "Parsed {} centroid entries from release zip",
+                        centroid.len()
+                    );
+                }
+                if !bom_mount.is_empty() {
+                    log::info!(
+                        "Parsed {} BOM mount-type entries from release zip",
+                        bom_mount.len()
+                    );
+                }
                 self.scene = Some(scene);
                 self.view_initialized = false;
+                self.centroid = centroid;
+                self.bom_mount = bom_mount;
+                self.smt_pads = smt_pads;
                 self.loaded = Some(loaded);
                 self.error = None;
                 log::info!("Parsed {} gerber layers", total_layers);
@@ -169,22 +297,90 @@ impl WebApp {
             }
         }
 
+        // ── Zoom-to-region: left-drag rubber band ───────────────────
+        // Press inside the canvas captures the start position. Release
+        // with > 10px drag triggers fit_view against the gerber-space
+        // bbox of the rubber-band rect. Tiny releases (clicks) drop
+        // through to the ruler handler below — same threshold + dance
+        // the desktop viewer uses.
+        let primary_pressed =
+            ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary));
+        let primary_released =
+            ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary));
+        if primary_pressed && response.contains_pointer() {
+            if let Some(pos) = response.hover_pos() {
+                self.zoom_rect_start = Some(pos);
+            }
+        }
+        if primary_released {
+            if let Some(start) = self.zoom_rect_start.take() {
+                if let Some(end) = ui.input(|i| i.pointer.interact_pos()) {
+                    let rect = egui::Rect::from_two_pos(start, end);
+                    if rect.width() > 10.0 && rect.height() > 10.0 {
+                        let g1 = self.view_state.screen_to_gerber_coords(rect.min);
+                        let g2 = self.view_state.screen_to_gerber_coords(rect.max);
+                        let bbox = gerber_viewer::BoundingBox {
+                            min: nalgebra::Point2::new(
+                                g1.x.min(g2.x),
+                                g1.y.min(g2.y),
+                            ),
+                            max: nalgebra::Point2::new(
+                                g1.x.max(g2.x),
+                                g1.y.max(g2.y),
+                            ),
+                        };
+                        // Refit using the canvas rect from the response.
+                        self.view_state.fit_view(response.rect, &bbox, 1.0);
+                    }
+                }
+            }
+        }
+
+        // ── Double-click fit ────────────────────────────────────────
+        // Same gesture as the desktop viewer: double-click anywhere on
+        // the canvas to re-fit the whole board. Cheap to do via the
+        // existing `view_initialized = false` path; the next frame
+        // calls fit_view against the combined bbox.
+        if response.double_clicked_by(egui::PointerButton::Primary) {
+            self.view_initialized = false;
+            // Cancel any in-flight zoom-rect — the double-click's
+            // second press would otherwise leave a stale start point.
+            self.zoom_rect_start = None;
+        }
+
+        // ── Origin placement: one-shot left-click while armed ───────
+        // Checked BEFORE the ruler handler so a click while setting
+        // origin doesn't also place a ruler point. The mode auto-
+        // disarms after a successful click.
+        if self.setting_origin && response.clicked_by(egui::PointerButton::Primary) {
+            if let Some(pos) = response.interact_pointer_pos() {
+                let g = self.view_state.screen_to_gerber_coords(pos);
+                self.design_offset = g;
+                self.setting_origin = false;
+                self.zoom_rect_start = None;
+                log::info!("Origin set to ({:.3}, {:.3}) mm", g.x, g.y);
+            }
+        }
+
         // ── Ruler tool: left-click places points ────────────────────
-        if self.ruler_active && response.clicked_by(egui::PointerButton::Primary) {
+        // Only fires on real clicks (no drag), so zoom-to-region above
+        // takes precedence whenever the user actually drags. Skipped
+        // while setting_origin so the same click can't do both.
+        if self.ruler_active
+            && !self.setting_origin
+            && response.clicked_by(egui::PointerButton::Primary)
+        {
             if let Some(pos) = response.interact_pointer_pos() {
                 let gerber_pos = self.view_state.screen_to_gerber_coords(pos);
                 match (self.ruler_start, self.ruler_end) {
                     (None, _) => {
-                        // First click — set start.
                         self.ruler_start = Some(gerber_pos);
                         self.ruler_end = None;
                     }
                     (Some(_), None) => {
-                        // Second click — set end (measurement complete).
                         self.ruler_end = Some(gerber_pos);
                     }
                     (Some(_), Some(_)) => {
-                        // Third click — start a new measurement.
                         self.ruler_start = Some(gerber_pos);
                         self.ruler_end = None;
                     }
@@ -192,12 +388,139 @@ impl WebApp {
             }
         }
 
-        // ESC cancels the ruler tool.
-        if self.ruler_active && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.ruler_active = false;
-            self.ruler_start = None;
-            self.ruler_end = None;
+        // ESC cancels ruler, origin-setting, and any in-flight zoom-rect.
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            if self.ruler_active {
+                self.ruler_active = false;
+                self.ruler_start = None;
+                self.ruler_end = None;
+            }
+            self.setting_origin = false;
+            self.zoom_rect_start = None;
         }
+    }
+
+    /// Paint the manual origin marker — a small red crosshair at the
+    /// user-set origin (skipped when the origin is still the default
+    /// `(0, 0)` so we don't clutter the canvas).
+    fn paint_origin_marker(&self, painter: &egui::Painter) {
+        if self.design_offset.x == 0.0 && self.design_offset.y == 0.0 {
+            return;
+        }
+        let p = self.view_state.gerber_to_screen_coords(self.design_offset);
+        let arm = 10.0;
+        let stroke = egui::Stroke::new(
+            1.5,
+            egui::Color32::from_rgb(255, 80, 80),
+        );
+        painter.line_segment(
+            [egui::pos2(p.x - arm, p.y), egui::pos2(p.x + arm, p.y)],
+            stroke,
+        );
+        painter.line_segment(
+            [egui::pos2(p.x, p.y - arm), egui::pos2(p.x, p.y + arm)],
+            stroke,
+        );
+        painter.circle_filled(p, 2.5, egui::Color32::from_rgb(255, 80, 80));
+    }
+
+    /// Build a release zip from the currently-loaded entries and
+    /// trigger a browser download. `with_pcbway_specs = true` injects
+    /// a generated `PCBWAY_FAB_SPECS.md` next to the original files.
+    fn export_release(&mut self, with_pcbway_specs: bool) {
+        let Some(ref loaded) = self.loaded else {
+            self.error = Some("Nothing loaded to export.".to_string());
+            return;
+        };
+
+        // Project stem + rev tag from the source filename. The naming
+        // convention is `<project>_<rev>[_<DDMmmYYYY>].zip` — split on
+        // `_rev_` to find the boundary so a project name with
+        // underscores still parses cleanly.
+        let stem = loaded
+            .source_name
+            .strip_suffix(".zip")
+            .or_else(|| loaded.source_name.strip_suffix(".ZIP"))
+            .unwrap_or(&loaded.source_name);
+        let (project_stem, rev_tag) = stem
+            .split_once("_rev_")
+            .map(|(p, r)| (p.to_string(), format!("rev_{}", r)))
+            .unwrap_or_else(|| (stem.to_string(), "rev".to_string()));
+
+        let mut extras: Vec<(String, Vec<u8>)> = Vec::new();
+        if with_pcbway_specs {
+            let bbox = self.scene.as_ref().and_then(|s| s.combined_bbox());
+            // Build the PCBWay payload from joined centroid + BOM data.
+            // `smt` / `tht` are wrapped in Option so the writer can
+            // omit them when no BOM was uploaded.
+            let stats = (!self.centroid.is_empty()).then(|| {
+                let s = ComponentStats::build(&self.centroid, &self.bom_mount);
+                let bom_known = !self.bom_mount.is_empty();
+                let pads_present = self.smt_pads.any();
+                release_pkg::PcbwayStats {
+                    total: s.total,
+                    top: s.top,
+                    bottom: s.bottom,
+                    smt: bom_known.then_some(s.smt),
+                    tht: bom_known.then_some(s.tht),
+                    unknown_mount: s.unknown_mount,
+                    smt_pads_top: pads_present.then_some(self.smt_pads.top),
+                    smt_pads_bottom: pads_present.then_some(self.smt_pads.bottom),
+                }
+            });
+            let md = release_pkg::pcbway_fab_specs_md(
+                &project_stem,
+                &rev_tag,
+                bbox.as_ref().map(|b| b.width()),
+                bbox.as_ref().map(|b| b.height()),
+                stats.as_ref(),
+            );
+            extras.push(("PCBWAY_FAB_SPECS.md".to_string(), md.into_bytes()));
+        }
+
+        let bytes = match release_pkg::build_zip(&loaded.entries, &extras) {
+            Ok(b) => b,
+            Err(e) => {
+                self.error = Some(e);
+                return;
+            }
+        };
+
+        let download_name = if with_pcbway_specs {
+            format!("{}_{}_pcbway.zip", project_stem, rev_tag)
+        } else {
+            format!("{}_{}.zip", project_stem, rev_tag)
+        };
+        if let Err(e) = release_pkg::trigger_download(&download_name, &bytes) {
+            self.error = Some(format!("Download failed: {}", e));
+        } else {
+            log::info!("Exported {} ({} bytes)", download_name, bytes.len());
+        }
+    }
+
+    /// Paint the rubber-band zoom rectangle, if a drag is in progress.
+    fn paint_zoom_rect(&self, painter: &egui::Painter, response: &egui::Response) {
+        let Some(start) = self.zoom_rect_start else { return };
+        let Some(now) = response.hover_pos() else { return };
+        let rect = egui::Rect::from_two_pos(start, now);
+        if rect.width() < 2.0 || rect.height() < 2.0 {
+            return;
+        }
+        // Bright-white rubber band so it reads cleanly over copper,
+        // green soldermask, and silkscreen alike. Fully-opaque 2-px
+        // stroke + low-alpha white fill so the inside is tinted but
+        // the underlying gerber detail is still legible.
+        painter.rect_filled(
+            rect,
+            0.0,
+            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 40),
+        );
+        painter.rect_stroke(
+            rect,
+            0.0,
+            egui::Stroke::new(2.0, egui::Color32::WHITE),
+            egui::StrokeKind::Inside,
+        );
     }
 
     /// Paint the ruler over the canvas — start marker, end marker, line
@@ -276,12 +599,24 @@ impl eframe::App for WebApp {
             .exact_height(36.0)
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
-                    ui.label(
-                        egui::RichText::new("CopperForge")
-                            .strong()
-                            .size(16.0)
-                            .color(egui::Color32::from_rgb(184, 115, 51)),
+                    // Brand label is clickable → About modal. Bigger,
+                    // bolder text and an underline-on-hover style so
+                    // it reads as a real affordance.
+                    let brand = ui.add(
+                        egui::Label::new(
+                            egui::RichText::new("CopperForge")
+                                .strong()
+                                .size(18.0)
+                                .color(egui::Color32::from_rgb(184, 115, 51)),
+                        )
+                        .sense(egui::Sense::click()),
                     );
+                    if brand.hovered() {
+                        ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                    if brand.clicked() {
+                        self.about_open = true;
+                    }
                     ui.label(
                         egui::RichText::new("· Browser Demo")
                             .small()
@@ -302,8 +637,9 @@ impl eframe::App for WebApp {
 
                     if self.scene.is_some() {
                         ui.separator();
-                        // Grid on/off + spacing slider live in the top bar
-                        // so they're discoverable without opening anything.
+                        // Grid on/off + spacing + dot size live in the
+                        // top bar so they're discoverable without
+                        // opening anything.
                         ui.checkbox(&mut self.grid_settings.enabled, "Grid");
                         ui.add_enabled_ui(self.grid_settings.enabled, |ui| {
                             ui.add(
@@ -311,7 +647,15 @@ impl eframe::App for WebApp {
                                     .speed(0.1)
                                     .range(0.1..=50.0)
                                     .suffix(" mm"),
-                            );
+                            )
+                            .on_hover_text("Grid spacing");
+                            ui.add(
+                                egui::DragValue::new(&mut self.grid_settings.dot_size)
+                                    .speed(0.1)
+                                    .range(0.5..=6.0)
+                                    .suffix(" px"),
+                            )
+                            .on_hover_text("Grid dot size");
                         });
                         ui.separator();
                         // Ruler toggle. Toggling off clears any partial
@@ -325,6 +669,59 @@ impl eframe::App for WebApp {
                         {
                             self.ruler_start = None;
                             self.ruler_end = None;
+                        }
+                        ui.separator();
+                        // Mirror X / Y — applied uniformly to every
+                        // layer in paint(), pivoted on the scene bbox
+                        // center.
+                        ui.toggle_value(&mut self.mirror_x, "↔ X mirror")
+                            .on_hover_text("Mirror about the vertical axis");
+                        ui.toggle_value(&mut self.mirror_y, "↕ Y mirror")
+                            .on_hover_text("Mirror about the horizontal axis");
+                        ui.separator();
+                        // Origin: click-to-place; one-shot mode that
+                        // auto-disarms after the click. Reset returns
+                        // the cursor readout to raw gerber coords.
+                        ui.toggle_value(&mut self.setting_origin, "📍 Origin")
+                            .on_hover_text(
+                                "Click anywhere on the canvas to set the \
+                                 board origin. Cursor coordinates become \
+                                 relative to that point.",
+                            );
+                        let origin_is_default = self.design_offset.x == 0.0
+                            && self.design_offset.y == 0.0;
+                        if ui
+                            .add_enabled(
+                                !origin_is_default,
+                                egui::Button::new("↺"),
+                            )
+                            .on_hover_text("Reset origin to gerber (0, 0)")
+                            .clicked()
+                        {
+                            self.design_offset = Point2::new(0.0, 0.0);
+                        }
+                        ui.separator();
+                        // Release buttons — repackage uploaded entries
+                        // into a fresh zip and download via the
+                        // browser. The PCBWay variant additionally
+                        // generates a PCBWAY_FAB_SPECS.md sheet from
+                        // the in-browser bbox + centroid data.
+                        if ui
+                            .button("🚀 Release")
+                            .on_hover_text("Download the uploaded files re-bundled as a release zip")
+                            .clicked()
+                        {
+                            self.export_release(false);
+                        }
+                        if ui
+                            .button("🏭 Release for PCBWay")
+                            .on_hover_text(
+                                "Same, plus PCBWAY_FAB_SPECS.md \
+                                 (board dimensions + component counts)",
+                            )
+                            .clicked()
+                        {
+                            self.export_release(true);
                         }
                     }
 
@@ -412,22 +809,408 @@ impl eframe::App for WebApp {
                                     std::cmp::Reverse(scene.layers[i].kind.z_order())
                                 });
                                 for i in indices {
-                                    // Compute the label + color via
-                                    // immutable read first, then take a
-                                    // disjoint mutable borrow for the
-                                    // checkbox bool — borrowck doesn't
-                                    // see through field-level disjoint
-                                    // access inside a method call.
+                                    // Per-layer row: color swatch
+                                    // (clickable color picker) + visibility
+                                    // checkbox with the layer label. Take
+                                    // ONE `&mut RenderLayer` out of the
+                                    // Vec, then borrow disjoint fields of
+                                    // it inside the closure — borrowck
+                                    // sees through field-level access
+                                    // when going via a single `&mut T`.
                                     let label = scene.layers[i].display_label();
-                                    let color = scene.layers[i].color;
-                                    let visible = &mut scene.layers[i].visible;
-                                    ui.checkbox(
-                                        visible,
-                                        egui::RichText::new(label).color(color),
-                                    );
+                                    let layer = &mut scene.layers[i];
+                                    let label_color = layer.color;
+                                    ui.horizontal(|ui| {
+                                        ui.color_edit_button_srgba(&mut layer.color);
+                                        ui.checkbox(
+                                            &mut layer.visible,
+                                            egui::RichText::new(label).color(label_color),
+                                        );
+                                    });
                                 }
                             }
                         });
+                });
+        }
+
+        // ── Right panel: board stats ───────────────────────────────
+        if self.scene.is_some() {
+            egui::SidePanel::right("board_stats")
+                .resizable(true)
+                .default_width(220.0)
+                .width_range(180.0..=320.0)
+                .show(ctx, |ui| {
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Board").strong());
+                        ui.with_layout(
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                ui.selectable_value(&mut self.units_mils, false, "mm");
+                                ui.selectable_value(&mut self.units_mils, true, "mil");
+                            },
+                        );
+                    });
+                    ui.separator();
+                    if let Some(bbox) =
+                        self.scene.as_ref().and_then(|s| s.combined_bbox())
+                    {
+                        let w_mm = bbox.width();
+                        let h_mm = bbox.height();
+                        let (w, h, unit) = if self.units_mils {
+                            (w_mm / 0.0254, h_mm / 0.0254, "mil")
+                        } else {
+                            (w_mm, h_mm, "mm")
+                        };
+                        ui.horizontal(|ui| {
+                            ui.label("Width");
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.monospace(format!("{:.2} {}", w, unit));
+                                },
+                            );
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Height");
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.monospace(format!("{:.2} {}", h, unit));
+                                },
+                            );
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Area");
+                            let area = w * h;
+                            let suffix = if self.units_mils { "mil²" } else { "mm²" };
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.monospace(format!("{:.1} {}", area, suffix));
+                                },
+                            );
+                        });
+                    } else {
+                        ui.label(
+                            egui::RichText::new("No Edge.Cuts in loaded zip")
+                                .small()
+                                .italics()
+                                .color(egui::Color32::from_rgb(140, 150, 170)),
+                        );
+                    }
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.label(egui::RichText::new("Components").strong());
+                    if self.centroid.is_empty() {
+                        ui.label(
+                            egui::RichText::new(
+                                "No centroid CSV in the upload — \
+                                 component counts unavailable.",
+                            )
+                            .small()
+                            .italics()
+                            .color(egui::Color32::from_rgb(140, 150, 170)),
+                        );
+                    } else {
+                        let s = ComponentStats::build(
+                            &self.centroid,
+                            &self.bom_mount,
+                        );
+                        let row = |ui: &mut egui::Ui, label: &str, n: usize| {
+                            ui.horizontal(|ui| {
+                                ui.label(label);
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        ui.monospace(format!("{}", n));
+                                    },
+                                );
+                            });
+                        };
+                        row(ui, "Total", s.total);
+                        row(ui, "Top", s.top);
+                        row(ui, "Bottom", s.bottom);
+                        if self.bom_mount.is_empty() {
+                            ui.add_space(4.0);
+                            ui.label(
+                                egui::RichText::new(
+                                    "SMT / THT split: no BOM CSV in upload.",
+                                )
+                                .small()
+                                .italics()
+                                .color(egui::Color32::from_rgb(140, 150, 170)),
+                            );
+                        } else {
+                            row(ui, "SMT", s.smt);
+                            row(ui, "Through-hole", s.tht);
+                            if s.unknown_mount > 0 {
+                                row(ui, "Unclassified", s.unknown_mount);
+                                ui.label(
+                                    egui::RichText::new(
+                                        "Unclassified = footprint name didn't match \
+                                         the SMT/THT heuristics. Usually custom or \
+                                         non-KiCad-stock libraries.",
+                                    )
+                                    .small()
+                                    .italics()
+                                    .color(egui::Color32::from_rgb(140, 150, 170)),
+                                );
+                            }
+                        }
+                    }
+                    // SMT pad count — independent of the BOM; derived
+                    // from F.Paste / B.Paste flashes. Only render the
+                    // sub-table if at least one paste layer was found.
+                    if self.smt_pads.any() {
+                        ui.add_space(6.0);
+                        ui.label(egui::RichText::new("SMT pads").strong());
+                        let row = |ui: &mut egui::Ui, label: &str, n: usize| {
+                            ui.horizontal(|ui| {
+                                ui.label(label);
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        ui.monospace(format!("{}", n));
+                                    },
+                                );
+                            });
+                        };
+                        row(ui, "Top", self.smt_pads.top);
+                        row(ui, "Bottom", self.smt_pads.bottom);
+                        row(ui, "Total", self.smt_pads.total());
+                    }
+
+                    // ── Weight (approximation) ─────────────────────
+                    ui.add_space(6.0);
+                    ui.separator();
+                    ui.label(egui::RichText::new("Weight").strong());
+                    ui.label(
+                        egui::RichText::new(
+                            "Bare board, no components. Approximation: bbox × \
+                             fill %. Adjust the inputs for your stackup.",
+                        )
+                        .small()
+                        .italics()
+                        .color(egui::Color32::from_rgb(140, 150, 170)),
+                    );
+                    egui::Grid::new("weight_inputs")
+                        .num_columns(2)
+                        .spacing([8.0, 4.0])
+                        .show(ui, |ui| {
+                            ui.label("Thickness");
+                            ui.add(
+                                egui::DragValue::new(
+                                    &mut self.weight_inputs.board_thickness_mm,
+                                )
+                                .speed(0.1)
+                                .range(0.2..=6.0)
+                                .suffix(" mm"),
+                            );
+                            ui.end_row();
+                            ui.label("Outer Cu");
+                            ui.add(
+                                egui::DragValue::new(
+                                    &mut self.weight_inputs.copper_oz_outer,
+                                )
+                                .speed(0.25)
+                                .range(0.25..=8.0)
+                                .suffix(" oz"),
+                            );
+                            ui.end_row();
+                            ui.label("Inner Cu");
+                            ui.add(
+                                egui::DragValue::new(
+                                    &mut self.weight_inputs.copper_oz_inner,
+                                )
+                                .speed(0.25)
+                                .range(0.25..=8.0)
+                                .suffix(" oz"),
+                            );
+                            ui.end_row();
+                            ui.label("Fill %");
+                            ui.add(
+                                egui::DragValue::new(
+                                    &mut self.weight_inputs.copper_fill_pct,
+                                )
+                                .speed(1.0)
+                                .range(5.0..=100.0)
+                                .suffix(" %"),
+                            );
+                            ui.end_row();
+                        });
+
+                    if let Some(w) =
+                        self.scene
+                            .as_ref()
+                            .and_then(|s| board_weight::compute(s, &self.weight_inputs))
+                    {
+                        ui.add_space(4.0);
+                        let row = |ui: &mut egui::Ui, label: &str, g: f64| {
+                            ui.horizontal(|ui| {
+                                ui.label(label);
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        ui.monospace(format!("{:.2} g", g));
+                                    },
+                                );
+                            });
+                        };
+                        row(ui, "Substrate (FR4)", w.substrate_g);
+                        row(
+                            ui,
+                            &format!("Outer Cu ×{}", w.outer_copper_layers),
+                            w.copper_outer_g,
+                        );
+                        if w.inner_copper_layers > 0 {
+                            row(
+                                ui,
+                                &format!("Inner Cu ×{}", w.inner_copper_layers),
+                                w.copper_inner_g,
+                            );
+                        }
+                        ui.add_space(2.0);
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("Total").strong());
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.monospace(
+                                        egui::RichText::new(format!(
+                                            "{:.2} g",
+                                            w.total_g
+                                        ))
+                                        .strong(),
+                                    );
+                                },
+                            );
+                        });
+                    }
+                });
+        }
+
+        // ── Bottom status bar: cursor coordinates ──────────────────
+        if self.scene.is_some() {
+            egui::TopBottomPanel::bottom("status_bar")
+                .exact_height(22.0)
+                .show(ctx, |ui| {
+                    ui.horizontal_centered(|ui| {
+                        match self.cursor_world {
+                            Some(p) => {
+                                // Coordinates are reported RELATIVE to
+                                // the user-set origin. With the default
+                                // origin (0, 0) this is identical to
+                                // the raw gerber position.
+                                let rx = p.x - self.design_offset.x;
+                                let ry = p.y - self.design_offset.y;
+                                let (x, y, unit) = if self.units_mils {
+                                    (rx / 0.0254, ry / 0.0254, "mil")
+                                } else {
+                                    (rx, ry, "mm")
+                                };
+                                let origin_is_default = self.design_offset.x == 0.0
+                                    && self.design_offset.y == 0.0;
+                                let origin_tag = if origin_is_default {
+                                    String::new()
+                                } else {
+                                    format!(
+                                        "  (origin {:.2}, {:.2} mm)",
+                                        self.design_offset.x,
+                                        self.design_offset.y,
+                                    )
+                                };
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "Cursor:  X = {:>10.3} {}    Y = {:>10.3} {}{}",
+                                        x, unit, y, unit, origin_tag,
+                                    ))
+                                    .monospace()
+                                    .color(egui::Color32::from_rgb(180, 200, 220)),
+                                );
+                            }
+                            None => {
+                                ui.label(
+                                    egui::RichText::new(
+                                        "Cursor: hover the canvas for live coordinates",
+                                    )
+                                    .small()
+                                    .italics()
+                                    .color(egui::Color32::from_rgb(140, 150, 170)),
+                                );
+                            }
+                        }
+                        ui.with_layout(
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                // 100% = scale that fits the whole board
+                                // (base_scale set by ViewState::fit_view).
+                                // `view_state.scale` is pixels-per-mm, not
+                                // a percentage — ratioing against the fit
+                                // scale gives a sensible "zoom from fit".
+                                let pct = if self.view_state.base_scale > 0.0 {
+                                    (self.view_state.scale
+                                        / self.view_state.base_scale)
+                                        * 100.0
+                                } else {
+                                    100.0
+                                };
+                                ui.label(
+                                    egui::RichText::new(format!("Zoom: {:.0}%", pct))
+                                        .small()
+                                        .color(egui::Color32::from_rgb(140, 150, 170)),
+                                );
+                            },
+                        );
+                    });
+                });
+        }
+
+        // ── About modal ────────────────────────────────────────────
+        if self.about_open {
+            egui::Window::new("About CopperForge")
+                .open(&mut self.about_open)
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .default_width(420.0)
+                .show(ctx, |ui| {
+                    ui.add_space(4.0);
+                    ui.heading(
+                        egui::RichText::new("CopperForge")
+                            .color(egui::Color32::from_rgb(184, 115, 51)),
+                    );
+                    ui.label(
+                        egui::RichText::new("PCB & CAM companion for KiCad")
+                            .italics(),
+                    );
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.add_space(8.0);
+                    ui.label(
+                        "This is the wasm browser demo. It runs the same \
+                         egui app the desktop version does, parsing your \
+                         release ZIP entirely in your browser — no upload, \
+                         no server.",
+                    );
+                    ui.add_space(8.0);
+                    ui.label(
+                        "Drag a CopperForge release zip onto Upload, then \
+                         pan with right-mouse drag, zoom with the wheel, \
+                         and left-drag a region to zoom in.",
+                    );
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        ui.label("Source:");
+                        ui.hyperlink_to(
+                            "github.com/Atlantix-EDA/CopperForge",
+                            "https://github.com/Atlantix-EDA/CopperForge",
+                        );
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Version:");
+                        ui.monospace(env!("CARGO_PKG_VERSION"));
+                    });
                 });
         }
 
@@ -469,6 +1252,13 @@ impl eframe::App for WebApp {
                 }
             }
 
+            // Live cursor coordinates for the bottom status bar.
+            // None when the pointer leaves the canvas, so the bar
+            // shows its idle hint rather than a stale last-position.
+            self.cursor_world = response
+                .hover_pos()
+                .map(|p| self.view_state.screen_to_gerber_coords(p));
+
             self.handle_canvas_input(ui, &response);
 
             // Clip the painter to the canvas rect so nothing bleeds
@@ -478,16 +1268,41 @@ impl eframe::App for WebApp {
             // Grid first (under everything else).
             draw_grid(&painter, &rect, &self.view_state, &self.grid_settings);
 
-            // Gerber layers next.
+            // Build the image transform — mirroring is pivoted on the
+            // scene's bbox center so the board doesn't fly off-canvas
+            // when toggled.
             if let Some(ref scene) = self.scene {
-                paint_canvas(&painter, scene, self.view_state);
+                let pivot = scene
+                    .combined_bbox()
+                    .map(|b| b.center())
+                    .unwrap_or_else(|| Point2::new(0.0, 0.0));
+                let transform = GerberTransform {
+                    mirroring: Mirroring {
+                        x: self.mirror_x,
+                        y: self.mirror_y,
+                    },
+                    origin: Vector2::new(pivot.x, pivot.y),
+                    ..Default::default()
+                };
+                paint_canvas(&painter, scene, self.view_state, &transform);
             }
 
-            // Ruler overlay last so the line + label sit on top.
+            // Origin marker — sits above the gerbers but below the
+            // ruler so a ruler line crossing the origin is still legible.
+            self.paint_origin_marker(&painter);
+
+            // Ruler overlay (below the zoom-rect so a zoom drag's
+            // rectangle sits on top of any partial measurement).
             self.paint_ruler(&painter, &response);
 
-            // Crosshair cursor while ruler is armed.
-            if self.ruler_active {
+            // Zoom-to-region rubber band — paints only while a drag is
+            // in flight.
+            self.paint_zoom_rect(&painter, &response);
+
+            // Cursor hint: crosshair while ruler or origin-setting
+            // armed, otherwise the egui default (arrow). Zoom-rect
+            // drag inherits whatever's active.
+            if self.ruler_active || self.setting_origin {
                 ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
             }
         });
@@ -549,6 +1364,7 @@ fn unzip_release(source_name: String, bytes: Vec<u8>) -> Result<LoadedRelease, S
         ZipArchive::new(cursor).map_err(|e| format!("Not a valid ZIP archive: {}", e))?;
 
     let mut entries = BTreeMap::new();
+    let mut had_gerber_or_drill = false;
     for i in 0..archive.len() {
         let mut entry = archive
             .by_index(i)
@@ -558,8 +1374,18 @@ fn unzip_release(source_name: String, bytes: Vec<u8>) -> Result<LoadedRelease, S
         }
         let name = entry.name().to_string();
         let lower = name.to_lowercase();
-        if !(lower.ends_with(".gbr") || lower.ends_with(".drl")) {
+        // Skip OS sidecar files that ride along in zips but aren't
+        // real content (macOS __MACOSX/, .DS_Store, Windows Thumbs.db).
+        if lower.contains("__macosx/")
+            || lower.ends_with("/.ds_store")
+            || lower == ".ds_store"
+            || lower.ends_with("/thumbs.db")
+            || lower == "thumbs.db"
+        {
             continue;
+        }
+        if lower.ends_with(".gbr") || lower.ends_with(".drl") {
+            had_gerber_or_drill = true;
         }
         let basename = std::path::Path::new(&name)
             .file_name()
@@ -574,7 +1400,7 @@ fn unzip_release(source_name: String, bytes: Vec<u8>) -> Result<LoadedRelease, S
         entries.insert(basename, buf);
     }
 
-    if entries.is_empty() {
+    if !had_gerber_or_drill {
         return Err(
             "No .gbr or .drl files found in the ZIP. \
              Pick a CopperForge release zip or a gerber+drill bundle."

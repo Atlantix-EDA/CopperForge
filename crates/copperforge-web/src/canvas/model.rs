@@ -83,22 +83,57 @@ impl LayerKind {
         Self::Other
     }
 
-    /// Default color picked to read against a dark panel background.
-    /// Soldermask layers carry alpha so they sit *on top of* copper
-    /// without occluding it.
+    /// Default color, matched to copperforge-core's LayerType::color()
+    /// so the desktop and browser viewers look identical.
+    ///
+    /// Notes:
+    /// - Top copper = canonical CopperForge orange (matches Copper(1)).
+    /// - Bottom copper = green (matches Copper(2), which on a 2-layer
+    ///   board IS the bottom — the common case).
+    /// - Inner copper layers hue-cycle so In1 / In2 / In3 stay distinct.
+    /// - Soldermask is deep green/blue with alpha so it sits on top of
+    ///   copper without occluding it (desktop pattern).
+    /// - The premultiplied/unmultiplied distinction matches what the
+    ///   gerber renderer expects when alpha-blending.
     pub fn default_color(&self) -> Color32 {
         match self {
-            Self::EdgeCuts => Color32::from_rgb(240, 230, 50),
-            Self::TopCopper => Color32::from_rgb(200, 100, 50),
-            Self::BottomCopper => Color32::from_rgb(40, 100, 200),
-            Self::InnerCopper(_) => Color32::from_rgb(120, 160, 80),
-            Self::TopMask => Color32::from_rgba_unmultiplied(20, 120, 30, 150),
-            Self::BottomMask => Color32::from_rgba_unmultiplied(20, 95, 30, 150),
-            Self::TopSilk => Color32::from_rgb(230, 230, 230),
-            Self::BottomSilk => Color32::from_rgb(180, 180, 180),
-            Self::TopPaste => Color32::from_rgb(170, 170, 170),
-            Self::BottomPaste => Color32::from_rgb(150, 150, 150),
-            Self::Other => Color32::from_rgb(110, 115, 125),
+            // Edge cuts: bright yellow, fully opaque — must read on every layer below.
+            Self::EdgeCuts => Color32::from_rgba_premultiplied(255, 255, 0, 250),
+
+            // Copper.
+            Self::TopCopper => Color32::from_rgba_premultiplied(184, 115, 51, 220),
+            Self::BottomCopper => Color32::from_rgba_premultiplied(115, 184, 51, 220),
+            Self::InnerCopper(n) => {
+                // Same formula as copperforge-core LayerType::Copper(n) for n > 2:
+                // hue = n * 60° (mod 360), 70% saturation, 80% value.
+                // Effective n for inner layers starts at 2 (In1 = layer 2).
+                let layer_n = (*n as u16) + 1; // In1 → 2, In2 → 3, …
+                let hue = (layer_n as f32 * 60.0) % 360.0;
+                let (r, g, b) = hsv_to_rgb(hue, 0.7, 0.8);
+                Color32::from_rgba_premultiplied(
+                    (r * 255.0) as u8,
+                    (g * 255.0) as u8,
+                    (b * 255.0) as u8,
+                    220,
+                )
+            }
+
+            // Soldermask: deep green top / deep blue bottom, semi-transparent.
+            Self::TopMask => Color32::from_rgba_premultiplied(0, 132, 80, 180),
+            Self::BottomMask => Color32::from_rgba_premultiplied(0, 80, 132, 180),
+
+            // Silkscreen: high-opacity white on both sides; bottom slightly dimmer.
+            Self::TopSilk => Color32::from_rgba_premultiplied(255, 255, 255, 250),
+            Self::BottomSilk => Color32::from_rgba_premultiplied(220, 220, 220, 250),
+
+            // Paste: silver / darker silver, semi-transparent.
+            Self::TopPaste => Color32::from_rgba_premultiplied(192, 192, 192, 200),
+            Self::BottomPaste => Color32::from_rgba_premultiplied(128, 128, 128, 200),
+
+            // Catch-all — hue-cycled in `RenderLayer` based on its
+            // position in the scene's `Other` count. The placeholder
+            // grey here is replaced at `from_entries` time.
+            Self::Other => Color32::from_rgba_premultiplied(110, 115, 125, 180),
         }
     }
 
@@ -173,6 +208,25 @@ pub enum LayerSide {
     Neutral,
 }
 
+/// HSV → RGB, all components in 0..1, hue in degrees. Lifted from
+/// copperforge-core (`hsv_to_rgb` in layer_store/types.rs) so the
+/// inner-copper and `Other` cycling match the desktop exactly.
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (f32, f32, f32) {
+    let h = h.rem_euclid(360.0);
+    let c = v * s;
+    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+    let m = v - c;
+    let (r1, g1, b1) = match h as u32 / 60 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    (r1 + m, g1 + m, b1 + m)
+}
+
 /// One gerber layer in the scene — wraps the parsed `GerberLayer` with
 /// the metadata the renderer needs.
 pub struct RenderLayer {
@@ -223,8 +277,13 @@ impl GerberScene {
     /// Parse every `.gbr` in `entries` into a `RenderLayer`. `.drl`
     /// drill files are skipped — Excellon parsing is separate work and
     /// the demo's first job is to show that gerbers render.
+    ///
+    /// `Other` layers get a hue-cycled color (matches the desktop's
+    /// UserLayer hue pattern with 47° steps) so M10 / M11 / M12 / etc
+    /// stay visually distinct rather than all looking the same grey.
     pub fn from_entries(entries: &BTreeMap<String, Vec<u8>>) -> Self {
         let mut layers = Vec::with_capacity(entries.len());
+        let mut other_index: u16 = 0;
         for (name, bytes) in entries {
             if !name.to_lowercase().ends_with(".gbr") {
                 continue;
@@ -238,10 +297,25 @@ impl GerberScene {
                 }
             };
             let kind = LayerKind::from_filename(name);
+            let color = if matches!(kind, LayerKind::Other) {
+                // 47° steps cycle through all 8 distinct hues before
+                // repeating — same gap as copperforge-core's UserLayer.
+                let hue = (other_index as f32 * 47.0) % 360.0;
+                let (r, g, b) = hsv_to_rgb(hue, 0.55, 0.85);
+                other_index += 1;
+                Color32::from_rgba_premultiplied(
+                    (r * 255.0) as u8,
+                    (g * 255.0) as u8,
+                    (b * 255.0) as u8,
+                    180,
+                )
+            } else {
+                kind.default_color()
+            };
             layers.push(RenderLayer {
                 filename: name.clone(),
                 kind,
-                color: kind.default_color(),
+                color,
                 visible: kind.default_visible(),
                 gerber: GerberLayer::new(doc.into_commands()),
             });

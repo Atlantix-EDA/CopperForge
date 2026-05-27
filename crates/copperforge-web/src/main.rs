@@ -29,7 +29,17 @@ fn main() {
 #[cfg(target_arch = "wasm32")]
 mod app;
 #[cfg(target_arch = "wasm32")]
+mod board_weight;
+#[cfg(target_arch = "wasm32")]
+mod bom;
+#[cfg(target_arch = "wasm32")]
 mod canvas;
+#[cfg(target_arch = "wasm32")]
+mod centroid;
+#[cfg(target_arch = "wasm32")]
+mod pad_count;
+#[cfg(target_arch = "wasm32")]
+mod release_pkg;
 
 #[cfg(target_arch = "wasm32")]
 fn main() {

@@ -12,14 +12,19 @@ use gerber_viewer::{GerberRenderer, GerberTransform, RenderConfiguration, ViewSt
 use super::model::GerberScene;
 
 /// Paint every visible layer in the scene. `view_state` carries the
-/// pan/zoom transform; `transform` is per-layer image transform
-/// (identity here — we don't apply mirroring/rotation in the demo).
-pub fn paint(painter: &Painter, scene: &GerberScene, view_state: ViewState) {
+/// pan/zoom transform; `transform` carries the *image* transform
+/// (mirror, rotation, origin pivot) applied uniformly to every layer.
+/// The caller is responsible for assembling the transform from the
+/// app's mirror/rotation toggles and the scene's bbox center.
+pub fn paint(
+    painter: &Painter,
+    scene: &GerberScene,
+    view_state: ViewState,
+    transform: &GerberTransform,
+) {
     let config = RenderConfiguration::default();
-    let transform = GerberTransform::default();
-
     for layer in scene.layers.iter().filter(|l| l.visible) {
-        let renderer = GerberRenderer::new(&config, view_state, &transform, &layer.gerber);
+        let renderer = GerberRenderer::new(&config, view_state, transform, &layer.gerber);
         renderer.paint_layer(painter, layer.color);
     }
 }
