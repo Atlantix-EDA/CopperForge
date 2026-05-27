@@ -81,6 +81,9 @@ bytemuck = "1.23"
 egui_mobius_reactive = { git = "https://github.com/saturn77/egui_mobius", tag = "v0.4.0" }
 
 # Citizen panel lifecycle (lives in the same egui_mobius monorepo).
+# Note: egui_mobius v0.4.0 requires egui 0.34; gerber_viewer 0.5.0
+# pins egui 0.33. Until one side rebases, citizen/lens integration in
+# the wasm app is deferred — copperforge-web rolls its own dock + log.
 egui_citizen = { git = "https://github.com/saturn77/egui_mobius", tag = "v0.4.0" }
 
 # KiCad file parsing (BOM extraction from .kicad_pcb)

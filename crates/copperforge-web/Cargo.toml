@@ -17,9 +17,10 @@ name = "copperforge-web"
 path = "src/main.rs"
 
 [dependencies]
-egui   = { workspace = true }
-eframe = { workspace = true }
-log    = { workspace = true }
+egui         = { workspace = true }
+eframe       = { workspace = true }
+egui_extras  = { workspace = true }
+log          = { workspace = true }
 
 # Gerber parsing + GerberRenderer (egui::Painter dispatch). Same crate the
 # native viewer uses — re-using it means the wasm and native views render
@@ -27,6 +28,13 @@ log    = { workspace = true }
 # the parse pipeline and the painter-driven renderer.
 gerber_viewer = { workspace = true }
 nalgebra     = { workspace = true }
+
+# Dockable panel layout. Same crate the native CopperForge uses; we
+# wrap each existing panel as a tab so users can drag/split/close.
+# (egui_lens + the citizen framework would slot in here too once the
+# egui_mobius monorepo and gerber_viewer settle on a common egui
+# version — they currently disagree on 0.33 vs 0.34.)
+egui_dock = { workspace = true }
 
 # Browser app composes against the shared library — same wasm-compatible
 # code that runs in the native app.

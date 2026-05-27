@@ -16,6 +16,8 @@ use nalgebra::{Point2, Vector2};
 
 use std::collections::HashMap;
 
+use egui_dock::{DockArea, DockState, NodeIndex};
+
 use crate::board_weight::{self, WeightInputs};
 use crate::bom::{self, Mount};
 use crate::canvas::model::LayerSide;
@@ -23,6 +25,8 @@ use crate::canvas::{paint as paint_canvas, GerberScene};
 use crate::centroid::{self, CentroidEntry};
 use crate::pad_count::{self, SmtPadCount};
 use crate::release_pkg;
+use crate::state::{self, Logger};
+use crate::tabs::{Tab, TabKind, TabViewer};
 
 // ── Upload result types ─────────────────────────────────────────────────
 
@@ -106,6 +110,11 @@ pub struct WebApp {
     /// About dialog visibility (opened by clicking the brand label).
     about_open: bool,
 
+    /// IANA timezone name for the top-bar clock — `None` = browser
+    /// local. Set in the Settings tab; consumed by
+    /// `browser_local_clock` via JS `Intl.DateTimeFormat`.
+    user_timezone: Option<String>,
+
     /// Parsed CPL/centroid rows from the uploaded zip (if present).
     /// Drives the component-count rows in the Board stats panel and the
     /// PCBWAY_FAB_SPECS.md table.
@@ -136,6 +145,15 @@ pub struct WebApp {
     /// in the bottom status bar; updated each frame the canvas is
     /// hovered.
     cursor_world: Option<Point2<f64>>,
+
+    /// Append-only log buffer rendered by the Logger dock tab.
+    /// Bounded at 1000 entries. Placeholder for egui_lens until the
+    /// egui_mobius monorepo (egui 0.34) and gerber_viewer (egui 0.33)
+    /// align on a common egui version.
+    pub logger: Logger,
+    /// egui_dock layout. Tabs become draggable / splittable / closable;
+    /// fresh sessions get the layout from `default_dock_layout()`.
+    pub dock_state: DockState<Tab>,
 }
 
 impl Default for WebApp {
@@ -157,6 +175,7 @@ impl Default for WebApp {
             mirror_y: false,
             units_mils: false,
             about_open: false,
+            user_timezone: None,
             centroid: Vec::new(),
             bom_mount: HashMap::new(),
             smt_pads: SmtPadCount::default(),
@@ -164,8 +183,39 @@ impl Default for WebApp {
             design_offset: Point2::new(0.0, 0.0),
             setting_origin: false,
             cursor_world: None,
+            logger: Logger::new(),
+            dock_state: default_dock_layout(),
         }
     }
+}
+
+/// Initial dock layout — Canvas in the centre, Layers docked left,
+/// Board docked right, Logger across the bottom. Matches zicad's
+/// general shape (sidebar + main + bottom log) adapted to PCB review.
+///
+/// ```text
+/// ┌────────┬──────────────────┬────────┐
+/// │ Layers │      Canvas      │ Board  │
+/// ├────────┴──────────────────┴────────┤
+/// │              Logger                │
+/// └────────────────────────────────────┘
+/// ```
+fn default_dock_layout() -> DockState<Tab> {
+    let mut dock = DockState::new(vec![Tab::new(TabKind::Canvas)]);
+    let surface = dock.main_surface_mut();
+    // Right side hosts Board and Settings as sibling tabs — Board is
+    // listed first so it's active on launch; Settings is one tab-click
+    // away. Same shape zicad uses for Project + Settings on the left.
+    let [_, _right] = surface.split_right(
+        NodeIndex::root(),
+        0.78,
+        vec![Tab::new(TabKind::Board), Tab::new(TabKind::Settings)],
+    );
+    let [_, _left] =
+        surface.split_left(NodeIndex::root(), 0.22, vec![Tab::new(TabKind::Layers)]);
+    let [_, _bottom] =
+        surface.split_below(NodeIndex::root(), 0.78, vec![Tab::new(TabKind::Logger)]);
+    dock
 }
 
 /// Component-count rollup derived by joining the centroid (designator →
@@ -232,25 +282,49 @@ impl WebApp {
             Ok(loaded) => {
                 let scene = GerberScene::from_entries(&loaded.entries);
                 let total_layers = scene.layers.len();
-                // Centroid: designator → side.  BOM: designator → mount.
-                // Both feed the joined ComponentStats in the panel and
-                // the PCBWay fab-specs sheet.
                 let centroid = centroid::find_and_parse(&loaded.entries)
                     .unwrap_or_default();
                 let bom_mount = bom::find_and_parse(&loaded.entries);
                 let smt_pads = pad_count::count_from_entries(&loaded.entries);
+
+                // Logger entries cover the full upload+parse flow so
+                // the Logger tab tells a story instead of being silent.
+                self.logger.custom(
+                    "upload",
+                    format!(
+                        "Loaded {} — {} gerber + {} drill ({:.1} KB)",
+                        loaded.source_name,
+                        loaded.gerber_count(),
+                        loaded.drill_count(),
+                        loaded.total_bytes() as f64 / 1024.0,
+                    ),
+                );
+                self.logger
+                    .custom("parse", format!("Parsed {} gerber layers", total_layers));
                 if !centroid.is_empty() {
-                    log::info!(
-                        "Parsed {} centroid entries from release zip",
-                        centroid.len()
+                    self.logger.custom(
+                        "parse",
+                        format!("Centroid: {} component placements", centroid.len()),
                     );
                 }
                 if !bom_mount.is_empty() {
-                    log::info!(
-                        "Parsed {} BOM mount-type entries from release zip",
-                        bom_mount.len()
+                    self.logger.custom(
+                        "parse",
+                        format!("BOM: {} designators classified", bom_mount.len()),
                     );
                 }
+                if smt_pads.any() {
+                    self.logger.custom(
+                        "parse",
+                        format!(
+                            "SMT pads: {} top + {} bottom = {} total",
+                            smt_pads.top,
+                            smt_pads.bottom,
+                            smt_pads.total()
+                        ),
+                    );
+                }
+
                 self.scene = Some(scene);
                 self.view_initialized = false;
                 self.centroid = centroid;
@@ -258,10 +332,14 @@ impl WebApp {
                 self.smt_pads = smt_pads;
                 self.loaded = Some(loaded);
                 self.error = None;
-                log::info!("Parsed {} gerber layers", total_layers);
             }
-            Err(e) if e == "canceled" => {}
-            Err(e) => self.error = Some(e),
+            Err(e) if e == "canceled" => {
+                self.logger.info("Upload canceled");
+            }
+            Err(e) => {
+                self.logger.error(format!("Upload failed: {}", e));
+                self.error = Some(e);
+            }
         }
     }
 
@@ -358,7 +436,10 @@ impl WebApp {
                 self.design_offset = g;
                 self.setting_origin = false;
                 self.zoom_rect_start = None;
-                log::info!("Origin set to ({:.3}, {:.3}) mm", g.x, g.y);
+                self.logger.custom(
+                    "origin",
+                    format!("Origin set to ({:.3}, {:.3}) mm", g.x, g.y),
+                );
             }
         }
 
@@ -493,8 +574,16 @@ impl WebApp {
         };
         if let Err(e) = release_pkg::trigger_download(&download_name, &bytes) {
             self.error = Some(format!("Download failed: {}", e));
+            self.logger.error(format!("Export failed: {}", e));
         } else {
-            log::info!("Exported {} ({} bytes)", download_name, bytes.len());
+            self.logger.custom(
+                "export",
+                format!(
+                    "Exported {} ({:.1} KB)",
+                    download_name,
+                    bytes.len() as f64 / 1024.0,
+                ),
+            );
         }
     }
 
@@ -590,6 +679,526 @@ impl WebApp {
 
 // ── eframe::App ─────────────────────────────────────────────────────────
 
+// ── Per-tab render methods ──────────────────────────────────────────────
+//
+// Each method renders one dock tab's body. They live on `WebApp` so the
+// existing state stays close to the UI that mutates it; the TabViewer
+// in `tabs.rs` is just dispatch.
+
+impl WebApp {
+    /// Layers tab — preset row, scrollable per-layer checkboxes with
+    /// color swatches. Empty hint when no scene has been parsed yet.
+    pub fn render_layer_tab(&mut self, ui: &mut egui::Ui) {
+        if self.scene.is_none() {
+            ui.label(
+                egui::RichText::new("Upload a release ZIP to see layers.")
+                    .small()
+                    .italics()
+                    .color(egui::Color32::from_rgb(140, 150, 170)),
+            );
+            return;
+        }
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Layers").strong());
+            ui.with_layout(
+                egui::Layout::right_to_left(egui::Align::Center),
+                |ui| {
+                    if ui.small_button("⟲ fit").clicked() {
+                        self.view_initialized = false;
+                    }
+                },
+            );
+        });
+        ui.horizontal(|ui| {
+            if ui.small_button("All").clicked() {
+                apply_preset(self.scene.as_mut(), Preset::All);
+            }
+            if ui.small_button("None").clicked() {
+                apply_preset(self.scene.as_mut(), Preset::None);
+            }
+            if ui.small_button("Top").clicked() {
+                apply_preset(self.scene.as_mut(), Preset::Top);
+            }
+            if ui.small_button("Bottom").clicked() {
+                apply_preset(self.scene.as_mut(), Preset::Bottom);
+            }
+        });
+        ui.separator();
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                if let Some(ref mut scene) = self.scene {
+                    let mut indices: Vec<usize> = (0..scene.layers.len()).collect();
+                    indices.sort_by_key(|&i| {
+                        std::cmp::Reverse(scene.layers[i].kind.z_order())
+                    });
+                    for i in indices {
+                        let label = scene.layers[i].display_label();
+                        let layer = &mut scene.layers[i];
+                        let label_color = layer.color;
+                        ui.horizontal(|ui| {
+                            ui.color_edit_button_srgba(&mut layer.color);
+                            ui.checkbox(
+                                &mut layer.visible,
+                                egui::RichText::new(label).color(label_color),
+                            );
+                        });
+                    }
+                }
+            });
+    }
+
+    /// Board tab — dimensions, component counts, SMT pads, weight calc.
+    /// Renders an empty hint pre-upload.
+    pub fn render_board_tab(&mut self, ui: &mut egui::Ui) {
+        if self.scene.is_none() {
+            ui.label(
+                egui::RichText::new("Upload a release ZIP to see board stats.")
+                    .small()
+                    .italics()
+                    .color(egui::Color32::from_rgb(140, 150, 170)),
+            );
+            return;
+        }
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Board").strong());
+            ui.with_layout(
+                egui::Layout::right_to_left(egui::Align::Center),
+                |ui| {
+                    ui.selectable_value(&mut self.units_mils, false, "mm");
+                    ui.selectable_value(&mut self.units_mils, true, "mil");
+                },
+            );
+        });
+        ui.separator();
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                if let Some(bbox) =
+                    self.scene.as_ref().and_then(|s| s.combined_bbox())
+                {
+                    let w_mm = bbox.width();
+                    let h_mm = bbox.height();
+                    let (w, h, unit) = if self.units_mils {
+                        (w_mm / 0.0254, h_mm / 0.0254, "mil")
+                    } else {
+                        (w_mm, h_mm, "mm")
+                    };
+                    let row_kv = |ui: &mut egui::Ui, k: &str, v: String| {
+                        ui.horizontal(|ui| {
+                            ui.label(k);
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.monospace(v);
+                                },
+                            );
+                        });
+                    };
+                    row_kv(ui, "Width", format!("{:.2} {}", w, unit));
+                    row_kv(ui, "Height", format!("{:.2} {}", h, unit));
+                    let area = w * h;
+                    let suffix = if self.units_mils { "mil²" } else { "mm²" };
+                    row_kv(ui, "Area", format!("{:.1} {}", area, suffix));
+                } else {
+                    ui.label(
+                        egui::RichText::new("No Edge.Cuts in loaded zip")
+                            .small()
+                            .italics()
+                            .color(egui::Color32::from_rgb(140, 150, 170)),
+                    );
+                }
+
+                ui.add_space(8.0);
+                ui.separator();
+                ui.label(egui::RichText::new("Components").strong());
+                let row = |ui: &mut egui::Ui, label: &str, n: usize| {
+                    ui.horizontal(|ui| {
+                        ui.label(label);
+                        ui.with_layout(
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                ui.monospace(format!("{}", n));
+                            },
+                        );
+                    });
+                };
+                if self.centroid.is_empty() {
+                    ui.label(
+                        egui::RichText::new(
+                            "No centroid CSV in the upload — \
+                             component counts unavailable.",
+                        )
+                        .small()
+                        .italics()
+                        .color(egui::Color32::from_rgb(140, 150, 170)),
+                    );
+                } else {
+                    let s = ComponentStats::build(&self.centroid, &self.bom_mount);
+                    row(ui, "Total", s.total);
+                    row(ui, "Top", s.top);
+                    row(ui, "Bottom", s.bottom);
+                    if self.bom_mount.is_empty() {
+                        ui.add_space(4.0);
+                        ui.label(
+                            egui::RichText::new(
+                                "SMT / THT split: no BOM CSV in upload.",
+                            )
+                            .small()
+                            .italics()
+                            .color(egui::Color32::from_rgb(140, 150, 170)),
+                        );
+                    } else {
+                        row(ui, "SMT", s.smt);
+                        row(ui, "Through-hole", s.tht);
+                        if s.unknown_mount > 0 {
+                            row(ui, "Unclassified", s.unknown_mount);
+                        }
+                    }
+                }
+                if self.smt_pads.any() {
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new("SMT pads").strong());
+                    row(ui, "Top", self.smt_pads.top);
+                    row(ui, "Bottom", self.smt_pads.bottom);
+                    row(ui, "Total", self.smt_pads.total());
+                }
+
+                ui.add_space(6.0);
+                ui.separator();
+                ui.label(egui::RichText::new("Weight").strong());
+                ui.label(
+                    egui::RichText::new(
+                        "Bare board, no components. Approximation: bbox × \
+                         fill %.",
+                    )
+                    .small()
+                    .italics()
+                    .color(egui::Color32::from_rgb(140, 150, 170)),
+                );
+                egui::Grid::new("weight_inputs")
+                    .num_columns(2)
+                    .spacing([8.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label("Thickness");
+                        ui.add(
+                            egui::DragValue::new(
+                                &mut self.weight_inputs.board_thickness_mm,
+                            )
+                            .speed(0.1)
+                            .range(0.2..=6.0)
+                            .suffix(" mm"),
+                        );
+                        ui.end_row();
+                        ui.label("Outer Cu");
+                        ui.add(
+                            egui::DragValue::new(
+                                &mut self.weight_inputs.copper_oz_outer,
+                            )
+                            .speed(0.25)
+                            .range(0.25..=8.0)
+                            .suffix(" oz"),
+                        );
+                        ui.end_row();
+                        ui.label("Inner Cu");
+                        ui.add(
+                            egui::DragValue::new(
+                                &mut self.weight_inputs.copper_oz_inner,
+                            )
+                            .speed(0.25)
+                            .range(0.25..=8.0)
+                            .suffix(" oz"),
+                        );
+                        ui.end_row();
+                        ui.label("Fill %");
+                        ui.add(
+                            egui::DragValue::new(
+                                &mut self.weight_inputs.copper_fill_pct,
+                            )
+                            .speed(1.0)
+                            .range(5.0..=100.0)
+                            .suffix(" %"),
+                        );
+                        ui.end_row();
+                    });
+                if let Some(w) = self
+                    .scene
+                    .as_ref()
+                    .and_then(|s| board_weight::compute(s, &self.weight_inputs))
+                {
+                    ui.add_space(4.0);
+                    let row_g = |ui: &mut egui::Ui, label: &str, g: f64| {
+                        ui.horizontal(|ui| {
+                            ui.label(label);
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.monospace(format!("{:.2} g", g));
+                                },
+                            );
+                        });
+                    };
+                    row_g(ui, "Substrate (FR4)", w.substrate_g);
+                    row_g(
+                        ui,
+                        &format!("Outer Cu ×{}", w.outer_copper_layers),
+                        w.copper_outer_g,
+                    );
+                    if w.inner_copper_layers > 0 {
+                        row_g(
+                            ui,
+                            &format!("Inner Cu ×{}", w.inner_copper_layers),
+                            w.copper_inner_g,
+                        );
+                    }
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Total").strong());
+                        ui.with_layout(
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                ui.monospace(
+                                    egui::RichText::new(format!("{:.2} g", w.total_g))
+                                        .strong(),
+                                );
+                            },
+                        );
+                    });
+                }
+            });
+    }
+
+    /// Canvas tab — the gerber viewport. Allocates the full available
+    /// rect, paints grid + scene + overlays, handles right-drag pan /
+    /// wheel zoom / left-drag rubber-band / ruler / origin.
+    pub fn render_canvas_tab(&mut self, ui: &mut egui::Ui) {
+        if self.scene.is_none() {
+            ui.centered_and_justified(|ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "Upload a release ZIP from the toolbar to begin.",
+                    )
+                    .italics()
+                    .color(egui::Color32::from_rgb(140, 150, 170)),
+                );
+            });
+            return;
+        }
+
+        let (rect, response) = ui.allocate_exact_size(
+            ui.available_size(),
+            egui::Sense::click_and_drag(),
+        );
+        ui.painter()
+            .rect_filled(rect, 0.0, egui::Color32::from_rgb(18, 22, 28));
+
+        if !self.view_initialized {
+            if let Some(ref scene) = self.scene {
+                if let Some(bbox) = scene.combined_bbox() {
+                    self.view_state.fit_view(rect, &bbox, 1.0);
+                    self.view_initialized = true;
+                }
+            }
+        }
+
+        self.cursor_world = response
+            .hover_pos()
+            .map(|p| self.view_state.screen_to_gerber_coords(p));
+
+        self.handle_canvas_input(ui, &response);
+
+        let painter = ui.painter_at(rect);
+        draw_grid(&painter, &rect, &self.view_state, &self.grid_settings);
+
+        if let Some(ref scene) = self.scene {
+            let pivot = scene
+                .combined_bbox()
+                .map(|b| b.center())
+                .unwrap_or_else(|| Point2::new(0.0, 0.0));
+            let transform = GerberTransform {
+                mirroring: Mirroring {
+                    x: self.mirror_x,
+                    y: self.mirror_y,
+                },
+                origin: Vector2::new(pivot.x, pivot.y),
+                ..Default::default()
+            };
+            paint_canvas(&painter, scene, self.view_state, &transform);
+        }
+
+        self.paint_origin_marker(&painter);
+        self.paint_ruler(&painter, &response);
+        self.paint_zoom_rect(&painter, &response);
+
+        if self.ruler_active || self.setting_origin {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        }
+    }
+
+    /// Logger tab — renders the in-house buffer + toolbar (System,
+    /// Clear, per-level filter). Toolbar emits a `LogAction` rather
+    /// than mutating the buffer directly so the System dump can read
+    /// other `WebApp` state (loaded zip, scene, timezone) before
+    /// being inserted.
+    pub fn render_logger_tab(&mut self, ui: &mut egui::Ui) {
+        let avail = ui.available_size_before_wrap();
+        let action = ui
+            .allocate_ui_with_layout(
+                avail,
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| state::show_log(ui, &mut self.logger),
+            )
+            .inner;
+        if action.clear_requested {
+            self.logger.clear();
+            self.logger.info("Log cleared");
+        }
+        if action.system_info_requested {
+            self.log_system_info();
+        }
+    }
+
+    /// Snapshot of app + browser context, emitted as a block of log
+    /// entries. Useful for bug reports and the "what state was the
+    /// user in" question.
+    fn log_system_info(&mut self) {
+        let ua = web_sys::window()
+            .and_then(|w| w.navigator().user_agent().ok())
+            .unwrap_or_else(|| "unknown".to_string());
+        let tz = self
+            .user_timezone
+            .clone()
+            .unwrap_or_else(|| "browser local".to_string());
+        self.logger.info("── System snapshot ──");
+        self.logger
+            .info(format!("CopperForge web {}", env!("CARGO_PKG_VERSION")));
+        self.logger.info("Target: wasm32-unknown-unknown");
+        self.logger.info(format!("User agent: {}", ua));
+        self.logger.info(format!("Clock timezone: {}", tz));
+        if let Some(ref loaded) = self.loaded {
+            self.logger.info(format!(
+                "Loaded: {} ({:.1} KB, {} entries)",
+                loaded.source_name,
+                loaded.total_bytes() as f64 / 1024.0,
+                loaded.entries.len(),
+            ));
+        } else {
+            self.logger.info("Loaded: (nothing — upload a release zip)");
+        }
+        if let Some(ref scene) = self.scene {
+            self.logger
+                .info(format!("Parsed gerber layers: {}", scene.layers.len()));
+        }
+        if !self.centroid.is_empty() {
+            self.logger
+                .info(format!("Centroid placements: {}", self.centroid.len()));
+        }
+        if !self.bom_mount.is_empty() {
+            self.logger
+                .info(format!("BOM-classified designators: {}", self.bom_mount.len()));
+        }
+        if self.smt_pads.any() {
+            self.logger.info(format!(
+                "SMT pads: {} top / {} bottom",
+                self.smt_pads.top, self.smt_pads.bottom,
+            ));
+        }
+        let origin = if self.design_offset.x == 0.0 && self.design_offset.y == 0.0 {
+            "(0.000, 0.000) — default".to_string()
+        } else {
+            format!(
+                "({:.3}, {:.3}) mm",
+                self.design_offset.x, self.design_offset.y
+            )
+        };
+        self.logger.info(format!("Design origin: {}", origin));
+    }
+
+    /// Settings tab — user preferences. Today just the timezone for
+    /// the top-bar clock; future expansion: theme, default grid,
+    /// units, layer-preset names.
+    pub fn render_settings_tab(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new("Settings").strong());
+        ui.label(
+            egui::RichText::new("Preferences applied immediately.")
+                .small()
+                .italics()
+                .color(egui::Color32::from_rgb(140, 150, 170)),
+        );
+        ui.separator();
+        ui.add_space(6.0);
+
+        ui.label(egui::RichText::new("Clock timezone").strong());
+        ui.label(
+            egui::RichText::new(
+                "Used by the clock in the upper-right of the ribbon.",
+            )
+            .small()
+            .color(egui::Color32::from_rgb(140, 150, 170)),
+        );
+        ui.add_space(4.0);
+
+        // Common IANA timezones, in roughly geographic order. Browser
+        // local is the default first entry.
+        let zones: &[(Option<&str>, &str)] = &[
+            (None, "Browser local"),
+            (Some("UTC"), "UTC"),
+            (Some("America/Los_Angeles"), "America / Los Angeles (Pacific)"),
+            (Some("America/Denver"), "America / Denver (Mountain)"),
+            (Some("America/Chicago"), "America / Chicago (Central)"),
+            (Some("America/New_York"), "America / New York (Eastern)"),
+            (Some("America/Toronto"), "America / Toronto"),
+            (Some("America/Sao_Paulo"), "America / São Paulo"),
+            (Some("Europe/London"), "Europe / London"),
+            (Some("Europe/Paris"), "Europe / Paris"),
+            (Some("Europe/Berlin"), "Europe / Berlin"),
+            (Some("Europe/Helsinki"), "Europe / Helsinki"),
+            (Some("Asia/Dubai"), "Asia / Dubai"),
+            (Some("Asia/Kolkata"), "Asia / Kolkata"),
+            (Some("Asia/Shanghai"), "Asia / Shanghai"),
+            (Some("Asia/Tokyo"), "Asia / Tokyo"),
+            (Some("Australia/Sydney"), "Australia / Sydney"),
+        ];
+        let current = self.user_timezone.clone();
+        let current_label = zones
+            .iter()
+            .find(|(tz, _)| tz.map(String::from) == current)
+            .map(|(_, label)| *label)
+            .unwrap_or("Browser local");
+        egui::ComboBox::from_id_salt("settings_timezone_combo")
+            .selected_text(current_label)
+            .width(280.0)
+            .show_ui(ui, |ui| {
+                for (tz, label) in zones {
+                    let owned = tz.map(String::from);
+                    let was_selected = self.user_timezone == owned;
+                    if ui.selectable_label(was_selected, *label).clicked() {
+                        if !was_selected {
+                            self.user_timezone = owned;
+                            self.logger.info(format!(
+                                "Clock timezone → {}",
+                                tz.unwrap_or("browser local"),
+                            ));
+                        }
+                    }
+                }
+            });
+
+        ui.add_space(6.0);
+        ui.label(
+            egui::RichText::new(
+                "Times rendered via the browser's Intl.DateTimeFormat \
+                 with hour12 = false, en-CA locale.",
+            )
+            .small()
+            .italics()
+            .color(egui::Color32::from_rgb(140, 150, 170)),
+        );
+    }
+}
+
 impl eframe::App for WebApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain_pending();
@@ -599,24 +1208,16 @@ impl eframe::App for WebApp {
             .exact_height(36.0)
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
-                    // Brand label is clickable → About modal. Bigger,
-                    // bolder text and an underline-on-hover style so
-                    // it reads as a real affordance.
-                    let brand = ui.add(
-                        egui::Label::new(
-                            egui::RichText::new("CopperForge")
-                                .strong()
-                                .size(18.0)
-                                .color(egui::Color32::from_rgb(184, 115, 51)),
-                        )
-                        .sense(egui::Sense::click()),
+                    // Brand label — display-only. The About modal is
+                    // opened via the dedicated ℹ About button in the
+                    // right-side cluster, so the brand stays a label
+                    // and avoids the dual-affordance UX problem.
+                    ui.label(
+                        egui::RichText::new("CopperForge")
+                            .strong()
+                            .size(18.0)
+                            .color(egui::Color32::from_rgb(184, 115, 51)),
                     );
-                    if brand.hovered() {
-                        ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
-                    }
-                    if brand.clicked() {
-                        self.about_open = true;
-                    }
                     ui.label(
                         egui::RichText::new("· Browser Demo")
                             .small()
@@ -732,10 +1333,49 @@ impl eframe::App for WebApp {
                             format!("⚠ {}", e),
                         );
                     }
-                    if let Some(ref loaded) = self.loaded {
-                        ui.with_layout(
-                            egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| {
+
+                    // ── Right-aligned cluster ───────────────────────
+                    // Right-to-left layout: first call lands RIGHTMOST.
+                    // Order on screen (left → right):
+                    //   [file status]  ℹ About  ·  HH:MM:SS  YYYY-MM-DD
+                    // Sized at 14pt (egui default is ~12) so the
+                    // status / clock / button match the visual weight
+                    // of the left-side toolbar.
+                    ui.with_layout(
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            let clock_text =
+                                browser_local_clock(self.user_timezone.as_deref());
+                            let tz_label = self
+                                .user_timezone
+                                .as_deref()
+                                .unwrap_or("browser local");
+                            ui.label(
+                                egui::RichText::new(clock_text)
+                                    .monospace()
+                                    .size(14.0)
+                                    .color(egui::Color32::from_rgb(200, 220, 240)),
+                            )
+                            .on_hover_text(format!(
+                                "Timezone: {}\nChange in the Settings tab.",
+                                tz_label
+                            ));
+                            ui.separator();
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("ℹ About")
+                                            .size(14.0)
+                                            .color(egui::Color32::from_rgb(184, 115, 51)),
+                                    ),
+                                )
+                                .on_hover_text("About CopperForge")
+                                .clicked()
+                            {
+                                self.about_open = true;
+                            }
+                            if let Some(ref loaded) = self.loaded {
+                                ui.separator();
                                 ui.label(
                                     egui::RichText::new(format!(
                                         "{} gerber · {} drill · {:.1} KB",
@@ -743,352 +1383,25 @@ impl eframe::App for WebApp {
                                         loaded.drill_count(),
                                         loaded.total_bytes() as f64 / 1024.0,
                                     ))
-                                    .small()
-                                    .color(egui::Color32::from_rgb(160, 180, 200)),
+                                    .size(14.0)
+                                    .color(egui::Color32::from_rgb(180, 200, 220)),
                                 );
                                 ui.label(
                                     egui::RichText::new(&loaded.source_name)
                                         .strong()
-                                        .small(),
+                                        .size(14.0),
                                 );
-                            },
-                        );
-                    }
+                            }
+                        },
+                    );
                 });
             });
 
-        // ── Left panel: layer checkboxes + presets ─────────────────
-        if self.scene.is_some() {
-            egui::SidePanel::left("layer_panel")
-                .resizable(true)
-                .default_width(220.0)
-                .width_range(180.0..=360.0)
-                .show(ctx, |ui| {
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Layers").strong());
-                        ui.with_layout(
-                            egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| {
-                                if ui.small_button("⟲ fit").clicked() {
-                                    self.view_initialized = false;
-                                }
-                            },
-                        );
-                    });
-
-                    // Presets — All / None / Top / Bottom. EdgeCuts is
-                    // forced visible on Top/Bottom so the user sees the
-                    // board outline regardless.
-                    ui.horizontal(|ui| {
-                        if ui.small_button("All").clicked() {
-                            apply_preset(self.scene.as_mut(), Preset::All);
-                        }
-                        if ui.small_button("None").clicked() {
-                            apply_preset(self.scene.as_mut(), Preset::None);
-                        }
-                        if ui.small_button("Top").clicked() {
-                            apply_preset(self.scene.as_mut(), Preset::Top);
-                        }
-                        if ui.small_button("Bottom").clicked() {
-                            apply_preset(self.scene.as_mut(), Preset::Bottom);
-                        }
-                    });
-                    ui.separator();
-
-                    egui::ScrollArea::vertical()
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            // Iterate in *display* order — render order is
-                            // z_order ascending; flip to top-first so the
-                            // visible surface sits at the top of the list.
-                            if let Some(ref mut scene) = self.scene {
-                                let mut indices: Vec<usize> =
-                                    (0..scene.layers.len()).collect();
-                                indices.sort_by_key(|&i| {
-                                    std::cmp::Reverse(scene.layers[i].kind.z_order())
-                                });
-                                for i in indices {
-                                    // Per-layer row: color swatch
-                                    // (clickable color picker) + visibility
-                                    // checkbox with the layer label. Take
-                                    // ONE `&mut RenderLayer` out of the
-                                    // Vec, then borrow disjoint fields of
-                                    // it inside the closure — borrowck
-                                    // sees through field-level access
-                                    // when going via a single `&mut T`.
-                                    let label = scene.layers[i].display_label();
-                                    let layer = &mut scene.layers[i];
-                                    let label_color = layer.color;
-                                    ui.horizontal(|ui| {
-                                        ui.color_edit_button_srgba(&mut layer.color);
-                                        ui.checkbox(
-                                            &mut layer.visible,
-                                            egui::RichText::new(label).color(label_color),
-                                        );
-                                    });
-                                }
-                            }
-                        });
-                });
-        }
-
-        // ── Right panel: board stats ───────────────────────────────
-        if self.scene.is_some() {
-            egui::SidePanel::right("board_stats")
-                .resizable(true)
-                .default_width(220.0)
-                .width_range(180.0..=320.0)
-                .show(ctx, |ui| {
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Board").strong());
-                        ui.with_layout(
-                            egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| {
-                                ui.selectable_value(&mut self.units_mils, false, "mm");
-                                ui.selectable_value(&mut self.units_mils, true, "mil");
-                            },
-                        );
-                    });
-                    ui.separator();
-                    if let Some(bbox) =
-                        self.scene.as_ref().and_then(|s| s.combined_bbox())
-                    {
-                        let w_mm = bbox.width();
-                        let h_mm = bbox.height();
-                        let (w, h, unit) = if self.units_mils {
-                            (w_mm / 0.0254, h_mm / 0.0254, "mil")
-                        } else {
-                            (w_mm, h_mm, "mm")
-                        };
-                        ui.horizontal(|ui| {
-                            ui.label("Width");
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    ui.monospace(format!("{:.2} {}", w, unit));
-                                },
-                            );
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Height");
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    ui.monospace(format!("{:.2} {}", h, unit));
-                                },
-                            );
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Area");
-                            let area = w * h;
-                            let suffix = if self.units_mils { "mil²" } else { "mm²" };
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    ui.monospace(format!("{:.1} {}", area, suffix));
-                                },
-                            );
-                        });
-                    } else {
-                        ui.label(
-                            egui::RichText::new("No Edge.Cuts in loaded zip")
-                                .small()
-                                .italics()
-                                .color(egui::Color32::from_rgb(140, 150, 170)),
-                        );
-                    }
-                    ui.add_space(8.0);
-                    ui.separator();
-                    ui.label(egui::RichText::new("Components").strong());
-                    if self.centroid.is_empty() {
-                        ui.label(
-                            egui::RichText::new(
-                                "No centroid CSV in the upload — \
-                                 component counts unavailable.",
-                            )
-                            .small()
-                            .italics()
-                            .color(egui::Color32::from_rgb(140, 150, 170)),
-                        );
-                    } else {
-                        let s = ComponentStats::build(
-                            &self.centroid,
-                            &self.bom_mount,
-                        );
-                        let row = |ui: &mut egui::Ui, label: &str, n: usize| {
-                            ui.horizontal(|ui| {
-                                ui.label(label);
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        ui.monospace(format!("{}", n));
-                                    },
-                                );
-                            });
-                        };
-                        row(ui, "Total", s.total);
-                        row(ui, "Top", s.top);
-                        row(ui, "Bottom", s.bottom);
-                        if self.bom_mount.is_empty() {
-                            ui.add_space(4.0);
-                            ui.label(
-                                egui::RichText::new(
-                                    "SMT / THT split: no BOM CSV in upload.",
-                                )
-                                .small()
-                                .italics()
-                                .color(egui::Color32::from_rgb(140, 150, 170)),
-                            );
-                        } else {
-                            row(ui, "SMT", s.smt);
-                            row(ui, "Through-hole", s.tht);
-                            if s.unknown_mount > 0 {
-                                row(ui, "Unclassified", s.unknown_mount);
-                                ui.label(
-                                    egui::RichText::new(
-                                        "Unclassified = footprint name didn't match \
-                                         the SMT/THT heuristics. Usually custom or \
-                                         non-KiCad-stock libraries.",
-                                    )
-                                    .small()
-                                    .italics()
-                                    .color(egui::Color32::from_rgb(140, 150, 170)),
-                                );
-                            }
-                        }
-                    }
-                    // SMT pad count — independent of the BOM; derived
-                    // from F.Paste / B.Paste flashes. Only render the
-                    // sub-table if at least one paste layer was found.
-                    if self.smt_pads.any() {
-                        ui.add_space(6.0);
-                        ui.label(egui::RichText::new("SMT pads").strong());
-                        let row = |ui: &mut egui::Ui, label: &str, n: usize| {
-                            ui.horizontal(|ui| {
-                                ui.label(label);
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        ui.monospace(format!("{}", n));
-                                    },
-                                );
-                            });
-                        };
-                        row(ui, "Top", self.smt_pads.top);
-                        row(ui, "Bottom", self.smt_pads.bottom);
-                        row(ui, "Total", self.smt_pads.total());
-                    }
-
-                    // ── Weight (approximation) ─────────────────────
-                    ui.add_space(6.0);
-                    ui.separator();
-                    ui.label(egui::RichText::new("Weight").strong());
-                    ui.label(
-                        egui::RichText::new(
-                            "Bare board, no components. Approximation: bbox × \
-                             fill %. Adjust the inputs for your stackup.",
-                        )
-                        .small()
-                        .italics()
-                        .color(egui::Color32::from_rgb(140, 150, 170)),
-                    );
-                    egui::Grid::new("weight_inputs")
-                        .num_columns(2)
-                        .spacing([8.0, 4.0])
-                        .show(ui, |ui| {
-                            ui.label("Thickness");
-                            ui.add(
-                                egui::DragValue::new(
-                                    &mut self.weight_inputs.board_thickness_mm,
-                                )
-                                .speed(0.1)
-                                .range(0.2..=6.0)
-                                .suffix(" mm"),
-                            );
-                            ui.end_row();
-                            ui.label("Outer Cu");
-                            ui.add(
-                                egui::DragValue::new(
-                                    &mut self.weight_inputs.copper_oz_outer,
-                                )
-                                .speed(0.25)
-                                .range(0.25..=8.0)
-                                .suffix(" oz"),
-                            );
-                            ui.end_row();
-                            ui.label("Inner Cu");
-                            ui.add(
-                                egui::DragValue::new(
-                                    &mut self.weight_inputs.copper_oz_inner,
-                                )
-                                .speed(0.25)
-                                .range(0.25..=8.0)
-                                .suffix(" oz"),
-                            );
-                            ui.end_row();
-                            ui.label("Fill %");
-                            ui.add(
-                                egui::DragValue::new(
-                                    &mut self.weight_inputs.copper_fill_pct,
-                                )
-                                .speed(1.0)
-                                .range(5.0..=100.0)
-                                .suffix(" %"),
-                            );
-                            ui.end_row();
-                        });
-
-                    if let Some(w) =
-                        self.scene
-                            .as_ref()
-                            .and_then(|s| board_weight::compute(s, &self.weight_inputs))
-                    {
-                        ui.add_space(4.0);
-                        let row = |ui: &mut egui::Ui, label: &str, g: f64| {
-                            ui.horizontal(|ui| {
-                                ui.label(label);
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        ui.monospace(format!("{:.2} g", g));
-                                    },
-                                );
-                            });
-                        };
-                        row(ui, "Substrate (FR4)", w.substrate_g);
-                        row(
-                            ui,
-                            &format!("Outer Cu ×{}", w.outer_copper_layers),
-                            w.copper_outer_g,
-                        );
-                        if w.inner_copper_layers > 0 {
-                            row(
-                                ui,
-                                &format!("Inner Cu ×{}", w.inner_copper_layers),
-                                w.copper_inner_g,
-                            );
-                        }
-                        ui.add_space(2.0);
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("Total").strong());
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    ui.monospace(
-                                        egui::RichText::new(format!(
-                                            "{:.2} g",
-                                            w.total_g
-                                        ))
-                                        .strong(),
-                                    );
-                                },
-                            );
-                        });
-                    }
-                });
-        }
+        // Keep the clock ticking without external input. egui only
+        // repaints on input or explicit requests, so without this the
+        // clock would freeze between user actions. One repaint per
+        // second is enough for HH:MM:SS precision.
+        ctx.request_repaint_after(std::time::Duration::from_secs(1));
 
         // ── Bottom status bar: cursor coordinates ──────────────────
         if self.scene.is_some() {
@@ -1167,145 +1480,173 @@ impl eframe::App for WebApp {
         }
 
         // ── About modal ────────────────────────────────────────────
+        // Movable (no anchor), softer palette than the previous pass:
+        // background is a neutral dark-warm grey, copper accent reads
+        // as an accent rather than dominating, body text is muted-warm
+        // off-white. Title bar drag works as usual on egui::Window —
+        // no special handling needed.
         if self.about_open {
-            egui::Window::new("About CopperForge")
-                .open(&mut self.about_open)
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                .default_width(420.0)
-                .show(ctx, |ui| {
-                    ui.add_space(4.0);
-                    ui.heading(
-                        egui::RichText::new("CopperForge")
-                            .color(egui::Color32::from_rgb(184, 115, 51)),
-                    );
-                    ui.label(
-                        egui::RichText::new("PCB & CAM companion for KiCad")
-                            .italics(),
-                    );
-                    ui.add_space(8.0);
-                    ui.separator();
-                    ui.add_space(8.0);
-                    ui.label(
+            // Softer than the first cut: less saturated copper for body
+            // accents, plain Frame::window stroke so the modal feels
+            // like a window not a poster.
+            let bg = egui::Color32::from_rgb(34, 30, 28);
+            let copper_strong = egui::Color32::from_rgb(199, 123, 60); // matches mark fill
+            let copper_soft = egui::Color32::from_rgb(170, 140, 110);
+            let body = egui::Color32::from_rgb(210, 205, 195);
+            let muted = egui::Color32::from_rgb(150, 145, 135);
+            let frame = egui::Frame::window(&ctx.style())
+                .fill(bg)
+                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(70, 60, 50)))
+                .corner_radius(8.0)
+                .inner_margin(egui::Margin::same(18));
+            egui::Window::new(
+                egui::RichText::new("About CopperForge").color(copper_soft),
+            )
+            .open(&mut self.about_open)
+            .collapsible(false)
+            .resizable(true)
+            .default_size(egui::vec2(520.0, 360.0))
+            // No `.anchor(...)` — the window is fully draggable. First
+            // open lands a little inset from the top-right so it
+            // doesn't cover the centre canvas immediately.
+            .default_pos(egui::pos2(120.0, 80.0))
+            .frame(frame)
+            .show(ctx, |ui| {
+                // Hero banner across the top of the modal — embedded
+                // via `include_bytes!`, decoded by egui_extras's
+                // image loader registered in main.rs. The 800×535
+                // palette-quantized PNG is ~195 KB; smaller than the
+                // 1.6 MB original while still crisp at the modal's
+                // typical render size.
+                let hero_bytes = include_bytes!(
+                    "../../../assets/media/copperforge-hero-800.png"
+                );
+                ui.add(
+                    egui::Image::from_bytes(
+                        "bytes://copperforge-hero-800.png",
+                        hero_bytes.as_slice(),
+                    )
+                    .corner_radius(6.0)
+                    .max_width(ui.available_width()),
+                );
+                ui.add_space(8.0);
+                ui.heading(
+                    egui::RichText::new("CopperForge")
+                        .size(28.0)
+                        .color(copper_strong),
+                );
+                ui.label(
+                    egui::RichText::new("PCB & CAM companion for KiCad")
+                        .italics()
+                        .color(muted),
+                );
+                ui.add_space(8.0);
+                ui.separator();
+                ui.add_space(8.0);
+                ui.label(
+                    egui::RichText::new(
                         "This is the wasm browser demo. It runs the same \
                          egui app the desktop version does, parsing your \
                          release ZIP entirely in your browser — no upload, \
                          no server.",
-                    );
-                    ui.add_space(8.0);
-                    ui.label(
+                    )
+                    .color(body),
+                );
+                ui.add_space(6.0);
+                ui.label(
+                    egui::RichText::new(
                         "Drag a CopperForge release zip onto Upload, then \
                          pan with right-mouse drag, zoom with the wheel, \
                          and left-drag a region to zoom in.",
+                    )
+                    .color(body),
+                );
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Source").color(muted));
+                    ui.add_space(8.0);
+                    ui.hyperlink_to(
+                        egui::RichText::new("github.com/Atlantix-EDA/CopperForge")
+                            .color(copper_soft),
+                        "https://github.com/Atlantix-EDA/CopperForge",
                     );
-                    ui.add_space(12.0);
-                    ui.horizontal(|ui| {
-                        ui.label("Source:");
-                        ui.hyperlink_to(
-                            "github.com/Atlantix-EDA/CopperForge",
-                            "https://github.com/Atlantix-EDA/CopperForge",
-                        );
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Version:");
-                        ui.monospace(env!("CARGO_PKG_VERSION"));
-                    });
                 });
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Version").color(muted));
+                    ui.add_space(8.0);
+                    ui.monospace(
+                        egui::RichText::new(env!("CARGO_PKG_VERSION")).color(body),
+                    );
+                });
+            });
         }
 
-        // ── Central panel: the gerber canvas ───────────────────────
+        // ── Central panel: egui_dock area with Canvas / Layers /
+        //    Board / Logger tabs. All four are draggable, splittable,
+        //    and closable. Initial layout in `default_dock_layout()`.
         egui::CentralPanel::default().show(ctx, |ui| {
-            if self.scene.is_none() {
-                ui.centered_and_justified(|ui| {
-                    ui.label(
-                        egui::RichText::new(
-                            "Upload a release ZIP from the toolbar to begin.",
-                        )
-                        .italics()
-                        .color(egui::Color32::from_rgb(140, 150, 170)),
-                    );
-                });
-                return;
+            // Clone the layout so the TabViewer can hold `&mut self`
+            // exclusively for the duration of the dock render — same
+            // pattern zicad/src/main.rs uses. Cheap (it's a small
+            // tree of indices), and writes back at the end so user
+            // drags/splits persist across frames.
+            let mut dock_state = self.dock_state.clone();
+            {
+                let style = egui_dock::Style::from_egui(ctx.style().as_ref());
+                let mut viewer = TabViewer { app: self };
+                DockArea::new(&mut dock_state)
+                    .style(style)
+                    .show_inside(ui, &mut viewer);
             }
-
-            // Carve out the full panel as the drawing canvas and grab a
-            // drag-sensitive response so right-drag pan + wheel zoom can
-            // hook in.
-            let (rect, response) = ui.allocate_exact_size(
-                ui.available_size(),
-                egui::Sense::click_and_drag(),
-            );
-            ui.painter().rect_filled(
-                rect,
-                0.0,
-                egui::Color32::from_rgb(18, 22, 28),
-            );
-
-            // First-paint fit-to-view, and after each new upload.
-            if !self.view_initialized {
-                if let Some(ref scene) = self.scene {
-                    if let Some(bbox) = scene.combined_bbox() {
-                        self.view_state.fit_view(rect, &bbox, 1.0);
-                        self.view_initialized = true;
-                    }
-                }
-            }
-
-            // Live cursor coordinates for the bottom status bar.
-            // None when the pointer leaves the canvas, so the bar
-            // shows its idle hint rather than a stale last-position.
-            self.cursor_world = response
-                .hover_pos()
-                .map(|p| self.view_state.screen_to_gerber_coords(p));
-
-            self.handle_canvas_input(ui, &response);
-
-            // Clip the painter to the canvas rect so nothing bleeds
-            // into the side panel during pan/zoom.
-            let painter = ui.painter_at(rect);
-
-            // Grid first (under everything else).
-            draw_grid(&painter, &rect, &self.view_state, &self.grid_settings);
-
-            // Build the image transform — mirroring is pivoted on the
-            // scene's bbox center so the board doesn't fly off-canvas
-            // when toggled.
-            if let Some(ref scene) = self.scene {
-                let pivot = scene
-                    .combined_bbox()
-                    .map(|b| b.center())
-                    .unwrap_or_else(|| Point2::new(0.0, 0.0));
-                let transform = GerberTransform {
-                    mirroring: Mirroring {
-                        x: self.mirror_x,
-                        y: self.mirror_y,
-                    },
-                    origin: Vector2::new(pivot.x, pivot.y),
-                    ..Default::default()
-                };
-                paint_canvas(&painter, scene, self.view_state, &transform);
-            }
-
-            // Origin marker — sits above the gerbers but below the
-            // ruler so a ruler line crossing the origin is still legible.
-            self.paint_origin_marker(&painter);
-
-            // Ruler overlay (below the zoom-rect so a zoom drag's
-            // rectangle sits on top of any partial measurement).
-            self.paint_ruler(&painter, &response);
-
-            // Zoom-to-region rubber band — paints only while a drag is
-            // in flight.
-            self.paint_zoom_rect(&painter, &response);
-
-            // Cursor hint: crosshair while ruler or origin-setting
-            // armed, otherwise the egui default (arrow). Zoom-rect
-            // drag inherits whatever's active.
-            if self.ruler_active || self.setting_origin {
-                ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
-            }
+            self.dock_state = dock_state;
         });
+        // Cursor hint moved into `render_canvas_tab`; the dock area
+        // hosts the canvas now.
+    }
+}
+
+// ── Clock with optional timezone override ───────────────────────────────
+
+/// `HH:MM:SS  YYYY-MM-DD` formatted via the browser's
+/// `Intl.DateTimeFormat`. `tz = None` means browser-local; otherwise
+/// pass any IANA name (e.g. `"Europe/Berlin"`). Falls back to direct
+/// `Date` field reads if the Intl call fails for any reason (very
+/// old browser or unknown timezone string).
+fn browser_local_clock(tz: Option<&str>) -> String {
+    use wasm_bindgen::JsValue;
+    let date = js_sys::Date::new_0();
+    // Build the options object: { hour12: false, year, month, day,
+    // hour, minute, second [, timeZone] }. en-CA gives ISO-style
+    // YYYY-MM-DD, HH:MM:SS which is closest to what we want without
+    // post-processing.
+    let opts = js_sys::Object::new();
+    let two_digit = JsValue::from_str("2-digit");
+    let numeric = JsValue::from_str("numeric");
+    let set = |key: &str, val: &JsValue| -> bool {
+        js_sys::Reflect::set(&opts, &JsValue::from_str(key), val).is_ok()
+    };
+    set("hour12", &JsValue::from_bool(false));
+    set("year", &numeric);
+    set("month", &two_digit);
+    set("day", &two_digit);
+    set("hour", &two_digit);
+    set("minute", &two_digit);
+    set("second", &two_digit);
+    if let Some(tz) = tz {
+        set("timeZone", &JsValue::from_str(tz));
+    }
+    // `Date.prototype.toLocaleString(locales, options)` — locales
+    // accepts a string or array; we pass the en-CA tag wrapped in
+    // an Array.
+    let locales = js_sys::Array::new();
+    locales.push(&JsValue::from_str("en-CA"));
+    let formatted = date.to_locale_string("en-CA", &opts);
+    let raw: String = formatted.into();
+    // en-CA emits "YYYY-MM-DD, HH:MM:SS"; reorder to
+    // "HH:MM:SS  YYYY-MM-DD" to match the previous look.
+    match raw.split_once(", ") {
+        Some((date_part, time_part)) => format!("{}  {}", time_part, date_part),
+        None => raw,
     }
 }
 

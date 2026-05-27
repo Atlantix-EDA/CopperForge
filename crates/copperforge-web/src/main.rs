@@ -37,9 +37,15 @@ mod canvas;
 #[cfg(target_arch = "wasm32")]
 mod centroid;
 #[cfg(target_arch = "wasm32")]
+mod logo;
+#[cfg(target_arch = "wasm32")]
 mod pad_count;
 #[cfg(target_arch = "wasm32")]
 mod release_pkg;
+#[cfg(target_arch = "wasm32")]
+mod state;
+#[cfg(target_arch = "wasm32")]
+mod tabs;
 
 #[cfg(target_arch = "wasm32")]
 fn main() {
@@ -66,7 +72,13 @@ fn main() {
             .start(
                 canvas,
                 web_options,
-                Box::new(|_cc| Ok(Box::new(app::WebApp::default()))),
+                Box::new(|cc| {
+                    // Register egui_extras's image loaders so
+                    // `Image::from_bytes(...)` can decode PNGs (used
+                    // by the About modal's hero) at runtime.
+                    egui_extras::install_image_loaders(&cc.egui_ctx);
+                    Ok(Box::new(app::WebApp::default()))
+                }),
             )
             .await;
 
