@@ -256,6 +256,22 @@ impl ComponentStats {
 }
 
 impl WebApp {
+    /// Decompress the bundled example zip + drive the same code path
+    /// as a successful upload. Synchronous (no file picker / no
+    /// async), so the demo loads instantly on click.
+    fn load_example_release(&mut self) {
+        const EXAMPLE_ZIP: &[u8] =
+            include_bytes!("../../../assets/media/cparti-fpga-dev-board.zip");
+        let result = unzip_release(
+            "cparti-fpga-dev-board.zip".to_string(),
+            EXAMPLE_ZIP.to_vec(),
+        );
+        // Stuff the result into pending_load so `drain_pending`
+        // handles it identically to a user-picked file — log lines,
+        // scene build, centroid/BOM parse, everything.
+        *self.pending_load.lock().unwrap() = Some(result);
+    }
+
     fn pick_release_zip(&mut self, ctx: &egui::Context) {
         if self.loading {
             return;
@@ -1234,6 +1250,20 @@ impl eframe::App for WebApp {
                         .clicked()
                     {
                         self.pick_release_zip(ctx);
+                    }
+                    // Example release — bundled as raw bytes so first-time
+                    // visitors see a real board without having to find +
+                    // upload their own gerbers. Same code path as a
+                    // successful upload from there on.
+                    if ui
+                        .add_enabled(!self.loading, egui::Button::new("📂 Load Example"))
+                        .on_hover_text(
+                            "Load a bundled example release \
+                             (CPArti FPGA dev board, 4-layer).",
+                        )
+                        .clicked()
+                    {
+                        self.load_example_release();
                     }
 
                     if self.scene.is_some() {

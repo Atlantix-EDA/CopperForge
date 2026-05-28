@@ -1,12 +1,11 @@
 <div align="center">
 <img width="360" src="./assets/media/copperforge-hero.png" alt="CopperForge"></img>
 
-Companion PCB Release & Manufacturing Tool for KiCad.
+PCB release & manufacturing companion for KiCad.
 
 [![egui](https://img.shields.io/badge/egui-0.33-blue)](https://github.com/emilk/egui)
 [![KiCad](https://img.shields.io/badge/KiCad-10-blue)](https://www.kicad.org/)
 [![Rust](https://img.shields.io/badge/rust-1.88%2B-blue)](https://www.rust-lang.org/)
-[![egui_mobius](https://img.shields.io/badge/built_with-egui__mobius-orange)](https://github.com/saturn77/egui_mobius)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
 </div>
@@ -19,118 +18,104 @@ Companion PCB Release & Manufacturing Tool for KiCad.
 
 ## What it does
 
-CopperForge sits alongside KiCad and owns the manufacturing-backend
-workflow: taking a finished PCB, generating fabrication outputs, viewing
-the board in 3D, tagging a release, and tracking every revision you send
-to a fab.
+CopperForge sits between "the PCB is done in KiCad" and "the fab has everything they need":
+gerber generation, 2D and 3D inspection, BOM and centroid export, release packaging, and
+revision tracking — all from one app, with no manual file shuffling.
 
-- **Release packaging** — one click cuts `<project>/outputs/<rev>/<name>_<rev>[_<date>].zip`
-  containing gerbers, drill files, fabrication data, and a Markdown
-  `RELEASE_NOTES.md` (KiCad version, host OS, git commit, description,
-  user changes). Right-click a rev in the Projects tree → Regenerate to
-  overwrite in place.
-- **Gerber processing** — generate via `kicad-cli` (auto-detected on
-  PATH / Flatpak / Snap), load, inspect. Live stale-file warning when
-  the PCB is modified on disk.
-- **3D gerber viewer** — an embedded OpenGL view rendering the
-  gerber-driven board outline, F.Cu / B.Cu copper, and a translucent
-  F.Mask / B.Mask soldermask. Handles 2- and 4+ layer stacks with
-  correct stack-position layer numbering.
-- **BOM & fabrication data** — parse `.kicad_pcb` files directly via
-  `kiparse` (no live IPC to KiCad needed); export a grouped BOM to CSV
-  and XLSX — enriched with Manufacturer / MPN from your KiCad symbol
-  libraries — plus a PCBWay / JLCPCB-style centroid (CPL) file.
-- **Fab-preset DRC** — pick a manufacturer (Advanced Circuits, JLC PCB,
-  or a Conservative default) and CopperForge loads that vendor's
-  trace/space, annular ring, and edge-clearance rules in one click; a
-  Custom editor lets you dial in your own. Checks run across every
-  copper layer, with corner-rounding overlays for visual fix-up.
-- **Project database** — embedded [redb](https://github.com/cberner/redb)
-  store tracks imported projects, BOM snapshots, and release history.
-- **Shell / Terminal / Logger panels** — in-app command shell, a bash
-  terminal, and a structured event log.
+- **Release packaging.** One click produces `outputs/<rev>/<project>_<rev>[_<date>].zip`
+  with gerbers, drills, BOM (CSV + XLSX), centroid (CPL), and a `RELEASE_NOTES.md`
+  capturing the KiCad version, host OS, and git commit at release time. PCBWay-target
+  releases additionally bundle a fab-specs sheet (board dimensions, SMT/THT part and pad
+  counts).
+- **Gerber viewers.** A 2D viewer (grid, ruler, manual origin, mirror, layer presets,
+  per-layer color) and a 3D viewer (board outline, copper, soldermask) — both running on
+  the same parsed layer data.
+- **BOM & centroid.** Pulled directly from `.kicad_pcb` via `kiparse`, no live IPC to
+  KiCad required. BOM is symbol-library enriched (Manufacturer, MPN, datasheet); centroid
+  follows the PCBWay / JLCPCB CPL convention.
+- **DRC with vendor presets.** Pick a fab (Advanced Circuits, JLCPCB, or a Conservative
+  default) and the trace/space and clearance rules load in one click. A custom editor
+  handles in-house rules.
+- **Project database.** Embedded [redb](https://github.com/cberner/redb) tracks every
+  imported project, BOM snapshot, and release. On-disk releases that the database loses
+  are rediscovered and reattached on next load.
+- **KiCad 10 ready.** Detects `kicad-cli` installed via PATH, Flatpak, or Snap (cached
+  after first launch). Reads both KiCad 10's `--no-protel-ext` filenames and the
+  traditional / Protel patterns.
 
-## KiCad 10 support
+## Two distributions
 
-CopperForge detects KiCad installed via PATH, Flatpak, or Snap. Discovery
-runs once at startup; subsequent gerber/drill operations reuse the
-cached method without re-probing (Flatpak cold-start is ~1–3 s, so this
-matters). Gerber filename detection supports KiCad 10's `--no-protel-ext`
-naming convention (`Top Layer.gbr`, `Bottom Solder.gbr`, etc.) alongside
-traditional KiCad and Protel patterns.
+CopperForge ships as a **wasm browser app** at [copperforge.dev](https://copperforge.dev)
+and as a **native desktop app** (Linux / macOS / Windows). Both targets share the same
+Rust core in `crates/copperforge-core/`, so gerber rendering, BOM and centroid parsing,
+release packaging, and PCBWay export behave identically where features overlap.
 
-## Install
+### 1. Browser — [copperforge.dev](https://copperforge.dev)
 
-Prebuilt binary, Linux / macOS / Windows — no Rust toolchain needed:
+Click **📂 Load Example** for a bundled 4-layer FPGA dev board, or upload your own
+CopperForge release zip. The 2D viewer, Board stats panel, and PCBWay re-export all
+work client-side — nothing leaves your browser.
+
+What's in the browser today: 2D gerber viewer (grid, ruler, mirror, origin, layer
+presets, color picker), board stats (dimensions, component counts, SMT pads, weight
+estimate), BOM and centroid display, Release / Release-for-PCBWay download.
+
+What's desktop-only: gerber **generation** (needs `kicad-cli`, native binary),
+direct `.kicad_pcb` parsing (BOM and centroid are read from the uploaded zip instead),
+the project database, and the 3D viewer.
+
+### 2. Desktop
+
+Full feature set: gerber generation, 2D and 3D viewers, BOM and centroid export, DRC,
+release packaging, project database. Prebuilt binaries, no Rust toolchain required:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -LsSf \
   https://github.com/Atlantix-EDA/CopperForge/releases/latest/download/copperforge-installer.sh | sh
 ```
 
-Binaries for `x86_64`/`aarch64` Linux, `x86_64`/`aarch64` macOS, and
-`x86_64` Windows are published to
-[GitHub Releases](https://github.com/Atlantix-EDA/CopperForge/releases)
-on every tagged version, with SHA-256 checksums alongside. The release
-pipeline is driven by [cargo-dist](https://github.com/axodotdev/cargo-dist).
+`x86_64` / `aarch64` Linux, `x86_64` / `aarch64` macOS, and `x86_64` Windows are published
+to [Releases](https://github.com/Atlantix-EDA/CopperForge/releases) on every tagged version
+with SHA-256 checksums alongside.
 
-### Build from source
+#### Build from source
 
 Requires Rust 1.88+.
 
 ```bash
 git clone https://github.com/Atlantix-EDA/CopperForge.git
 cd CopperForge
-cargo run
+cargo run --release
 ```
 
 ## Status
 
-Active development. Shipped:
-
-- Release workflow (zip + markdown notes + per-rev DB tracking + regenerate)
-- 3D gerber viewer (board outline, copper, and soldermask; 2- and 4-layer stacks)
-- BOM & centroid export (CSV / XLSX with symbol-library enrichment, CPL centroid)
-- Projects tab rework + Project Edit modal
-- Shell / Terminal / Logger panels
-- AppLifecycle with explicit init + cached kicad-cli discovery
-
-In flight / planned:
-
-- 3D drill-hole and silkscreen rendering
-- Vendor packaging (PCBWay, Sierra Proto Express, JLCPCB specifics)
-- DRC algorithm enhancements
-- Multi-rev diff view (outputs/rev_01 vs rev_02)
+Under active development. The release workflow, 2D and 3D viewers, BOM and centroid export,
+PCBWay-target release, DRC, and the project database are shipping. In-progress and planned
+work (multi-rev diff, more vendor packaging, expanded DRC) lives in the issues.
 
 ## Architecture
 
-CopperForge is a native [egui](https://github.com/emilk/egui)
-application built on the
-[`egui_mobius`](https://github.com/saturn77/egui_mobius) framework — the
-`egui_citizen` pattern for panel lifecycle, layered on
-`egui_mobius_reactive`'s `Dynamic<T>` / `Derived<T>` reactive
-primitives. It serves as a real-world reference implementation of the
-citizen pattern.
+Native [egui](https://github.com/emilk/egui) application sharing its core with a wasm browser
+build. Both targets compile from `crates/copperforge-core/`.
 
-| Category | Crates |
-|----------|--------|
-| UI | egui 0.33, eframe 0.33 (glow-only, no accesskit), egui_dock 0.18 |
-| Citizen pattern | egui_citizen, egui_mobius_reactive |
-| Gerber handling | gerber_viewer 0.5, gerber_parser 0.4, gerber-types 0.7 |
-| BOM parsing | kiparse (Atlantix-EDA/atlantix-eda) |
-| Storage | redb (project database, single file) |
-| Release / export | zip (deflate-only), rust_xlsxwriter (BOM XLSX) |
+| | |
+|---|---|
+| UI | egui 0.33, eframe 0.33, egui_dock 0.18 |
+| Gerber | gerber-viewer, gerber-parser, gerber-types |
+| BOM parsing | [kiparse](https://github.com/Atlantix-EDA/atlantix-eda) |
+| Storage | redb (single-file embedded KV) |
+| Release archive | zip (deflate), rust_xlsxwriter |
+| Browser target | wasm32 via Trunk + eframe WebRunner |
 
 ## Credits
 
-- The 3D viewer is adapted from
-  [alumina-interface](https://github.com/timschmidt/alumina-interface) by
-  Timothy Schmidt (MIT) — its OpenGL renderer is the foundation CopperForge's
-  `render3d` module is built on.
-- Gerber rendering builds on
-  [gerber-viewer](https://github.com/MakerPnP/gerber-viewer) from the
-  MakerPnP project.
+- 3D viewer adapted from [alumina-interface](https://github.com/timschmidt/alumina-interface)
+  by Timothy Schmidt (MIT) — the OpenGL renderer behind CopperForge's `render3d` module.
+- Gerber rendering builds on [gerber-viewer](https://github.com/MakerPnP/gerber-viewer) from
+  the MakerPnP project.
 
 ## License
 
-MIT
+MIT.
+</content>
