@@ -122,9 +122,21 @@ zip = { version = "2.2", default-features = false, features = ["deflate"] }
 # XLSX BOM export
 rust_xlsxwriter = "0.95"
 
-# HTTP client for the cuforge-services health poller. Small blocking
-# client — fine for the background-thread ping pattern; no async runtime.
+# HTTP clients. ureq is the small blocking client backing the existing
+# native-only health poller — fine for the background-thread ping pattern.
+# reqwest is the async client used by the new cuforge_api module
+# (projects + releases REST surface) — same API on native and wasm32,
+# multipart upload support, future-proof for auth/cookies/streaming.
 ureq = { version = "2", features = ["json"] }
+# `default-features = false` strips reqwest's hyper-based native backend
+# (which doesn't compile on wasm32); per-target overrides in
+# copperforge-core's Cargo.toml add the right backend per platform.
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "stream"] }
+# Async runtime for native callers of reqwest. Wasm uses the browser's
+# event loop via wasm-bindgen-futures (separate dep on the web crate).
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync"] }
+# UUIDs in the wire format. Same crate as the server uses.
+uuid = { version = "1", features = ["v4", "serde", "js"] }
 
 # In-app shell: argument parsing (clap) + quote-aware tokenization (shlex).
 # `derive` pulls `clap_derive` so sub-commands can be declared inline;
