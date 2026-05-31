@@ -18,9 +18,8 @@ PCB release & manufacturing companion for KiCad.
 
 ## What it does
 
-CopperForge sits between "the PCB is done in KiCad" and "the fab has everything they need":
-gerber generation, 2D and 3D inspection, BOM and centroid export, release packaging, and
-revision tracking — all from one app, with no manual file shuffling.
+Generate KiCad gerbers, view them in 2D and 3D, export BOM and centroid, run vendor DRC, and
+package tagged release zips — from one app, with per-project revision history.
 
 - **Release packaging.** One click produces `outputs/<rev>/<project>_<rev>[_<date>].zip`
   with gerbers, drills, BOM (CSV + XLSX), centroid (CPL), and a `RELEASE_NOTES.md`

@@ -671,10 +671,14 @@ dependencies = [
 name = "copperforge"
 version = "0.5.1"
 dependencies = [
+ "chrono",
+ "clap",
  "copperforge-core",
+ "dirs",
  "eframe",
  "egui",
  "egui_extras",
+ "egui_mobius_reactive",
  "env_logger",
  "log",
 ]

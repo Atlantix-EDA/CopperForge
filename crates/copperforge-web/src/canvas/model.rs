@@ -137,11 +137,14 @@ impl LayerKind {
         }
     }
 
-    /// What's visible by default after loading? Just enough to see the
-    /// board shape + top routing on first paint. Everything else is
-    /// toggled on from the side panel.
+    /// What's visible by default after loading? All layers on, so the
+    /// board reads as a complete top-down composite on first paint —
+    /// the user toggles off what they don't want from the side panel,
+    /// rather than guessing which layers to enable. Matches KiCad's
+    /// own PCB viewer default.
     pub fn default_visible(&self) -> bool {
-        matches!(self, Self::EdgeCuts | Self::TopCopper)
+        let _ = self;
+        true
     }
 
     /// Higher z = painted later = on top. Mirrors the native renderer's

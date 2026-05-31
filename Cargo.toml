@@ -28,6 +28,10 @@ egui.workspace = true
 egui_extras.workspace = true
 env_logger.workspace = true
 log.workspace = true
+clap.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+egui_mobius_reactive.workspace = true
 
 # The profile that 'dist' will build with
 [profile.dist]

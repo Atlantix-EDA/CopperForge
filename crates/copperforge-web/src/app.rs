@@ -1575,19 +1575,21 @@ impl eframe::App for WebApp {
                 ui.add_space(8.0);
                 ui.label(
                     egui::RichText::new(
-                        "This is the wasm browser demo. It runs the same \
-                         egui app the desktop version does, parsing your \
-                         release ZIP entirely in your browser — no upload, \
-                         no server.",
+                        "PCB release viewer running entirely client-side — \
+                         no upload, no server. Loads CopperForge release \
+                         zips (gerbers, drill, BOM, centroid) and \
+                         re-exports them for fab, including a \
+                         PCBWay-target variant with fab-specs sheet.",
                     )
                     .color(body),
                 );
                 ui.add_space(6.0);
                 ui.label(
                     egui::RichText::new(
-                        "Drag a CopperForge release zip onto Upload, then \
-                         pan with right-mouse drag, zoom with the wheel, \
-                         and left-drag a region to zoom in.",
+                        "Click Upload Release ZIP and pick a file, or \
+                         Load Example for a bundled 4-layer FPGA dev \
+                         board. Right-mouse drag pans, wheel zooms, \
+                         left-drag rubber-bands a region.",
                     )
                     .color(body),
                 );

@@ -648,7 +648,7 @@ impl CopperForgeApp {
     /// Returns `(version_label, method, all_discovered_candidates)`. The list
     /// is the full set of working installs (plus a probed custom path if the
     /// override is one) so the settings UI can offer them as choices.
-    fn probe_kicad_cli(config: &ProjectConfig) -> (Option<String>, Option<String>, Vec<KicadCandidate>) {
+    pub fn probe_kicad_cli(config: &ProjectConfig) -> (Option<String>, Option<String>, Vec<KicadCandidate>) {
         let mut candidates = Self::discover_kicad_clis();
 
         if let Some(override_method) = config.kicad_cli_override.as_deref() {
