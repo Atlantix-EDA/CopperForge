@@ -24,6 +24,7 @@ use crate::canvas::model::LayerSide;
 use crate::canvas::{paint as paint_canvas, GerberScene};
 use crate::centroid::{self, CentroidEntry};
 use crate::pad_count::{self, SmtPadCount};
+use crate::projects::ProjectsPanel;
 use crate::release_pkg;
 use crate::state::{self, Logger};
 use crate::tabs::{Tab, TabKind, TabViewer};
@@ -151,6 +152,9 @@ pub struct WebApp {
     /// egui_mobius monorepo (egui 0.34) and gerber_viewer (egui 0.33)
     /// align on a common egui version.
     pub logger: Logger,
+    /// Projects tab — server-backed project + release management via
+    /// `cuforge_api::CuforgeApi`. See [[wasm-demo-plan]] Phase E.
+    pub projects_panel: ProjectsPanel,
     /// egui_dock layout. Tabs become draggable / splittable / closable;
     /// fresh sessions get the layout from `default_dock_layout()`.
     pub dock_state: DockState<Tab>,
@@ -184,6 +188,7 @@ impl Default for WebApp {
             setting_origin: false,
             cursor_world: None,
             logger: Logger::new(),
+            projects_panel: ProjectsPanel::new(),
             dock_state: default_dock_layout(),
         }
     }
@@ -203,13 +208,18 @@ impl Default for WebApp {
 fn default_dock_layout() -> DockState<Tab> {
     let mut dock = DockState::new(vec![Tab::new(TabKind::Canvas)]);
     let surface = dock.main_surface_mut();
-    // Right side hosts Board and Settings as sibling tabs — Board is
-    // listed first so it's active on launch; Settings is one tab-click
-    // away. Same shape zicad uses for Project + Settings on the left.
+    // Right side hosts Board, Settings, and Projects as sibling tabs —
+    // Board is listed first so it's active on launch; Projects and
+    // Settings are one tab-click away. Same shape zicad uses for
+    // Project + Settings on the left.
     let [_, _right] = surface.split_right(
         NodeIndex::root(),
         0.78,
-        vec![Tab::new(TabKind::Board), Tab::new(TabKind::Settings)],
+        vec![
+            Tab::new(TabKind::Board),
+            Tab::new(TabKind::Projects),
+            Tab::new(TabKind::Settings),
+        ],
     );
     let [_, _left] =
         surface.split_left(NodeIndex::root(), 0.22, vec![Tab::new(TabKind::Layers)]);
@@ -1213,6 +1223,13 @@ impl WebApp {
             .color(egui::Color32::from_rgb(140, 150, 170)),
         );
     }
+
+    /// Projects tab — server-backed project + release management.
+    /// Talks to `cuforge-services` via [`ProjectsPanel`], which owns
+    /// its own state, async dispatch, modals, and error surfacing.
+    pub fn render_projects_tab(&mut self, ui: &mut egui::Ui) {
+        self.projects_panel.show(ui);
+    }
 }
 
 impl eframe::App for WebApp {
@@ -1390,6 +1407,27 @@ impl eframe::App for WebApp {
                                 "Timezone: {}\nChange in the Settings tab.",
                                 tz_label
                             ));
+                            ui.separator();
+                            // User Guide — links out to the deployed
+                            // copperforge-web docs site (Astro). URL is
+                            // a one-line const in case the docs move to
+                            // a subdomain or subpath later.
+                            const USER_GUIDE_URL: &str = "https://copperforge.dev";
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("📖 Guide")
+                                            .size(14.0)
+                                            .color(egui::Color32::from_rgb(180, 200, 220)),
+                                    ),
+                                )
+                                .on_hover_text(format!(
+                                    "Open the User Guide ({USER_GUIDE_URL})",
+                                ))
+                                .clicked()
+                            {
+                                ctx.open_url(egui::OpenUrl::new_tab(USER_GUIDE_URL));
+                            }
                             ui.separator();
                             if ui
                                 .add(
