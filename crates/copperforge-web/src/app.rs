@@ -65,12 +65,17 @@ impl LoadedRelease {
 /// Result slot shared between the async file-load task and the egui
 /// update loop. `wasm32` is single-threaded so the Mutex is never
 /// actually contended; the bound exists for the future's `Send`.
-type LoadSlot = Arc<Mutex<Option<Result<LoadedRelease, String>>>>;
+///
+/// **Pub so the Projects panel can write into it after a successful
+/// release upload / download** — that's how an uploaded release auto-
+/// loads into the gerber viewer without the user clicking the toolbar's
+/// "Upload Release ZIP" a second time.
+pub type LoadSlot = Arc<Mutex<Option<Result<LoadedRelease, String>>>>;
 
 // ── App state ───────────────────────────────────────────────────────────
 
 pub struct WebApp {
-    pending_load: LoadSlot,
+    pub pending_load: LoadSlot,
     loading: bool,
     loaded: Option<LoadedRelease>,
     error: Option<String>,
@@ -162,8 +167,14 @@ pub struct WebApp {
 
 impl Default for WebApp {
     fn default() -> Self {
+        // Create the load slot first so the Projects panel can share it.
+        // Uploading a release in the Projects panel writes a
+        // `LoadedRelease` here; `drain_pending` then builds the gerber
+        // scene exactly as if the user had clicked Upload Release ZIP.
+        let pending_load = LoadSlot::default();
+        let projects_panel = ProjectsPanel::new(pending_load.clone());
         Self {
-            pending_load: LoadSlot::default(),
+            pending_load,
             loading: false,
             loaded: None,
             error: None,
@@ -188,7 +199,7 @@ impl Default for WebApp {
             setting_origin: false,
             cursor_world: None,
             logger: Logger::new(),
-            projects_panel: ProjectsPanel::new(),
+            projects_panel,
             dock_state: default_dock_layout(),
         }
     }
@@ -1409,10 +1420,11 @@ impl eframe::App for WebApp {
                             ));
                             ui.separator();
                             // User Guide — links out to the deployed
-                            // copperforge-web docs site (Astro). URL is
-                            // a one-line const in case the docs move to
-                            // a subdomain or subpath later.
-                            const USER_GUIDE_URL: &str = "https://copperforge.dev";
+                            // copperforge-web docs site (Astro), hosted on
+                            // Cloudflare Pages. The app itself lives at the
+                            // apex (copperforge.dev), so the guide gets its
+                            // own subdomain. One-line const in case it moves.
+                            const USER_GUIDE_URL: &str = "https://docs.copperforge.dev";
                             if ui
                                 .add(
                                     egui::Button::new(
@@ -1766,7 +1778,7 @@ async fn run_upload() -> Option<Result<LoadedRelease, String>> {
     Some(unzip_release(source_name, bytes))
 }
 
-fn unzip_release(source_name: String, bytes: Vec<u8>) -> Result<LoadedRelease, String> {
+pub fn unzip_release(source_name: String, bytes: Vec<u8>) -> Result<LoadedRelease, String> {
     use std::io::{Cursor, Read};
     use zip::ZipArchive;
 
