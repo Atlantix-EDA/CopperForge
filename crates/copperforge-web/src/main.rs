@@ -43,8 +43,6 @@ mod manufacturability;
 #[cfg(target_arch = "wasm32")]
 mod pad_count;
 #[cfg(target_arch = "wasm32")]
-mod projects;
-#[cfg(target_arch = "wasm32")]
 mod release_pkg;
 #[cfg(target_arch = "wasm32")]
 mod state;

@@ -24,7 +24,6 @@ use crate::canvas::model::LayerSide;
 use crate::canvas::{paint as paint_canvas, GerberScene};
 use crate::centroid::{self, CentroidEntry};
 use crate::pad_count::{self, SmtPadCount};
-use crate::projects::ProjectsPanel;
 use crate::release_pkg;
 use crate::state::{self, Logger};
 use crate::tabs::{Tab, TabKind, TabViewer};
@@ -65,17 +64,12 @@ impl LoadedRelease {
 /// Result slot shared between the async file-load task and the egui
 /// update loop. `wasm32` is single-threaded so the Mutex is never
 /// actually contended; the bound exists for the future's `Send`.
-///
-/// **Pub so the Projects panel can write into it after a successful
-/// release upload / download** — that's how an uploaded release auto-
-/// loads into the gerber viewer without the user clicking the toolbar's
-/// "Upload Release ZIP" a second time.
-pub type LoadSlot = Arc<Mutex<Option<Result<LoadedRelease, String>>>>;
+type LoadSlot = Arc<Mutex<Option<Result<LoadedRelease, String>>>>;
 
 // ── App state ───────────────────────────────────────────────────────────
 
 pub struct WebApp {
-    pub pending_load: LoadSlot,
+    pending_load: LoadSlot,
     loading: bool,
     loaded: Option<LoadedRelease>,
     error: Option<String>,
@@ -161,9 +155,6 @@ pub struct WebApp {
     /// egui_mobius monorepo (egui 0.34) and gerber_viewer (egui 0.33)
     /// align on a common egui version.
     pub logger: Logger,
-    /// Projects tab — server-backed project + release management via
-    /// `cuforge_api::CuforgeApi`. See [[wasm-demo-plan]] Phase E.
-    pub projects_panel: ProjectsPanel,
     /// egui_dock layout. Tabs become draggable / splittable / closable;
     /// fresh sessions get the layout from `default_dock_layout()`.
     pub dock_state: DockState<Tab>,
@@ -171,14 +162,8 @@ pub struct WebApp {
 
 impl Default for WebApp {
     fn default() -> Self {
-        // Create the load slot first so the Projects panel can share it.
-        // Uploading a release in the Projects panel writes a
-        // `LoadedRelease` here; `drain_pending` then builds the gerber
-        // scene exactly as if the user had clicked Upload Release ZIP.
-        let pending_load = LoadSlot::default();
-        let projects_panel = ProjectsPanel::new(pending_load.clone());
         Self {
-            pending_load,
+            pending_load: LoadSlot::default(),
             loading: false,
             loaded: None,
             error: None,
@@ -204,7 +189,6 @@ impl Default for WebApp {
             setting_origin: false,
             cursor_world: None,
             logger: Logger::new(),
-            projects_panel,
             dock_state: default_dock_layout(),
         }
     }
@@ -225,15 +209,14 @@ fn default_dock_layout() -> DockState<Tab> {
     let mut dock = DockState::new(vec![Tab::new(TabKind::Canvas)]);
     let surface = dock.main_surface_mut();
     // Right side hosts Board, Settings, and Projects as sibling tabs —
-    // Board is listed first so it's active on launch; Projects and
-    // Settings are one tab-click away. Same shape zicad uses for
-    // Project + Settings on the left.
+    // Board is listed first so it's active on launch; Settings is one
+    // tab-click away. (Projects is a paid desktop feature — not in the
+    // free wasm build.)
     let [_, _right] = surface.split_right(
         NodeIndex::root(),
         0.78,
         vec![
             Tab::new(TabKind::Board),
-            Tab::new(TabKind::Projects),
             Tab::new(TabKind::Settings),
         ],
     );
@@ -1333,12 +1316,6 @@ impl WebApp {
         );
     }
 
-    /// Projects tab — server-backed project + release management.
-    /// Talks to `cuforge-services` via [`ProjectsPanel`], which owns
-    /// its own state, async dispatch, modals, and error surfacing.
-    pub fn render_projects_tab(&mut self, ui: &mut egui::Ui) {
-        self.projects_panel.show(ui);
-    }
 }
 
 impl eframe::App for WebApp {
@@ -1894,7 +1871,7 @@ async fn run_upload() -> Option<Result<LoadedRelease, String>> {
     Some(unzip_release(source_name, bytes))
 }
 
-pub fn unzip_release(source_name: String, bytes: Vec<u8>) -> Result<LoadedRelease, String> {
+fn unzip_release(source_name: String, bytes: Vec<u8>) -> Result<LoadedRelease, String> {
     use std::io::{Cursor, Read};
     use zip::ZipArchive;
 

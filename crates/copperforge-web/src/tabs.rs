@@ -14,7 +14,6 @@ pub enum TabKind {
     Board,
     Logger,
     Settings,
-    Projects,
 }
 
 #[derive(Clone, Debug)]
@@ -34,7 +33,6 @@ impl Tab {
             TabKind::Board => "Board",
             TabKind::Logger => "Logger",
             TabKind::Settings => "Settings",
-            TabKind::Projects => "Projects",
         }
     }
 }
@@ -60,7 +58,6 @@ impl egui_dock::TabViewer for TabViewer<'_> {
             TabKind::Board => self.app.render_board_tab(ui),
             TabKind::Logger => self.app.render_logger_tab(ui),
             TabKind::Settings => self.app.render_settings_tab(ui),
-            TabKind::Projects => self.app.render_projects_tab(ui),
         }
     }
 }
