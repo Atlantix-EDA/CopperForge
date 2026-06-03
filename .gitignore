@@ -16,8 +16,9 @@ target/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-# Local co-development override (use working-tree egui_mobius); keep the .example
-/.cargo/config.toml
+# `.cargo/config.toml` is now TRACKED — it carries the REQUIRED wasm
+# rustflags every contributor needs. Personal egui_mobius co-dev overrides
+# live in a PARENT-dir config (outside the repo), not here.
 
 # Internal planning / strategy notes — local only, not public
 develop/
