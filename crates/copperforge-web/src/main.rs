@@ -39,6 +39,8 @@ mod centroid;
 #[cfg(target_arch = "wasm32")]
 mod logo;
 #[cfg(target_arch = "wasm32")]
+mod manufacturability;
+#[cfg(target_arch = "wasm32")]
 mod pad_count;
 #[cfg(target_arch = "wasm32")]
 mod projects;

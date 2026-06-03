@@ -10,7 +10,7 @@
 //! fields properly so Description text with commas doesn't shift the
 //! column count.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mount {
@@ -94,6 +94,152 @@ pub fn parse(text: &str) -> HashMap<String, Mount> {
         }
     }
     out
+}
+
+/// Aggregate grouped-part statistics for the v1 manufacturability
+/// metric. A "unique part" is a distinct identity key — the MPN when
+/// the BOM carries one, otherwise `(value, normalized-package)` (the
+/// same join key `copperforge-core::export::bom::group_bom` uses).
+///
+/// `total_parts` is the placed-component count (sum of designators), so
+/// `unique / total` measures part *commonality*: fewer unique parts per
+/// placement = fewer pick-and-place feeders = easier to assemble.
+#[derive(Debug, Clone, Default)]
+pub struct PartStats {
+    pub unique_parts: usize,
+    pub total_parts: usize,
+    pub smt_parts: usize,
+    pub tht_parts: usize,
+    pub unknown_parts: usize,
+    /// True when an MPN column drove the uniqueness key; false when we
+    /// fell back to `(value, package)`. Informational for the panel.
+    pub keyed_by_mpn: bool,
+}
+
+impl PartStats {
+    /// Unique-to-total ratio in `0..=1`. Lower = more reuse = easier.
+    pub fn unique_ratio(&self) -> f32 {
+        if self.total_parts == 0 {
+            0.0
+        } else {
+            self.unique_parts as f32 / self.total_parts as f32
+        }
+    }
+
+    /// Average placements per unique part (`total / unique`). The
+    /// intuitive inverse of the ratio: "4.7× means each part type is
+    /// placed ~4.7 times."
+    pub fn reuse(&self) -> f32 {
+        if self.unique_parts == 0 {
+            0.0
+        } else {
+            self.total_parts as f32 / self.unique_parts as f32
+        }
+    }
+
+    /// Through-hole fraction of placements (manual / selective solder).
+    pub fn tht_fraction(&self) -> f32 {
+        if self.total_parts == 0 {
+            0.0
+        } else {
+            self.tht_parts as f32 / self.total_parts as f32
+        }
+    }
+}
+
+/// Find the BOM CSV and compute grouped-[`PartStats`]. Returns `None`
+/// when there's no BOM, it isn't UTF-8, or it lacks a Value column
+/// (without a value, footprint alone can't distinguish parts — all
+/// 0402s are not one part). The panel shows "needs a Value column" then.
+pub fn find_and_parse_parts(entries: &BTreeMap<String, Vec<u8>>) -> Option<PartStats> {
+    let (name, bytes) = entries.iter().find(|(name, _)| {
+        let l = name.to_lowercase();
+        l.ends_with(".csv") && l.contains("bom")
+    })?;
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| log::warn!("BOM CSV {} is not valid UTF-8 — skipping", name))
+        .ok()?;
+    parse_parts(text)
+}
+
+/// Group the BOM rows into unique parts and tally placements. `None` if
+/// the header has no Value column or no rows yield placements.
+pub fn parse_parts(text: &str) -> Option<PartStats> {
+    let mut lines = text.lines();
+    let header_line = lines.next()?.trim_start_matches('\u{FEFF}');
+    let header = parse_csv_row(header_line);
+
+    let col = |pred: &dyn Fn(&str) -> bool| {
+        header.iter().position(|c| pred(&c.trim().to_lowercase()))
+    };
+    let pkg_idx = col(&|l| l == "package" || l == "footprint" || l.contains("footprint"))?;
+    let des_idx = col(&|l| {
+        l == "designators" || l == "designator" || l == "reference"
+            || l == "references" || l == "refdes"
+    })?;
+    // Value is required — it's the heart of the uniqueness key.
+    let val_idx = col(&|l| l == "value" || l == "val" || l == "comment")?;
+    // MPN is preferred when present, but optional.
+    let mpn_idx = col(&|l| {
+        l == "mpn" || l == "part number" || l == "part#" || l == "part_number"
+            || l.contains("manufacturer p/n") || l.contains("mfr p/n")
+            || l.contains("manufacturer part")
+    });
+
+    let mut keys: HashSet<String> = HashSet::new();
+    let mut stats = PartStats {
+        keyed_by_mpn: mpn_idx.is_some(),
+        ..Default::default()
+    };
+
+    for line in lines {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let cols = parse_csv_row(line);
+        let (Some(package), Some(value), Some(designators)) =
+            (cols.get(pkg_idx), cols.get(val_idx), cols.get(des_idx))
+        else {
+            continue;
+        };
+        let count = designators
+            .split(|c: char| c.is_whitespace() || c == ',')
+            .filter(|d| !d.trim().is_empty())
+            .count();
+        if count == 0 {
+            continue;
+        }
+
+        // Key: MPN when present + non-empty, else value + normalized package.
+        let key = mpn_idx
+            .and_then(|i| cols.get(i))
+            .map(|m| m.trim())
+            .filter(|m| !m.is_empty())
+            .map(|m| m.to_lowercase())
+            .unwrap_or_else(|| {
+                format!("{}|{}", value.trim().to_lowercase(), normalize_package(package))
+            });
+        keys.insert(key);
+
+        stats.total_parts += count;
+        match classify_package(package) {
+            Mount::Smt => stats.smt_parts += count,
+            Mount::Tht => stats.tht_parts += count,
+            Mount::Unknown => stats.unknown_parts += count,
+        }
+    }
+
+    if stats.total_parts == 0 {
+        return None;
+    }
+    stats.unique_parts = keys.len();
+    Some(stats)
+}
+
+/// Strip a `library:` prefix and lower-case so `Resistor_SMD:R_0603`
+/// and `R_0603` group together.
+fn normalize_package(pkg: &str) -> String {
+    pkg.rsplit(':').next().unwrap_or(pkg).trim().to_lowercase()
 }
 
 /// Classify a KiCad footprint name as SMT / THT / Unknown based on
@@ -230,5 +376,42 @@ mod tests {
         assert_eq!(map.get("R2"), Some(&Mount::Smt));
         assert_eq!(map.get("R3"), Some(&Mount::Smt));
         assert_eq!(map.get("U1"), Some(&Mount::Tht));
+    }
+
+    #[test]
+    fn part_stats_groups_and_counts() {
+        // Two distinct R values (one with 3 placements), plus a DIP.
+        // 3 unique parts across 5 placements; 4 SMT + 1 THT.
+        let csv = "Item,Quantity,Value,Package,Manufacturer P/N,Designators\n\
+                   1,3,10k,R_0603,RC0603-10K,R1 R2 R3\n\
+                   2,1,1k,R_0603,RC0603-1K,R4\n\
+                   3,1,DIP-8,Package_DIP:DIP-8_W7.62mm,OP07,U1\n";
+        let s = parse_parts(csv).expect("has a Value column");
+        assert_eq!(s.unique_parts, 3);
+        assert_eq!(s.total_parts, 5);
+        assert_eq!(s.smt_parts, 4);
+        assert_eq!(s.tht_parts, 1);
+        assert!(s.keyed_by_mpn);
+        assert!((s.reuse() - 5.0 / 3.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn part_stats_none_without_value_column() {
+        // Footprint-only BOM: can't tell parts apart → None.
+        let csv = "Package,Designators\nR_0603,R1 R2\n";
+        assert!(parse_parts(csv).is_none());
+    }
+
+    #[test]
+    fn part_stats_falls_back_to_value_package_key() {
+        // No MPN column → key on (value, package); same value+package
+        // across rows collapses to one unique part.
+        let csv = "Value,Package,Designators\n\
+                   10k,Resistor_SMD:R_0603_1608Metric,R1\n\
+                   10k,R_0603,R2\n";
+        let s = parse_parts(csv).expect("has a Value column");
+        assert_eq!(s.unique_parts, 1); // normalized package collapses the prefix
+        assert_eq!(s.total_parts, 2);
+        assert!(!s.keyed_by_mpn);
     }
 }
