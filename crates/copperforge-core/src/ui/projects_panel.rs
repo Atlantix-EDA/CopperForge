@@ -1,4 +1,3 @@
-use crate::CopperForgeApp;
 use crate::project_manager::ProjectManagerState;
 use crate::project_manager::database::ProjectMetadata;
 use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};
@@ -24,24 +23,25 @@ fn set_project_intent(ctx: &egui::Context, action: &str, project_id: &str) {
 }
 
 /// Show the projects database panel with tree view layout
-pub fn show_projects_panel<'a>(
+pub fn show_projects_panel(
     ui: &mut egui::Ui,
-    app: &'a mut CopperForgeApp,
-    logger_state: &'a Dynamic<ReactiveEventLoggerState>,
-    log_colors: &'a Dynamic<LogColors>,
+    projects: &mut crate::app::ProjectsPanelState,
+    services: &mut crate::services::SharedServices,
+    logger_state: &Dynamic<ReactiveEventLoggerState>,
+    log_colors: &Dynamic<LogColors>,
 ) {
     let logger = ReactiveEventLogger::with_colors(logger_state, log_colors);
 
     // Initialize project manager state if not already done
-    if app.projects.project_manager_state.is_none() {
-        let mut state = ProjectManagerState::with_config(&app.services.config);
-        if let Err(e) = state.initialize_database(&app.services.project_db) {
+    if projects.project_manager_state.is_none() {
+        let mut state = ProjectManagerState::with_config(&services.config);
+        if let Err(e) = state.initialize_database(&services.project_db) {
             logger.log_error(&format!("Failed to initialize project database: {}", e));
         }
-        app.projects.project_manager_state = Some(state);
+        projects.project_manager_state = Some(state);
     }
 
-    if let Some(ref mut manager_state) = app.projects.project_manager_state {
+    if let Some(ref mut manager_state) = projects.project_manager_state {
         // Handle any errors
         if let Some(error) = manager_state.last_error.take() {
             logger.log_error(&error);
@@ -82,7 +82,7 @@ pub fn show_projects_panel<'a>(
 
                 // Save BOM to current project
                 if ui.button("💾 Save BOM").clicked() {
-                    let bom_cell = app.services.bom_state.clone();
+                    let bom_cell = services.bom_state.clone();
                     if let Some(ref bom_state) = *bom_cell.lock() {
                         let components: Vec<crate::project_manager::bom::BomComponent> = bom_state.entries.iter().cloned().map(Into::into).collect();
                         if let Err(e) = manager_state.update_project_bom(components) {
@@ -427,7 +427,7 @@ pub fn show_projects_panel<'a>(
                 // Successfully loaded project data, now restore the project state
                 if let Some(ref project) = manager_state.current_project {
                     // 1. Set the PCB file path in the project manager
-                    app.services.project_state.set(crate::project::ProjectState::PcbSelected {
+                    services.project_state.set(crate::project::ProjectState::PcbSelected {
                         pcb_path: project.metadata.pcb_file_path.clone(),
                     });
 
@@ -435,17 +435,17 @@ pub fn show_projects_panel<'a>(
                     // geometry doesn't linger in 2D or 3D until the new project's
                     // gerbers are loaded (via Generate, Load, or right-click a
                     // release → Load Release Gerbers).
-                    app.services.layer_store.clear_all();
-                    app.services.board_outline = None;
-                    app.services.top_copper = None;
-                    app.services.bottom_copper = None;
-                    app.services.top_mask = None;
-                    app.services.bottom_mask = None;
-                    app.services.needs_initial_view = true;
+                    services.layer_store.clear_all();
+                    services.board_outline = None;
+                    services.top_copper = None;
+                    services.bottom_copper = None;
+                    services.top_mask = None;
+                    services.bottom_mask = None;
+                    services.needs_initial_view = true;
 
                     // 2. Restore BOM components if available
                     if !project.bom_components.is_empty() {
-                        let bom_cell = app.services.bom_state.clone();
+                        let bom_cell = services.bom_state.clone();
                         let mut bom_guard = bom_cell.lock();
                         if let Some(ref mut bom_state) = *bom_guard {
                             bom_state.entries = project.bom_components.iter().map(|c| {
