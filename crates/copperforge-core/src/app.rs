@@ -86,7 +86,17 @@ pub struct CopperForgeApp {
     /// `&mut eframe::Frame` through `TabViewer`.
     pub gl_context: Option<Arc<glow::Context>>,
 
-    // ── Panel-owned state (for panels not yet citizen-persisted) ─
+    // ── Projects panel state (PM = paid tier-2) ──────────────────
+    /// All Projects-panel-owned persistent state, bundled into one
+    /// struct so it lifts cleanly into `copperforge-pro` as the stored
+    /// Projects citizen's `PanelState`. Was 8 loose fields on the app.
+    pub projects: ProjectsPanelState,
+}
+
+/// Persistent state for the Projects panel (the paid tier-2 PM feature).
+/// Grouped here so the whole PM surface walks out of `CopperForgeApp`
+/// together when the Projects citizen is lifted into `copperforge-pro`.
+pub struct ProjectsPanelState {
     pub project_manager_state: Option<project_manager::ProjectManagerState>,
 
     // ── Modal states (UI ephemeral) ─────────────────────────────
@@ -99,10 +109,25 @@ pub struct CopperForgeApp {
     pub delete_release_confirmation: Option<DeleteReleaseConfirmation>,
     pub project_edit_modal: Option<ProjectEditModalState>,
     pub project_import_modal: Option<ProjectImportModalState>,
-    /// File dialog used exclusively by the Project Import modal (kept on the
-    /// app so state survives across frames while the dialog is open).
+    /// File dialog used exclusively by the Project Import modal (kept so
+    /// state survives across frames while the dialog is open).
     pub project_import_dialog: egui_file_dialog::FileDialog,
     pub project_import_last_picked: Option<std::path::PathBuf>,
+}
+
+impl Default for ProjectsPanelState {
+    fn default() -> Self {
+        Self {
+            project_manager_state: None,
+            release_modal: None,
+            release_info_modal: None,
+            delete_release_confirmation: None,
+            project_edit_modal: None,
+            project_import_modal: None,
+            project_import_dialog: egui_file_dialog::FileDialog::new(),
+            project_import_last_picked: None,
+        }
+    }
 }
 
 /// Form state for the Project Import modal (opened from the Projects tab's
@@ -442,14 +467,7 @@ impl CopperForgeApp {
             logger_panel: crate::panels::LoggerPanel::new(egui_citizen::CitizenState::default()),
             gerber_view_3d_panel: crate::panels::GerberView3dPanel::new(egui_citizen::CitizenState::default()),
             gl_context: None,
-            project_manager_state: None,
-            release_modal: None,
-            release_info_modal: None,
-            delete_release_confirmation: None,
-            project_edit_modal: None,
-            project_import_modal: None,
-            project_import_dialog: egui_file_dialog::FileDialog::new(),
-            project_import_last_picked: None,
+            projects: ProjectsPanelState::default(),
         };
 
         let logger = ReactiveEventLogger::with_colors(&app.services.logger_state, &app.services.log_colors);
@@ -1265,14 +1283,14 @@ impl eframe::App for CopperForgeApp {
 impl CopperForgeApp {
     /// Render the release modal and handle Create/Cancel actions.
     fn show_release_modal(&mut self, ctx: &egui::Context) {
-        if self.release_modal.is_none() {
+        if self.projects.release_modal.is_none() {
             return;
         }
 
         let mut close = false;
         let mut trigger_create = false;
 
-        let window_title = if self.release_modal.as_ref().map(|m| m.overwrite_existing).unwrap_or(false) {
+        let window_title = if self.projects.release_modal.as_ref().map(|m| m.overwrite_existing).unwrap_or(false) {
             "🔄 Regenerate Release"
         } else {
             "🚀 Create Release"
@@ -1287,7 +1305,7 @@ impl CopperForgeApp {
                 ctx.content_rect().center().y - 220.0,
             ))
             .show(ctx, |ui| {
-                let modal = self.release_modal.as_mut().unwrap();
+                let modal = self.projects.release_modal.as_mut().unwrap();
 
                 if modal.overwrite_existing {
                     ui.colored_label(
@@ -1352,21 +1370,21 @@ impl CopperForgeApp {
             self.execute_release_from_modal();
         }
         if close {
-            self.release_modal = None;
+            self.projects.release_modal = None;
         }
     }
 
     /// Validate + run the create-release flow using the modal's current state.
     fn execute_release_from_modal(&mut self) {
         // Clone modal data out so we can mutably borrow self for the release call.
-        let (modal, overwrite) = match self.release_modal.as_ref() {
+        let (modal, overwrite) = match self.projects.release_modal.as_ref() {
             Some(m) => (m.clone_for_exec(), m.overwrite_existing),
             None => return,
         };
 
         // Validate
         if modal.rev_tag.trim().is_empty() {
-            if let Some(ref mut m) = self.release_modal {
+            if let Some(ref mut m) = self.projects.release_modal {
                 m.error = Some("Rev tag cannot be empty".into());
             }
             return;
@@ -1377,7 +1395,7 @@ impl CopperForgeApp {
         let (pcb_path, gerber_dir) = match self.services.project_state.get() {
             ProjectState::Ready { pcb_path, gerber_dir, .. } => (pcb_path, gerber_dir),
             _ => {
-                if let Some(ref mut m) = self.release_modal {
+                if let Some(ref mut m) = self.projects.release_modal {
                     m.error = Some("Gerbers must be loaded (state: Ready) before releasing.".into());
                 }
                 return;
@@ -1386,13 +1404,13 @@ impl CopperForgeApp {
 
         // Collision check against existing releases — skipped in regenerate mode.
         if !overwrite {
-            let current_pm_state = self.project_manager_state.as_ref();
+            let current_pm_state = self.projects.project_manager_state.as_ref();
             let has_collision = current_pm_state
                 .and_then(|s| s.current_project.as_ref())
                 .map(|p| p.releases.iter().any(|r| r.tag == modal.rev_tag))
                 .unwrap_or(false);
             if has_collision {
-                if let Some(ref mut m) = self.release_modal {
+                if let Some(ref mut m) = self.projects.release_modal {
                     m.error = Some(format!(
                         "Release '{}' already exists. Right-click the rev in the Projects tree → Regenerate.",
                         modal.rev_tag
@@ -1404,7 +1422,7 @@ impl CopperForgeApp {
 
         // Build kicad-cli Command for drill export
         let Some(kicad_cli) = self.kicad_cli_command() else {
-            if let Some(ref mut m) = self.release_modal {
+            if let Some(ref mut m) = self.projects.release_modal {
                 m.error = Some("kicad-cli not discovered at startup — cannot export drill files.".into());
             }
             return;
@@ -1438,7 +1456,7 @@ impl CopperForgeApp {
                 // Persist: either append (new release) or replace-in-place
                 // (regenerate). Also update the tree-rendering cache so the
                 // new/updated rev shows up immediately under outputs/.
-                if let Some(ref mut pm) = self.project_manager_state {
+                if let Some(ref mut pm) = self.projects.project_manager_state {
                     let project_id_opt = pm.current_project.as_ref().map(|p| p.metadata.id.clone());
                     if let Some(ref mut current) = pm.current_project {
                         if overwrite {
@@ -1471,11 +1489,11 @@ impl CopperForgeApp {
                     }
                 }
                 logger.log_info(&format!("Release '{}' complete: {}", outcome.release.tag, outcome.release.archive_path.display()));
-                self.release_modal = None;
+                self.projects.release_modal = None;
             }
             Err(e) => {
                 logger.log_error(&format!("Release failed: {}", e));
-                if let Some(ref mut m) = self.release_modal {
+                if let Some(ref mut m) = self.projects.release_modal {
                     m.error = Some(e);
                 }
             }
@@ -1525,7 +1543,7 @@ impl CopperForgeApp {
             None => (None, None),
         };
 
-        self.project_edit_modal = Some(ProjectEditModalState {
+        self.projects.project_edit_modal = Some(ProjectEditModalState {
             project_id: data.metadata.id.clone(),
             name: data.metadata.name.clone(),
             description: data.metadata.description.clone(),
@@ -1558,18 +1576,18 @@ impl CopperForgeApp {
         let _marker = parts.next();
         let rev_tag = match parts.next() { Some(s) => s, None => return };
 
-        let release = self.project_manager_state
+        let release = self.projects.project_manager_state
             .as_ref()
             .and_then(|pm| pm.project_releases.get(project_id))
             .and_then(|releases| releases.iter().find(|r| r.tag == rev_tag))
             .cloned();
         if let Some(r) = release {
-            self.release_info_modal = Some(r);
+            self.projects.release_info_modal = Some(r);
         }
     }
 
     fn show_release_info_modal(&mut self, ctx: &egui::Context) {
-        let Some(release) = self.release_info_modal.clone() else { return; };
+        let Some(release) = self.projects.release_info_modal.clone() else { return; };
         let mut close = false;
         egui::Window::new(format!("Release: {}", release.tag))
             .collapsible(false)
@@ -1657,7 +1675,7 @@ impl CopperForgeApp {
                 });
             });
         if close {
-            self.release_info_modal = None;
+            self.projects.release_info_modal = None;
         }
     }
 
@@ -1678,14 +1696,14 @@ impl CopperForgeApp {
         let _marker = parts.next();
         let rev_tag = match parts.next() { Some(s) => s.to_string(), None => return };
 
-        let archive_path = self.project_manager_state
+        let archive_path = self.projects.project_manager_state
             .as_ref()
             .and_then(|pm| pm.project_releases.get(&project_id))
             .and_then(|releases| releases.iter().find(|r| r.tag == rev_tag))
             .map(|r| r.archive_path.clone());
         let Some(archive_path) = archive_path else { return; };
 
-        self.delete_release_confirmation = Some(DeleteReleaseConfirmation {
+        self.projects.delete_release_confirmation = Some(DeleteReleaseConfirmation {
             project_id,
             rev_tag,
             archive_path,
@@ -1694,11 +1712,11 @@ impl CopperForgeApp {
     }
 
     fn show_delete_release_confirmation(&mut self, ctx: &egui::Context) {
-        if self.delete_release_confirmation.is_none() {
+        if self.projects.delete_release_confirmation.is_none() {
             return;
         }
         let (project_id, rev_tag, archive_path, error) = {
-            let c = self.delete_release_confirmation.as_ref().unwrap();
+            let c = self.projects.delete_release_confirmation.as_ref().unwrap();
             (c.project_id.clone(), c.rev_tag.clone(), c.archive_path.clone(), c.error.clone())
         };
 
@@ -1756,7 +1774,7 @@ impl CopperForgeApp {
             });
 
         if cancel {
-            self.delete_release_confirmation = None;
+            self.projects.delete_release_confirmation = None;
             return;
         }
 
@@ -1767,7 +1785,7 @@ impl CopperForgeApp {
 
             let result = delete_release_artifacts(
                 &self.services.project_db,
-                self.project_manager_state.as_mut(),
+                self.projects.project_manager_state.as_mut(),
                 &project_id,
                 &rev_tag,
                 &archive_path,
@@ -1776,10 +1794,10 @@ impl CopperForgeApp {
             match result {
                 Ok(()) => {
                     logger.log_info(&format!("Deleted release '{}'", rev_tag));
-                    self.delete_release_confirmation = None;
+                    self.projects.delete_release_confirmation = None;
                 }
                 Err(e) => {
-                    if let Some(c) = self.delete_release_confirmation.as_mut() {
+                    if let Some(c) = self.projects.delete_release_confirmation.as_mut() {
                         c.error = Some(format!("Delete failed: {e}"));
                     }
                     logger.log_error(&format!("Delete release '{}' failed: {}", rev_tag, e));
@@ -1789,7 +1807,7 @@ impl CopperForgeApp {
     }
 
     fn show_project_edit_modal(&mut self, ctx: &egui::Context) {
-        if self.project_edit_modal.is_none() { return; }
+        if self.projects.project_edit_modal.is_none() { return; }
         let mut close = false;
         let mut save = false;
 
@@ -1802,7 +1820,7 @@ impl CopperForgeApp {
                 ctx.content_rect().center().y - 260.0,
             ))
             .show(ctx, |ui| {
-                let modal = self.project_edit_modal.as_mut().unwrap();
+                let modal = self.projects.project_edit_modal.as_mut().unwrap();
 
                 egui::Grid::new("project_edit_grid_meta")
                     .num_columns(2)
@@ -1882,19 +1900,19 @@ impl CopperForgeApp {
             self.save_project_edit_modal();
         }
         if close {
-            self.project_edit_modal = None;
+            self.projects.project_edit_modal = None;
         }
     }
 
     fn save_project_edit_modal(&mut self) {
-        let modal = match self.project_edit_modal.as_ref() {
+        let modal = match self.projects.project_edit_modal.as_ref() {
             Some(m) => (m.project_id.clone(), m.name.clone(), m.description.clone(), m.tags.clone(), m.pcb_file_path.clone()),
             None => return,
         };
         let (pid, name, description, tags_str, pcb_path) = modal;
 
         if name.trim().is_empty() {
-            if let Some(ref mut m) = self.project_edit_modal {
+            if let Some(ref mut m) = self.projects.project_edit_modal {
                 m.error = Some("Name cannot be empty".into());
             }
             return;
@@ -1911,7 +1929,7 @@ impl CopperForgeApp {
         let logger = ReactiveEventLogger::with_colors(&logger_state, &log_colors);
 
         // Update DB record via ProjectManagerState (keeps its project_list in sync).
-        let result = if let Some(ref mut pm) = self.project_manager_state {
+        let result = if let Some(ref mut pm) = self.projects.project_manager_state {
             pm.update_project(&pid, name.clone(), description.clone(), tags)
         } else {
             return;
@@ -1929,10 +1947,10 @@ impl CopperForgeApp {
                         }
                     }
                 }
-                self.project_edit_modal = None;
+                self.projects.project_edit_modal = None;
             }
             Err(e) => {
-                if let Some(ref mut m) = self.project_edit_modal {
+                if let Some(ref mut m) = self.projects.project_edit_modal {
                     m.error = Some(format!("Save failed: {}", e));
                 }
             }
@@ -1964,7 +1982,7 @@ impl CopperForgeApp {
         let logger = ReactiveEventLogger::with_colors(&logger_state, &log_colors);
 
         // Find the release in the cache to get its archive path.
-        let releases = self.project_manager_state
+        let releases = self.projects.project_manager_state
             .as_ref()
             .and_then(|pm| pm.project_releases.get(project_id))
             .cloned()
@@ -2013,7 +2031,7 @@ impl CopperForgeApp {
         ctx.memory_mut(|mem| {
             mem.data.remove::<bool>(egui::Id::new("open_project_import_modal"));
         });
-        self.project_import_modal = Some(ProjectImportModalState {
+        self.projects.project_import_modal = Some(ProjectImportModalState {
             pcb_file_path: None,
             name: String::new(),
             description: String::new(),
@@ -2023,18 +2041,18 @@ impl CopperForgeApp {
             missing_pedigree: Vec::new(),
             error: None,
         });
-        self.project_import_last_picked = None;
+        self.projects.project_import_last_picked = None;
     }
 
     fn show_project_import_modal(&mut self, ctx: &egui::Context) {
-        if self.project_import_modal.is_none() { return; }
+        if self.projects.project_import_modal.is_none() { return; }
 
         // Poll the file dialog first so auto-population runs this frame.
-        if let Some(pro_path) = self.project_import_dialog.update(ctx).picked() {
+        if let Some(pro_path) = self.projects.project_import_dialog.update(ctx).picked() {
             let pro_path = pro_path.to_path_buf();
-            if self.project_import_last_picked.as_ref() != Some(&pro_path) {
-                self.project_import_last_picked = Some(pro_path.clone());
-                if let Some(ref mut m) = self.project_import_modal {
+            if self.projects.project_import_last_picked.as_ref() != Some(&pro_path) {
+                self.projects.project_import_last_picked = Some(pro_path.clone());
+                if let Some(ref mut m) = self.projects.project_import_modal {
                     m.pcb_file_path = Some(pro_path.with_extension("kicad_pcb"));
 
                     // Auto-fill pedigree.
@@ -2077,7 +2095,7 @@ impl CopperForgeApp {
                 ctx.content_rect().center().y - 240.0,
             ))
             .show(ctx, |ui| {
-                let modal = self.project_import_modal.as_mut().unwrap();
+                let modal = self.projects.project_import_modal.as_mut().unwrap();
 
                 // File picker row
                 ui.horizontal(|ui| {
@@ -2086,7 +2104,7 @@ impl CopperForgeApp {
                         use std::sync::Arc;
                         use std::mem;
                         use egui_file_dialog::FileDialog;
-                        let dialog = mem::replace(&mut self.project_import_dialog, FileDialog::new());
+                        let dialog = mem::replace(&mut self.projects.project_import_dialog, FileDialog::new());
                         let mut dialog = dialog
                             .add_file_filter("KiCad Project", Arc::new(|path: &std::path::Path| {
                                 path.extension().and_then(|e| e.to_str()).map(|e| e == "kicad_pro").unwrap_or(false)
@@ -2095,8 +2113,8 @@ impl CopperForgeApp {
                         if let Some(ref dir) = self.services.config.preferred_projects_directory {
                             dialog = dialog.initial_directory(dir.clone());
                         }
-                        self.project_import_dialog = dialog;
-                        self.project_import_dialog.pick_file();
+                        self.projects.project_import_dialog = dialog;
+                        self.projects.project_import_dialog.pick_file();
                     }
                 });
 
@@ -2167,18 +2185,18 @@ impl CopperForgeApp {
             self.execute_project_import();
         }
         if close {
-            self.project_import_modal = None;
-            self.project_import_last_picked = None;
+            self.projects.project_import_modal = None;
+            self.projects.project_import_last_picked = None;
         }
     }
 
     fn execute_project_import(&mut self) {
-        let (pcb_path, name, description, tags_str) = match self.project_import_modal.as_ref() {
+        let (pcb_path, name, description, tags_str) = match self.projects.project_import_modal.as_ref() {
             Some(m) => (m.pcb_file_path.clone(), m.name.clone(), m.description.clone(), m.tags.clone()),
             None => return,
         };
         if name.trim().is_empty() {
-            if let Some(ref mut m) = self.project_import_modal {
+            if let Some(ref mut m) = self.projects.project_import_modal {
                 m.error = Some("Name cannot be empty".into());
             }
             return;
@@ -2186,7 +2204,7 @@ impl CopperForgeApp {
         let pcb_path = match pcb_path {
             Some(p) => p,
             None => {
-                if let Some(ref mut m) = self.project_import_modal {
+                if let Some(ref mut m) = self.projects.project_import_modal {
                     m.error = Some("Pick a .kicad_pro file first".into());
                 }
                 return;
@@ -2210,15 +2228,15 @@ impl CopperForgeApp {
             };
 
         // Ensure ProjectManagerState is initialized so create_project can persist.
-        if self.project_manager_state.is_none() {
+        if self.projects.project_manager_state.is_none() {
             let mut state = project_manager::ProjectManagerState::with_config(&self.services.config);
             if let Err(e) = state.initialize_database(&self.services.project_db) {
                 logger.log_error(&format!("Failed to initialize project database: {}", e));
             }
-            self.project_manager_state = Some(state);
+            self.projects.project_manager_state = Some(state);
         }
 
-        let result = self.project_manager_state.as_mut().unwrap().create_project(
+        let result = self.projects.project_manager_state.as_mut().unwrap().create_project(
             name.clone(),
             description,
             pcb_path,
@@ -2228,11 +2246,11 @@ impl CopperForgeApp {
         match result {
             Ok(id) => {
                 logger.log_info(&format!("Imported project: {} (ID: {})", name, id));
-                self.project_import_modal = None;
-                self.project_import_last_picked = None;
+                self.projects.project_import_modal = None;
+                self.projects.project_import_last_picked = None;
             }
             Err(e) => {
-                if let Some(ref mut m) = self.project_import_modal {
+                if let Some(ref mut m) = self.projects.project_import_modal {
                     m.error = Some(format!("Import failed: {}", e));
                 }
             }
@@ -2242,7 +2260,7 @@ impl CopperForgeApp {
 
 impl crate::app::ReleaseModalState {
     /// Snapshot the values needed to execute the release, avoiding borrow
-    /// conflicts with `self.release_modal` during the call.
+    /// conflicts with `self.projects.release_modal` during the call.
     fn clone_for_exec(&self) -> ReleaseModalSnapshot {
         ReleaseModalSnapshot {
             rev_tag: self.rev_tag.clone(),

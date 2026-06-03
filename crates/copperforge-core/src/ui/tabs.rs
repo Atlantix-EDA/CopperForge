@@ -284,7 +284,7 @@ fn render_pcb_workflow_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
     // Release: only enabled once gerbers are loaded AND a project record exists
     // in the database (so the release can be persisted against a project).
     let is_ready = matches!(app.services.project_state.get(), ProjectState::Ready { .. });
-    let has_current_project = app.project_manager_state
+    let has_current_project = app.projects.project_manager_state
         .as_ref()
         .and_then(|s| s.current_project.as_ref())
         .is_some();
@@ -350,7 +350,7 @@ fn render_pcb_workflow_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
 
     if ui.add_enabled(has_pcb, egui::Button::new("✖ Clear")).clicked() {
         app.services.project_state.set(ProjectState::NoProject);
-        if let Some(ref mut manager_state) = app.project_manager_state {
+        if let Some(ref mut manager_state) = app.projects.project_manager_state {
             manager_state.current_project = None;
             manager_state.selected_project_id = None;
         }
@@ -370,13 +370,13 @@ fn open_release_modal(app: &mut CopperForgeApp) {
 /// `create_release`, which injects the vendor-specific extras (e.g.
 /// `PCBWAY_FAB_SPECS.md`) into the zip.
 fn open_release_modal_for(app: &mut CopperForgeApp, target: Option<crate::vendor::VendorKind>) {
-    let (existing_releases, description_prefill) = app.project_manager_state
+    let (existing_releases, description_prefill) = app.projects.project_manager_state
         .as_ref()
         .and_then(|s| s.current_project.as_ref())
         .map(|p| (p.releases.clone(), p.metadata.description.clone()))
         .unwrap_or_default();
     let suggested_tag = crate::release::suggest_next_rev_tag(&existing_releases);
-    app.release_modal = Some(crate::app::ReleaseModalState {
+    app.projects.release_modal = Some(crate::app::ReleaseModalState {
         rev_tag: suggested_tag,
         description: description_prefill,
         changes: String::new(),
@@ -406,7 +406,7 @@ fn load_release_gerbers(app: &mut CopperForgeApp, composite: &str) {
     let rev_tag = match parts.next() { Some(s) => s.to_string(), None => return };
 
     // Resolve the release (carries archive_path).
-    let archive_path = app.project_manager_state
+    let archive_path = app.projects.project_manager_state
         .as_ref()
         .and_then(|pm| pm.project_releases.get(&project_id))
         .and_then(|releases| releases.iter().find(|r| r.tag == rev_tag))
@@ -420,7 +420,7 @@ fn load_release_gerbers(app: &mut CopperForgeApp, composite: &str) {
 
     // Resolve the project's PCB path (load_gerbers_into_viewer needs it
     // to read layer names from the .kicad_pcb stackup).
-    let pcb_path = app.project_manager_state
+    let pcb_path = app.projects.project_manager_state
         .as_ref()
         .and_then(|pm| pm.project_list.iter().find(|p| p.id == project_id))
         .map(|p| p.pcb_file_path.clone());
@@ -480,14 +480,14 @@ fn open_regenerate_release_modal(app: &mut CopperForgeApp, composite: &str) {
     let _marker = parts.next();
     let rev_tag = match parts.next() { Some(s) => s, None => return };
 
-    let existing = app.project_manager_state
+    let existing = app.projects.project_manager_state
         .as_ref()
         .and_then(|pm| pm.project_releases.get(project_id))
         .and_then(|releases| releases.iter().find(|r| r.tag == rev_tag))
         .cloned();
     let Some(existing) = existing else { return };
 
-    app.release_modal = Some(crate::app::ReleaseModalState {
+    app.projects.release_modal = Some(crate::app::ReleaseModalState {
         rev_tag: existing.tag.clone(),
         description: existing.description.clone(),
         changes: existing.changes.clone(),

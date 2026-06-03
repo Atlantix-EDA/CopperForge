@@ -33,15 +33,15 @@ pub fn show_projects_panel<'a>(
     let logger = ReactiveEventLogger::with_colors(logger_state, log_colors);
 
     // Initialize project manager state if not already done
-    if app.project_manager_state.is_none() {
+    if app.projects.project_manager_state.is_none() {
         let mut state = ProjectManagerState::with_config(&app.services.config);
         if let Err(e) = state.initialize_database(&app.services.project_db) {
             logger.log_error(&format!("Failed to initialize project database: {}", e));
         }
-        app.project_manager_state = Some(state);
+        app.projects.project_manager_state = Some(state);
     }
 
-    if let Some(ref mut manager_state) = app.project_manager_state {
+    if let Some(ref mut manager_state) = app.projects.project_manager_state {
         // Handle any errors
         if let Some(error) = manager_state.last_error.take() {
             logger.log_error(&error);
