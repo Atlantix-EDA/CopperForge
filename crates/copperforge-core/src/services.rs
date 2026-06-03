@@ -24,6 +24,10 @@ pub struct SharedServices {
     /// Drives BOM refresh, gerber ribbon state, and everything else that
     /// keys off "which PCB is active and what stage are we at".
     pub project_state: Dynamic<ProjectState>,
+    /// Parsed BOM. Promoted from BomPanel-local to a shared cell so the
+    /// Projects panel reads/writes it via a clone (Path A) rather than
+    /// reaching into `bom_panel.state` — the one cross-panel dependency.
+    pub bom_state: Dynamic<Option<crate::ui::BomPanelState>>,
     pub logger_state: Dynamic<ReactiveEventLoggerState>,
     pub log_colors: Dynamic<LogColors>,
     /// Liveness of the private `cuforge-services` backend. Updated in

@@ -384,6 +384,7 @@ impl CopperForgeApp {
         let logger_state = Dynamic::new(initial_logger_state);
         let log_colors = Dynamic::new(LogColors::default());
         let project_state = Dynamic::new(config.state.clone());
+        let bom_state = Dynamic::new(None);
 
         let mut layer_store = crate::layer_store::LayerStore::default();
         if config.global_units_mils {
@@ -394,6 +395,7 @@ impl CopperForgeApp {
 
         let services = SharedServices {
             project_state,
+            bom_state,
             logger_state,
             log_colors,
             config_path: config_path.clone(),
@@ -2220,8 +2222,9 @@ impl CopperForgeApp {
         let log_colors = self.services.log_colors.clone();
         let logger = ReactiveEventLogger::with_colors(&logger_state, &log_colors);
 
+        let bom_cell = self.services.bom_state.clone();
         let bom_components: Vec<crate::project_manager::bom::BomComponent> =
-            if let Some(ref bom_state) = self.bom_panel.state {
+            if let Some(ref bom_state) = *bom_cell.lock() {
                 bom_state.entries.iter().cloned().map(Into::into).collect()
             } else {
                 Vec::new()

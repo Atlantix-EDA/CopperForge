@@ -7,7 +7,10 @@ use crate::services::SharedServices;
 use egui_extras::{TableBuilder, Column};
 
 /// Cached BOM state — parsed once, rendered every frame without re-parsing.
-/// Owned by the `BomPanel` citizen.
+/// Shared via `SharedServices::bom_state` (a `Dynamic`) so the Projects
+/// panel can read/write it through a clone of the same cell instead of
+/// reaching into the BOM panel's own fields.
+#[derive(Clone)]
 pub struct BomPanelState {
     pub entries: Vec<crate::bom::BomEntry>,
     pub dimensions: Option<crate::bom::BoardDimensions>,
