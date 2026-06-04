@@ -834,7 +834,14 @@ impl CopperForgeApp {
             let config_path = config_dir.join("copperforge").join("dock_state.json");
             if let Ok(json) = fs::read_to_string(&config_path) {
                 match serde_json::from_str::<DockState<Tab>>(&json) {
-                    Ok(dock_state) => {
+                    Ok(mut dock_state) => {
+                        // Plugin tabs are contributed at runtime by
+                        // `register_panel`. Never restore persisted ones —
+                        // otherwise each launch loads the saved tab AND adds
+                        // a fresh one, duplicating it. Strip them here so
+                        // registration is the single source of plugin tabs.
+                        dock_state.retain_tabs(|tab| !matches!(&tab.kind, TabKind::Plugin(_)));
+
                         // Migration: if the saved layout predates a newer TabKind
                         // variant, reset so the default layout reinstates it.
                         // Update this list whenever a tab is added that users
