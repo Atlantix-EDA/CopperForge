@@ -21,3 +21,11 @@ impl ProjectsPanel {
         );
     }
 }
+
+impl crate::dock_panel::DockPanel for ProjectsPanel {
+    fn id(&self) -> &str { "projects" }
+    fn title(&self) -> &str { "Projects" }
+    fn ui(&mut self, ui: &mut egui::Ui, services: &mut crate::services::SharedServices) {
+        self.show(ui, services);
+    }
+}

@@ -499,6 +499,11 @@ pub fn show_projects_panel(
             }
         }
     }
+
+    // PM modals + intent handlers run after the panel body so ALL Project-
+    // Manager rendering (panel + modals) flows through this one function.
+    // They depend only on the panel_state + services — no CopperForgeApp.
+    crate::ui::show_projects_modals(projects, services, ui.ctx());
 }
 
 /// Helper function to update description in .kicad_pro file.
