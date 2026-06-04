@@ -13,6 +13,7 @@ pub mod panels;
 pub mod render3d;
 pub mod services;
 pub mod cuforge_client;
+pub mod cuforge_api;
 // layer_operations module removed - all functionality moved to layer_store
 pub mod navigation;
 pub mod platform;
@@ -23,7 +24,9 @@ pub mod theme;
 pub mod ui;
 pub mod vendor;
 pub mod app;
+pub mod dock_panel;
 
 // Re-export CopperForgeApp from app module
 pub use app::CopperForgeApp;
+pub use dock_panel::DockPanel;
 

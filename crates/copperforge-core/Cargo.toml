@@ -76,11 +76,25 @@ rust_xlsxwriter = { workspace = true }
 clap = { workspace = true }
 shlex = { workspace = true }
 
+# Shared deps used by both targets — the new cuforge_api client.
+reqwest = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+sha2 = "0.10"
+hex = "0.4"
+
 # HTTP client for the cuforge-services health poller — NATIVE ONLY.
-# The browser demo (Phase B) doesn't poll a local server, so ureq
+# Existing pattern keeps a blocking client on a background thread; ureq
 # (and its rustls dep tree) is gated out of wasm builds.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ureq = { workspace = true }
+# Native reqwest backend (hyper + rustls). Wasm picks fetch automatically
+# because we disabled default-features at the workspace level.
+reqwest = { workspace = true, features = ["rustls-tls"] }
+# Async runtime for native callers of reqwest. Wasm uses the browser's
+# event loop via wasm-bindgen-futures.
+tokio = { workspace = true }
 
 # WASM-only deps for the browser build (Phase A of develop/wasm-demo-plan.md).
 # `getrandom` with the `js` feature forces transitive uses (egui, etc.) to
@@ -93,3 +107,5 @@ ureq = { workspace = true }
 # the cfg in .cargo/config.toml only unlocks the 0.3 backend.
 getrandom = { version = "0.2", features = ["js"] }
 getrandom_v3 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
+# Drive async futures on the browser event loop.
+wasm-bindgen-futures = "0.4"

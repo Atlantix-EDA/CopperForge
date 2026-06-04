@@ -34,6 +34,10 @@ pub enum TabKind {
     Projects,  // Project database + tree + Import modal (replaced old Project tab)
     Settings,
     BOM,
+    /// A panel contributed by an external crate, indexed into
+    /// `CopperForgeApp::plugin_panels`. Core dispatches to it through the
+    /// `DockPanel` trait without knowing what it is.
+    Plugin(usize),
 }
 
 impl TabKind {
@@ -49,6 +53,7 @@ impl TabKind {
             TabKind::Projects => CitizenId::new("projects"),
             TabKind::Settings => CitizenId::new("settings"),
             TabKind::BOM => CitizenId::new("bom"),
+            TabKind::Plugin(_) => CitizenId::new("plugin"),
         }
     }
 }
@@ -94,6 +99,9 @@ impl Tab {
             TabKind::Projects => "Projects".to_string(),
             TabKind::Settings => "Settings".to_string(),
             TabKind::BOM => "BOM".to_string(),
+            // Real title comes from the registered panel via
+            // TabViewer::title (which has app access); fallback only.
+            TabKind::Plugin(_) => "Plugin".to_string(),
         }
     }
 
@@ -103,6 +111,16 @@ impl Tab {
     /// GerberView is special — it renders through the legacy Tab path
     /// because it has 1300 lines of viewport interaction logic.
     pub fn content(&self, ui: &mut egui::Ui, params: &mut TabParams<'_>) {
+        // Plug-in panels: dispatch through the registry by index. The
+        // panel gets only `&mut SharedServices` (its declared dependency).
+        if let TabKind::Plugin(idx) = &self.kind {
+            let idx = *idx;
+            if let Some(panel) = params.app.plugin_panels.get_mut(idx) {
+                panel.ui(ui, &mut params.app.services);
+            }
+            return;
+        }
+
         use crate::panels::*;
 
         match self.kind {
@@ -147,8 +165,7 @@ impl Tab {
                 params.app.terminal_panel.show(ui, &mut params.app.services);
             }
             TabKind::Projects => {
-                ProjectsPanel::new(egui_citizen::CitizenState::default())
-                    .show(ui, params.app);
+                params.app.projects_panel.show(ui, &mut params.app.services);
             }
             TabKind::Settings => {
                 SettingsPanel::new(egui_citizen::CitizenState::default())
@@ -157,6 +174,7 @@ impl Tab {
             TabKind::BOM => {
                 params.app.bom_panel.show(ui, &mut params.app.services);
             }
+            TabKind::Plugin(_) => unreachable!("handled before the match"),
         }
     }
 
@@ -284,7 +302,7 @@ fn render_pcb_workflow_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
     // Release: only enabled once gerbers are loaded AND a project record exists
     // in the database (so the release can be persisted against a project).
     let is_ready = matches!(app.services.project_state.get(), ProjectState::Ready { .. });
-    let has_current_project = app.project_manager_state
+    let has_current_project = app.projects_panel.panel_state.project_manager_state
         .as_ref()
         .and_then(|s| s.current_project.as_ref())
         .is_some();
@@ -350,7 +368,7 @@ fn render_pcb_workflow_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
 
     if ui.add_enabled(has_pcb, egui::Button::new("✖ Clear")).clicked() {
         app.services.project_state.set(ProjectState::NoProject);
-        if let Some(ref mut manager_state) = app.project_manager_state {
+        if let Some(ref mut manager_state) = app.projects_panel.panel_state.project_manager_state {
             manager_state.current_project = None;
             manager_state.selected_project_id = None;
         }
@@ -370,13 +388,13 @@ fn open_release_modal(app: &mut CopperForgeApp) {
 /// `create_release`, which injects the vendor-specific extras (e.g.
 /// `PCBWAY_FAB_SPECS.md`) into the zip.
 fn open_release_modal_for(app: &mut CopperForgeApp, target: Option<crate::vendor::VendorKind>) {
-    let (existing_releases, description_prefill) = app.project_manager_state
+    let (existing_releases, description_prefill) = app.projects_panel.panel_state.project_manager_state
         .as_ref()
         .and_then(|s| s.current_project.as_ref())
         .map(|p| (p.releases.clone(), p.metadata.description.clone()))
         .unwrap_or_default();
     let suggested_tag = crate::release::suggest_next_rev_tag(&existing_releases);
-    app.release_modal = Some(crate::app::ReleaseModalState {
+    app.projects_panel.panel_state.release_modal = Some(crate::app::ReleaseModalState {
         rev_tag: suggested_tag,
         description: description_prefill,
         changes: String::new(),
@@ -406,7 +424,7 @@ fn load_release_gerbers(app: &mut CopperForgeApp, composite: &str) {
     let rev_tag = match parts.next() { Some(s) => s.to_string(), None => return };
 
     // Resolve the release (carries archive_path).
-    let archive_path = app.project_manager_state
+    let archive_path = app.projects_panel.panel_state.project_manager_state
         .as_ref()
         .and_then(|pm| pm.project_releases.get(&project_id))
         .and_then(|releases| releases.iter().find(|r| r.tag == rev_tag))
@@ -420,7 +438,7 @@ fn load_release_gerbers(app: &mut CopperForgeApp, composite: &str) {
 
     // Resolve the project's PCB path (load_gerbers_into_viewer needs it
     // to read layer names from the .kicad_pcb stackup).
-    let pcb_path = app.project_manager_state
+    let pcb_path = app.projects_panel.panel_state.project_manager_state
         .as_ref()
         .and_then(|pm| pm.project_list.iter().find(|p| p.id == project_id))
         .map(|p| p.pcb_file_path.clone());
@@ -480,14 +498,14 @@ fn open_regenerate_release_modal(app: &mut CopperForgeApp, composite: &str) {
     let _marker = parts.next();
     let rev_tag = match parts.next() { Some(s) => s, None => return };
 
-    let existing = app.project_manager_state
+    let existing = app.projects_panel.panel_state.project_manager_state
         .as_ref()
         .and_then(|pm| pm.project_releases.get(project_id))
         .and_then(|releases| releases.iter().find(|r| r.tag == rev_tag))
         .cloned();
     let Some(existing) = existing else { return };
 
-    app.release_modal = Some(crate::app::ReleaseModalState {
+    app.projects_panel.panel_state.release_modal = Some(crate::app::ReleaseModalState {
         rev_tag: existing.tag.clone(),
         description: existing.description.clone(),
         changes: existing.changes.clone(),
@@ -1595,6 +1613,11 @@ impl<'a> egui_dock::TabViewer for TabViewer<'a> {
     type Tab = Tab;
 
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
+        if let TabKind::Plugin(idx) = &tab.kind {
+            if let Some(panel) = self.app.plugin_panels.get(*idx) {
+                return panel.title().to_string().into();
+            }
+        }
         tab.title().into()
     }
 

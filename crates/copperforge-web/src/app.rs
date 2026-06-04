@@ -126,6 +126,10 @@ pub struct WebApp {
     /// Independent of the BOM — works on any release zip with paste
     /// layers present.
     smt_pads: SmtPadCount,
+    /// Grouped-part stats (unique vs total placements) for the v1
+    /// manufacturability metric. `None` until a BOM with a Value column
+    /// is parsed from the upload.
+    part_stats: Option<bom::PartStats>,
 
     /// Bare-board weight inputs (thickness, copper oz, fill %).
     /// Knob-driven approximation — gerber_viewer doesn't expose the
@@ -179,6 +183,7 @@ impl Default for WebApp {
             centroid: Vec::new(),
             bom_mount: HashMap::new(),
             smt_pads: SmtPadCount::default(),
+            part_stats: None,
             weight_inputs: WeightInputs::default(),
             design_offset: Point2::new(0.0, 0.0),
             setting_origin: false,
@@ -205,11 +210,14 @@ fn default_dock_layout() -> DockState<Tab> {
     let surface = dock.main_surface_mut();
     // Right side hosts Board and Settings as sibling tabs — Board is
     // listed first so it's active on launch; Settings is one tab-click
-    // away. Same shape zicad uses for Project + Settings on the left.
+    // away.
     let [_, _right] = surface.split_right(
         NodeIndex::root(),
         0.78,
-        vec![Tab::new(TabKind::Board), Tab::new(TabKind::Settings)],
+        vec![
+            Tab::new(TabKind::Board),
+            Tab::new(TabKind::Settings),
+        ],
     );
     let [_, _left] =
         surface.split_left(NodeIndex::root(), 0.22, vec![Tab::new(TabKind::Layers)]);
@@ -301,6 +309,7 @@ impl WebApp {
                 let centroid = centroid::find_and_parse(&loaded.entries)
                     .unwrap_or_default();
                 let bom_mount = bom::find_and_parse(&loaded.entries);
+                let part_stats = bom::find_and_parse_parts(&loaded.entries);
                 let smt_pads = pad_count::count_from_entries(&loaded.entries);
 
                 // Logger entries cover the full upload+parse flow so
@@ -329,6 +338,18 @@ impl WebApp {
                         format!("BOM: {} designators classified", bom_mount.len()),
                     );
                 }
+                if let Some(ref ps) = part_stats {
+                    self.logger.custom(
+                        "parse",
+                        format!(
+                            "Parts: {} unique / {} total ({:.0}% unique, {:.1}× reuse)",
+                            ps.unique_parts,
+                            ps.total_parts,
+                            ps.unique_ratio() * 100.0,
+                            ps.reuse(),
+                        ),
+                    );
+                }
                 if smt_pads.any() {
                     self.logger.custom(
                         "parse",
@@ -345,6 +366,7 @@ impl WebApp {
                 self.view_initialized = false;
                 self.centroid = centroid;
                 self.bom_mount = bom_mount;
+                self.part_stats = part_stats;
                 self.smt_pads = smt_pads;
                 self.loaded = Some(loaded);
                 self.error = None;
@@ -882,6 +904,85 @@ impl WebApp {
                     row(ui, "Total", self.smt_pads.total());
                 }
 
+                // ── Manufacturability (v1) ──────────────────────────
+                // Part-commonality metrics + a transparent score. The
+                // raw ratio is free-tier funnel candy; the `score` body
+                // is the planned v2 fuzzy-inference swap point.
+                let kv = |ui: &mut egui::Ui, k: &str, v: String| {
+                    ui.horizontal(|ui| {
+                        ui.label(k);
+                        ui.with_layout(
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                ui.monospace(v);
+                            },
+                        );
+                    });
+                };
+                ui.add_space(6.0);
+                ui.separator();
+                ui.label(egui::RichText::new("Manufacturability").strong());
+                if let Some(ref ps) = self.part_stats {
+                    row(ui, "Unique parts", ps.unique_parts);
+                    kv(
+                        ui,
+                        "Unique / total",
+                        format!("{:.0} %", ps.unique_ratio() * 100.0),
+                    );
+                    kv(ui, "Reuse", format!("{:.1}× /part", ps.reuse()));
+
+                    let m = crate::manufacturability::score(
+                        ps.unique_ratio(),
+                        ps.tht_fraction(),
+                        ps.total_parts,
+                    );
+                    let color = match m.grade {
+                        'A' | 'B' => egui::Color32::from_rgb(120, 200, 140),
+                        'C' => egui::Color32::from_rgb(220, 200, 120),
+                        _ => egui::Color32::from_rgb(220, 140, 120),
+                    };
+                    ui.horizontal(|ui| {
+                        ui.label("Score");
+                        ui.with_layout(
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                ui.monospace(
+                                    egui::RichText::new(format!(
+                                        "{} / 100  ({})",
+                                        m.score, m.grade
+                                    ))
+                                    .color(color),
+                                );
+                            },
+                        );
+                    })
+                    .response
+                    .on_hover_text(
+                        "v1 heuristic: part commonality + through-hole \
+                         fraction + size. Higher = easier to assemble. \
+                         Weights are being calibrated.",
+                    );
+                    if !ps.keyed_by_mpn {
+                        ui.label(
+                            egui::RichText::new(
+                                "unique keyed by value + package (no MPN column)",
+                            )
+                            .small()
+                            .italics()
+                            .color(egui::Color32::from_rgb(140, 150, 170)),
+                        );
+                    }
+                } else {
+                    ui.label(
+                        egui::RichText::new(
+                            "Needs a BOM CSV with a Value column.",
+                        )
+                        .small()
+                        .italics()
+                        .color(egui::Color32::from_rgb(140, 150, 170)),
+                    );
+                }
+
                 ui.add_space(6.0);
                 ui.separator();
                 ui.label(egui::RichText::new("Weight").strong());
@@ -1213,6 +1314,7 @@ impl WebApp {
             .color(egui::Color32::from_rgb(140, 150, 170)),
         );
     }
+
 }
 
 impl eframe::App for WebApp {
@@ -1243,10 +1345,11 @@ impl eframe::App for WebApp {
                     let btn_label = if self.loading {
                         "⏳ Loading…"
                     } else {
-                        "📦 Upload Release ZIP"
+                        "📦 Upload"
                     };
                     if ui
                         .add_enabled(!self.loading, egui::Button::new(btn_label))
+                        .on_hover_text("Upload a release ZIP (gerbers + drill files)")
                         .clicked()
                     {
                         self.pick_release_zip(ctx);
@@ -1345,9 +1448,9 @@ impl eframe::App for WebApp {
                             self.export_release(false);
                         }
                         if ui
-                            .button("🏭 Release for PCBWay")
+                            .button("🏭 PCBWay")
                             .on_hover_text(
-                                "Same, plus PCBWAY_FAB_SPECS.md \
+                                "Release zip + PCBWAY_FAB_SPECS.md \
                                  (board dimensions + component counts)",
                             )
                             .clicked()
@@ -1391,6 +1494,28 @@ impl eframe::App for WebApp {
                                 tz_label
                             ));
                             ui.separator();
+                            // User Guide — links out to the deployed
+                            // copperforge-web docs site (Astro), hosted on
+                            // Cloudflare Pages. The app itself lives at the
+                            // apex (copperforge.dev), so the guide gets its
+                            // own subdomain. One-line const in case it moves.
+                            const USER_GUIDE_URL: &str = "https://docs.copperforge.dev";
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("📖 Guide")
+                                            .size(14.0)
+                                            .color(egui::Color32::from_rgb(180, 200, 220)),
+                                    ),
+                                )
+                                .on_hover_text(format!(
+                                    "Open the User Guide ({USER_GUIDE_URL})",
+                                ))
+                                .clicked()
+                            {
+                                ctx.open_url(egui::OpenUrl::new_tab(USER_GUIDE_URL));
+                            }
+                            ui.separator();
                             if ui
                                 .add(
                                     egui::Button::new(
@@ -1406,21 +1531,38 @@ impl eframe::App for WebApp {
                             }
                             if let Some(ref loaded) = self.loaded {
                                 ui.separator();
+                                // One compact label (was two — the bold
+                                // full filename overflowed into the clock).
+                                // Truncate the name so the right cluster
+                                // can't overrun the left toolbar; the full
+                                // name + the same stats are in the Logger
+                                // line and this hover.
+                                let name = &loaded.source_name;
+                                let short = if name.chars().count() > 20 {
+                                    let head: String =
+                                        name.chars().take(19).collect();
+                                    format!("{head}…")
+                                } else {
+                                    name.clone()
+                                };
                                 ui.label(
                                     egui::RichText::new(format!(
-                                        "{} gerber · {} drill · {:.1} KB",
+                                        "{}  ·  {}g · {}drl · {:.0} KB",
+                                        short,
                                         loaded.gerber_count(),
                                         loaded.drill_count(),
                                         loaded.total_bytes() as f64 / 1024.0,
                                     ))
                                     .size(14.0)
                                     .color(egui::Color32::from_rgb(180, 200, 220)),
-                                );
-                                ui.label(
-                                    egui::RichText::new(&loaded.source_name)
-                                        .strong()
-                                        .size(14.0),
-                                );
+                                )
+                                .on_hover_text(format!(
+                                    "{} — {} gerber · {} drill · {:.1} KB",
+                                    loaded.source_name,
+                                    loaded.gerber_count(),
+                                    loaded.drill_count(),
+                                    loaded.total_bytes() as f64 / 1024.0,
+                                ));
                             }
                         },
                     );

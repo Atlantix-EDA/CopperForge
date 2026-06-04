@@ -1,0 +1,34 @@
+# Tracked, required build config for CopperForge. A fresh `git clone` +
+# `cargo build` (native) and `trunk build` / `cargo build --target
+# wasm32-unknown-unknown` (browser) must work with NO manual setup.
+#
+# egui_citizen / egui_mobius_reactive resolve from their pinned git tag
+# (see Cargo.toml) — no local checkout of the egui_mobius monorepo is
+# required to build.
+
+# WASM browser build (Phase A of develop/wasm-demo-plan.md).
+# getrandom 0.3 refuses to compile for wasm32-unknown-unknown without
+# this cfg explicitly opting into the browser RNG backend. Required for
+# any `cargo check / build --target wasm32-unknown-unknown` pass.
+# See https://docs.rs/getrandom/0.3.3/#webassembly-support
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
+
+# ─────────────────────────────────────────────────────────────────────
+# OPTIONAL: co-developing the egui_mobius monorepo alongside CopperForge?
+#
+# Do NOT add a `paths = [...]` override here — that legacy mechanism
+# rebuilds the whole tree on every `cargo` invocation (cargo itself warns
+# it "was never meant to support recompiles and changes to the crate
+# graph"). Instead, keep the override OUTSIDE the repo so it stays local
+# and never churns shared builds: create a config one directory up
+#
+#     <parent-of-CopperForge>/.cargo/config.toml
+#
+# (cargo merges parent-directory configs automatically). Better still,
+# use a graph-stable `[patch]` on a local branch's Cargo.toml:
+#
+#     [patch."https://github.com/saturn77/egui_mobius"]
+#     egui_citizen        = { path = "/abs/path/to/egui_mobius/crates/egui_citizen" }
+#     egui_mobius_reactive = { path = "/abs/path/to/egui_mobius/crates/egui_mobius_reactive" }
+# ─────────────────────────────────────────────────────────────────────
