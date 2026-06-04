@@ -208,10 +208,9 @@ impl Default for WebApp {
 fn default_dock_layout() -> DockState<Tab> {
     let mut dock = DockState::new(vec![Tab::new(TabKind::Canvas)]);
     let surface = dock.main_surface_mut();
-    // Right side hosts Board, Settings, and Projects as sibling tabs —
-    // Board is listed first so it's active on launch; Settings is one
-    // tab-click away. (Projects is a paid desktop feature — not in the
-    // free wasm build.)
+    // Right side hosts Board and Settings as sibling tabs — Board is
+    // listed first so it's active on launch; Settings is one tab-click
+    // away.
     let [_, _right] = surface.split_right(
         NodeIndex::root(),
         0.78,

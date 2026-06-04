@@ -34,9 +34,9 @@ pub enum TabKind {
     Projects,  // Project database + tree + Import modal (replaced old Project tab)
     Settings,
     BOM,
-    /// A panel contributed by an external crate (e.g. `copperforge-pro`),
-    /// indexed into `CopperForgeApp::plugin_panels`. Core dispatches to it
-    /// through the `DockPanel` trait without knowing what it is.
+    /// A panel contributed by an external crate, indexed into
+    /// `CopperForgeApp::plugin_panels`. Core dispatches to it through the
+    /// `DockPanel` trait without knowing what it is.
     Plugin(usize),
 }
 

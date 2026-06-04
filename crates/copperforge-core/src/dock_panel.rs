@@ -1,10 +1,10 @@
 //! The plug-in seam: external crates register their own dock panels.
 //!
 //! This is the generic contract — core knows the *trait*, never the
-//! concrete panel. A panel from any crate (e.g. the private
-//! `copperforge-pro`) implements `DockPanel`, declaring exactly the
-//! shared state it depends on by the `&mut SharedServices` it receives,
-//! and registers itself via [`CopperForgeApp::register_panel`]. Core
+//! concrete panel. A panel from any external crate implements
+//! `DockPanel`, declaring exactly the shared state it depends on by the
+//! `&mut SharedServices` it receives, and registers itself via
+//! [`CopperForgeApp::register_panel`]. Core
 //! dispatches to it through the dock without naming it — same idea as
 //! the `egui_lens` / `egui_quill` / `egui_grafica` citizens.
 

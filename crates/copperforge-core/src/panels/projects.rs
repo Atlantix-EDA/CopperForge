@@ -8,8 +8,8 @@ citizen_panel!(ProjectsPanel, "projects",
 impl ProjectsPanel {
     pub fn show(&mut self, ui: &mut egui::Ui, services: &mut crate::services::SharedServices) {
         // Stored citizen: owns its ProjectsPanelState and renders over the
-        // shared services only — no CopperForgeApp dependency, which is what
-        // lets it lift into copperforge-pro.
+        // shared services only — no CopperForgeApp dependency, so the panel
+        // is fully self-contained.
         let logger_state = services.logger_state.clone();
         let log_colors = services.log_colors.clone();
         crate::ui::show_projects_panel(

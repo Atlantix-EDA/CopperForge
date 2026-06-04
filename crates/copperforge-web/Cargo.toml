@@ -37,9 +37,7 @@ nalgebra     = { workspace = true }
 egui_dock = { workspace = true }
 
 # Browser app composes against the shared library — same wasm-compatible
-# code that runs in the native app. (Used for the grid renderer; the
-# Projects/releases panel — and its cuforge_api + uuid deps — moved out
-# to the paid desktop tier.)
+# code that runs in the native app. (Used for the grid renderer.)
 copperforge-core = { path = "../copperforge-core" }
 
 # WASM entrypoint plumbing — eframe::WebRunner needs all of these.

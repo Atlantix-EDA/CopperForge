@@ -86,23 +86,20 @@ pub struct CopperForgeApp {
     /// `&mut eframe::Frame` through `TabViewer`.
     pub gl_context: Option<Arc<glow::Context>>,
 
-    // ── Projects panel (PM = paid tier-2) ────────────────────────
+    // ── Projects panel ────────────────────────────────────────────
     /// Stored citizen owning its `ProjectsPanelState`. Registered with a
-    /// real `CitizenState` (not `::default()`). Held as a named field for
-    /// now like the other stored panels; lifts into `copperforge-pro` via
-    /// the dock registry in the next step.
+    /// real `CitizenState` (not `::default()`). Self-contained: it
+    /// renders over its own state + `SharedServices` only.
     pub projects_panel: crate::panels::ProjectsPanel,
 
-    /// Panels contributed by external crates (e.g. `copperforge-pro`),
-    /// registered via [`CopperForgeApp::register_panel`]. Dispatched
-    /// through the `DockPanel` trait — core never names them. Empty in
-    /// the free build.
+    /// Panels contributed by external crates, registered via
+    /// [`CopperForgeApp::register_panel`]. Dispatched through the
+    /// `DockPanel` trait — core never names them. Empty by default.
     pub plugin_panels: Vec<Box<dyn crate::dock_panel::DockPanel>>,
 }
 
-/// Persistent state for the Projects panel (the paid tier-2 PM feature).
-/// Grouped here so the whole PM surface walks out of `CopperForgeApp`
-/// together when the Projects citizen is lifted into `copperforge-pro`.
+/// Persistent state for the Projects panel, grouped into one struct so
+/// the panel stays self-contained (its own state + `SharedServices`).
 pub struct ProjectsPanelState {
     pub project_manager_state: Option<project_manager::ProjectManagerState>,
 
@@ -889,7 +886,7 @@ impl CopperForgeApp {
     /// Register an external panel (the plug-in seam). The panel is added
     /// to `plugin_panels` and a tab for it is pushed into the dock. Core
     /// dispatches to it via the `DockPanel` trait without naming it — this
-    /// is how `copperforge-pro` contributes its private panels.
+    /// is how external crates contribute panels.
     pub fn register_panel(&mut self, panel: Box<dyn crate::dock_panel::DockPanel>) {
         let idx = self.plugin_panels.len();
         self.plugin_panels.push(panel);
