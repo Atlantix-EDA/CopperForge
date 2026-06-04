@@ -92,6 +92,12 @@ pub struct CopperForgeApp {
     /// now like the other stored panels; lifts into `copperforge-pro` via
     /// the dock registry in the next step.
     pub projects_panel: crate::panels::ProjectsPanel,
+
+    /// Panels contributed by external crates (e.g. `copperforge-pro`),
+    /// registered via [`CopperForgeApp::register_panel`]. Dispatched
+    /// through the `DockPanel` trait — core never names them. Empty in
+    /// the free build.
+    pub plugin_panels: Vec<Box<dyn crate::dock_panel::DockPanel>>,
 }
 
 /// Persistent state for the Projects panel (the paid tier-2 PM feature).
@@ -475,6 +481,7 @@ impl CopperForgeApp {
             gerber_view_3d_panel: crate::panels::GerberView3dPanel::new(egui_citizen::CitizenState::default()),
             gl_context: None,
             projects_panel: crate::panels::ProjectsPanel::new(projects_citizen_state),
+            plugin_panels: Vec::new(),
         };
 
         let logger = ReactiveEventLogger::with_colors(&app.services.logger_state, &app.services.log_colors);
@@ -870,6 +877,17 @@ impl CopperForgeApp {
         if let Err(e) = config.save_to_file(&self.services.config_path) {
             eprintln!("Failed to save settings: {}", e);
         }
+    }
+
+    /// Register an external panel (the plug-in seam). The panel is added
+    /// to `plugin_panels` and a tab for it is pushed into the dock. Core
+    /// dispatches to it via the `DockPanel` trait without naming it — this
+    /// is how `copperforge-pro` contributes its private panels.
+    pub fn register_panel(&mut self, panel: Box<dyn crate::dock_panel::DockPanel>) {
+        let idx = self.plugin_panels.len();
+        self.plugin_panels.push(panel);
+        let tab = Tab::new(TabKind::Plugin(idx), SurfaceIndex::main(), NodeIndex(0));
+        self.dock_state.main_surface_mut().push_to_first_leaf(tab);
     }
 
     fn create_default_dock_state() -> DockState<Tab> {

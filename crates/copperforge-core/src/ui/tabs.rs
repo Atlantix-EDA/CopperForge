@@ -34,6 +34,10 @@ pub enum TabKind {
     Projects,  // Project database + tree + Import modal (replaced old Project tab)
     Settings,
     BOM,
+    /// A panel contributed by an external crate (e.g. `copperforge-pro`),
+    /// indexed into `CopperForgeApp::plugin_panels`. Core dispatches to it
+    /// through the `DockPanel` trait without knowing what it is.
+    Plugin(usize),
 }
 
 impl TabKind {
@@ -49,6 +53,7 @@ impl TabKind {
             TabKind::Projects => CitizenId::new("projects"),
             TabKind::Settings => CitizenId::new("settings"),
             TabKind::BOM => CitizenId::new("bom"),
+            TabKind::Plugin(_) => CitizenId::new("plugin"),
         }
     }
 }
@@ -94,6 +99,9 @@ impl Tab {
             TabKind::Projects => "Projects".to_string(),
             TabKind::Settings => "Settings".to_string(),
             TabKind::BOM => "BOM".to_string(),
+            // Real title comes from the registered panel via
+            // TabViewer::title (which has app access); fallback only.
+            TabKind::Plugin(_) => "Plugin".to_string(),
         }
     }
 
@@ -103,6 +111,16 @@ impl Tab {
     /// GerberView is special — it renders through the legacy Tab path
     /// because it has 1300 lines of viewport interaction logic.
     pub fn content(&self, ui: &mut egui::Ui, params: &mut TabParams<'_>) {
+        // Plug-in panels: dispatch through the registry by index. The
+        // panel gets only `&mut SharedServices` (its declared dependency).
+        if let TabKind::Plugin(idx) = &self.kind {
+            let idx = *idx;
+            if let Some(panel) = params.app.plugin_panels.get_mut(idx) {
+                panel.ui(ui, &mut params.app.services);
+            }
+            return;
+        }
+
         use crate::panels::*;
 
         match self.kind {
@@ -156,6 +174,7 @@ impl Tab {
             TabKind::BOM => {
                 params.app.bom_panel.show(ui, &mut params.app.services);
             }
+            TabKind::Plugin(_) => unreachable!("handled before the match"),
         }
     }
 
@@ -1594,6 +1613,11 @@ impl<'a> egui_dock::TabViewer for TabViewer<'a> {
     type Tab = Tab;
 
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
+        if let TabKind::Plugin(idx) = &tab.kind {
+            if let Some(panel) = self.app.plugin_panels.get(*idx) {
+                return panel.title().to_string().into();
+            }
+        }
         tab.title().into()
     }
 

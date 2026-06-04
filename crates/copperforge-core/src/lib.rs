@@ -24,7 +24,9 @@ pub mod theme;
 pub mod ui;
 pub mod vendor;
 pub mod app;
+pub mod dock_panel;
 
 // Re-export CopperForgeApp from app module
 pub use app::CopperForgeApp;
+pub use dock_panel::DockPanel;
 
