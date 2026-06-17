@@ -4,6 +4,11 @@ release = false
 filehash = false
 
 [watch]
+# Watch the web crate AND copperforge-core — almost all the rendering /
+# 3D / panel code lives in core, so without watching it `trunk serve` would
+# serve stale wasm after any core-only edit. Paths are relative to this
+# Trunk.toml (crates/copperforge-web/).
+paths = ["src", "index.html", "../copperforge-core/src"]
 ignore = ["./dist"]
 
 [serve]

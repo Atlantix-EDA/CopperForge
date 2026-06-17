@@ -21,7 +21,7 @@
 //! opening → unfilled (hole in mask). No boolean op, no CSG pass.
 
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Cursor, Read};
 use std::path::Path;
 
 use gerber_parser::parse;
@@ -64,7 +64,25 @@ pub fn extract_mask(
     outline_bbox: &BoundingBox,
 ) -> Option<(MaskData, MaskCounts)> {
     let file = File::open(gerber_path).ok()?;
-    let reader = BufReader::new(file);
+    extract_mask_from_reader(BufReader::new(file), outline_contours, outline_bbox)
+}
+
+/// In-memory variant for wasm32 — see [`super::extract_outline_from_bytes`].
+pub fn extract_mask_from_bytes(
+    bytes: &[u8],
+    outline_contours: &[Vec<Point2<f32>>],
+    outline_bbox: &BoundingBox,
+) -> Option<(MaskData, MaskCounts)> {
+    extract_mask_from_reader(BufReader::new(Cursor::new(bytes)), outline_contours, outline_bbox)
+}
+
+/// Shared core: parse from any buffered reader, walk openings, tessellate
+/// the green-sheet-with-holes against the board outline.
+fn extract_mask_from_reader<R: Read>(
+    reader: BufReader<R>,
+    outline_contours: &[Vec<Point2<f32>>],
+    outline_bbox: &BoundingBox,
+) -> Option<(MaskData, MaskCounts)> {
     let doc = match parse(reader) {
         Ok(d) => d,
         Err((d, _)) => d,

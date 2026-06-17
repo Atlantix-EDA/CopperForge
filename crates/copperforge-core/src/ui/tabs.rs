@@ -146,6 +146,7 @@ impl Tab {
                 let bottom_copper = params.app.services.bottom_copper.as_ref();
                 let top_mask = params.app.services.top_mask.as_ref();
                 let bottom_mask = params.app.services.bottom_mask.as_ref();
+                let drill = params.app.services.drill.as_ref();
                 let units_mils = params.app.services.global_units_mils;
                 params.app.gerber_view_3d_panel.show(
                     ui,
@@ -155,6 +156,7 @@ impl Tab {
                     bottom_copper,
                     top_mask,
                     bottom_mask,
+                    drill,
                     units_mils,
                 );
             }

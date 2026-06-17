@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use copperforge_core::display::{draw_grid, GridSettings};
+use copperforge_core::panels::Board3dView;
 use gerber_viewer::{GerberTransform, Mirroring, ViewState};
 use nalgebra::{Point2, Vector2};
 
@@ -18,6 +19,7 @@ use std::collections::HashMap;
 
 use egui_dock::{DockArea, DockState, NodeIndex};
 
+use crate::board3d::Board3dGeom;
 use crate::board_weight::{self, WeightInputs};
 use crate::bom::{self, Mount};
 use crate::canvas::model::LayerSide;
@@ -155,6 +157,18 @@ pub struct WebApp {
     /// egui_mobius monorepo (egui 0.34) and gerber_viewer (egui 0.33)
     /// align on a common egui version.
     pub logger: Logger,
+
+    /// 3D board view — same renderer the native app uses, driven directly
+    /// (no citizen framework). Owns camera + GPU mesh state across frames.
+    board3d_view: Board3dView,
+    /// Tessellated 3D meshes for the current upload (outline / copper /
+    /// mask). Rebuilt once per release; `None` until the first load.
+    board3d_geom: Option<Board3dGeom>,
+    /// The eframe glow (WebGL2) context, restashed each frame from
+    /// `frame.gl()`. `Board3dView::show` needs it to upload/draw meshes;
+    /// `render_*_tab` only gets `&mut Ui`, so we thread it through here.
+    gl: Option<Arc<eframe::glow::Context>>,
+
     /// egui_dock layout. Tabs become draggable / splittable / closable;
     /// fresh sessions get the layout from `default_dock_layout()`.
     pub dock_state: DockState<Tab>,
@@ -189,6 +203,9 @@ impl Default for WebApp {
             setting_origin: false,
             cursor_world: None,
             logger: Logger::new(),
+            board3d_view: Board3dView::new(),
+            board3d_geom: None,
+            gl: None,
             dock_state: default_dock_layout(),
         }
     }
@@ -206,7 +223,12 @@ impl Default for WebApp {
 /// └────────────────────────────────────┘
 /// ```
 fn default_dock_layout() -> DockState<Tab> {
-    let mut dock = DockState::new(vec![Tab::new(TabKind::Canvas)]);
+    // Centre node hosts the 2D Canvas and the 3D Board as sibling tabs —
+    // Canvas active on launch, 3D one click away.
+    let mut dock = DockState::new(vec![
+        Tab::new(TabKind::Canvas),
+        Tab::new(TabKind::Board3d),
+    ]);
     let surface = dock.main_surface_mut();
     // Right side hosts Board and Settings as sibling tabs — Board is
     // listed first so it's active on launch; Settings is one tab-click
@@ -361,6 +383,28 @@ impl WebApp {
                         ),
                     );
                 }
+
+                // Tessellate the 3D meshes once, up front. Logged so the
+                // Logger tab reflects what the 3D tab will show.
+                let board3d_geom = Board3dGeom::build_from_entries(&loaded.entries);
+                if board3d_geom.outline.is_some() {
+                    let cu = board3d_geom.top_copper.is_some() as u8
+                        + board3d_geom.bottom_copper.is_some() as u8;
+                    let mask = board3d_geom.top_mask.is_some() as u8
+                        + board3d_geom.bottom_mask.is_some() as u8;
+                    self.logger.custom(
+                        "3d",
+                        format!("3D: board outline + {cu} copper + {mask} mask layer(s)"),
+                    );
+                } else {
+                    self.logger
+                        .custom("3d", "3D: no edge-cuts layer — board outline unavailable");
+                }
+                self.board3d_geom = Some(board3d_geom);
+                // New geometry → force the 3D view to drop the previous
+                // board's meshes and re-upload (its change detection alone
+                // treats Some→Some as "unchanged").
+                self.board3d_view.mark_dirty();
 
                 self.scene = Some(scene);
                 self.view_initialized = false;
@@ -1089,6 +1133,38 @@ impl WebApp {
     /// Canvas tab — the gerber viewport. Allocates the full available
     /// rect, paints grid + scene + overlays, handles right-drag pan /
     /// wheel zoom / left-drag rubber-band / ruler / origin.
+    /// The 3D board tab — axes/grid always; board outline + copper +
+    /// soldermask once a release with an edge-cuts layer is loaded. Shares
+    /// `copperforge_core::panels::Board3dView` with the native app.
+    pub fn render_board3d_tab(&mut self, ui: &mut egui::Ui) {
+        if self.board3d_geom.is_none() {
+            ui.centered_and_justified(|ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "Upload a release ZIP from the toolbar to see the board in 3D.",
+                    )
+                    .italics()
+                    .color(egui::Color32::from_rgb(140, 150, 170)),
+                );
+            });
+            return;
+        }
+        // Disjoint field borrows: `board3d_view` mut, `gl`/`board3d_geom`
+        // shared — distinct fields, so the borrow checker allows it.
+        let geom = self.board3d_geom.as_ref();
+        self.board3d_view.show(
+            ui,
+            self.gl.as_ref(),
+            geom.and_then(|g| g.outline.as_ref()),
+            geom.and_then(|g| g.top_copper.as_ref()),
+            geom.and_then(|g| g.bottom_copper.as_ref()),
+            geom.and_then(|g| g.top_mask.as_ref()),
+            geom.and_then(|g| g.bottom_mask.as_ref()),
+            geom.and_then(|g| g.drill.as_ref()),
+            self.units_mils,
+        );
+    }
+
     pub fn render_canvas_tab(&mut self, ui: &mut egui::Ui) {
         if self.scene.is_none() {
             ui.centered_and_justified(|ui| {
@@ -1318,8 +1394,13 @@ impl WebApp {
 }
 
 impl eframe::App for WebApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.drain_pending();
+
+        // Stash the WebGL2 context for the 3D tab. `render_*_tab` only
+        // receives `&mut Ui`, so we capture the gl handle here (cheap Arc
+        // clone) where `frame` is in scope.
+        self.gl = frame.gl().cloned();
 
         // ── Top bar ─────────────────────────────────────────────────
         egui::TopBottomPanel::top("top_bar")

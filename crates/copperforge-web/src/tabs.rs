@@ -11,6 +11,7 @@ use eframe::egui;
 pub enum TabKind {
     Layers,
     Canvas,
+    Board3d,
     Board,
     Logger,
     Settings,
@@ -30,6 +31,7 @@ impl Tab {
         match self.kind {
             TabKind::Layers => "Layers",
             TabKind::Canvas => "Canvas",
+            TabKind::Board3d => "3D Board",
             TabKind::Board => "Board",
             TabKind::Logger => "Logger",
             TabKind::Settings => "Settings",
@@ -55,6 +57,7 @@ impl egui_dock::TabViewer for TabViewer<'_> {
         match tab.kind {
             TabKind::Layers => self.app.render_layer_tab(ui),
             TabKind::Canvas => self.app.render_canvas_tab(ui),
+            TabKind::Board3d => self.app.render_board3d_tab(ui),
             TabKind::Board => self.app.render_board_tab(ui),
             TabKind::Logger => self.app.render_logger_tab(ui),
             TabKind::Settings => self.app.render_settings_tab(ui),

@@ -44,6 +44,22 @@ impl Camera {
         self.rotation = yaw * pitch * self.rotation;
     }
 
+    /// Pan the orbit pivot in the screen plane by a drag delta (pixels).
+    /// "Grab" style — content follows the cursor, matching the 2D gerber
+    /// canvas's right-drag pan. The world-per-pixel scale tracks the zoom
+    /// distance so panning feels 1:1 at any zoom level.
+    pub fn pan(&mut self, drag_delta: egui::Vec2, viewport: egui::Rect) {
+        let half_fov = 30f32.to_radians();
+        let world_per_px = (2.0 * self.zoom * half_fov.tan()) / viewport.height().max(1.0);
+        // Screen axes expressed in world space (camera frame → world).
+        let inv = self.rotation.inverse();
+        let right = inv * Vector3::x_axis().into_inner();
+        let up = inv * Vector3::y_axis().into_inner();
+        // Drag right → content right (target left); drag down → content down.
+        self.target -= right * (drag_delta.x * world_per_px);
+        self.target += up * (drag_delta.y * world_per_px);
+    }
+
     /// Multiplicative zoom: >1 → closer, <1 → farther.
     pub fn zoom_by(&mut self, factor: f32) {
         if factor <= 0.0 {

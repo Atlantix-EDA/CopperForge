@@ -70,6 +70,10 @@ pub struct SharedServices {
     pub top_mask: Option<crate::gerber_geom::MaskData>,
     /// B.Mask polygon IR — soldermask on the bottom side.
     pub bottom_mask: Option<crate::gerber_geom::MaskData>,
+    /// Drilled hole centres + radii, in the board's world frame. Extracted
+    /// from the drill-as-gerber layer (`LayerType::Drill`); drives the 3D
+    /// view's hole disks. `None` until a project with a drill layer loads.
+    pub drill: Option<crate::gerber_geom::DrillData>,
 
     // ── Display / DRC / grid ──────────────────────────────────
     pub display_manager: DisplayManager,

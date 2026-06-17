@@ -21,12 +21,17 @@
 //! size reasonable).
 
 pub mod copper;
+pub mod drill;
 pub mod mask;
-pub use copper::{extract_copper, CopperCounts, CopperData};
-pub use mask::{extract_mask, MaskCounts, MaskData};
+pub use copper::{extract_copper, extract_copper_from_bytes, CopperCounts, CopperData};
+pub use drill::{
+    extract_drill_excellon_from_bytes, extract_drill_gerber, extract_drill_gerber_from_bytes,
+    DrillData, Hole,
+};
+pub use mask::{extract_mask, extract_mask_from_bytes, MaskCounts, MaskData};
 
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Cursor, Read};
 use std::path::Path;
 
 use gerber_parser::parse;
@@ -73,7 +78,18 @@ pub struct OutlineCounts {
 /// catastrophically, or no closed contours can be recovered.
 pub fn extract_outline(gerber_path: &Path) -> Option<(OutlineData, OutlineCounts)> {
     let file = File::open(gerber_path).ok()?;
-    let reader = BufReader::new(file);
+    extract_outline_from_reader(BufReader::new(file))
+}
+
+/// In-memory variant for targets without a filesystem (wasm32) — the
+/// browser holds uploaded gerbers as `Vec<u8>`, never on disk. Identical
+/// pipeline to [`extract_outline`]; only the input source differs.
+pub fn extract_outline_from_bytes(bytes: &[u8]) -> Option<(OutlineData, OutlineCounts)> {
+    extract_outline_from_reader(BufReader::new(Cursor::new(bytes)))
+}
+
+/// Shared core: parse from any buffered reader, walk, stitch, tessellate.
+fn extract_outline_from_reader<R: Read>(reader: BufReader<R>) -> Option<(OutlineData, OutlineCounts)> {
     // parse() returns Result<GerberDoc, (GerberDoc, ParseError)>. Even on the
     // error arm the partial doc is usable — the error is typically a late-
     // file issue (bad trailer) that doesn't invalidate earlier geometry.
@@ -514,4 +530,66 @@ fn tessellate(
     }
 
     Some((geometry.vertices, geometry.indices))
+}
+
+#[cfg(test)]
+mod in_memory_tests {
+    //! Exercises the `*_from_bytes` extraction path the wasm browser build
+    //! depends on — there's no filesystem in the browser, so the 3D view is
+    //! built entirely from in-memory gerber bytes. We read the bundled
+    //! CPArti example zip, pull the relevant `.gbr` entries into `Vec<u8>`,
+    //! and assert the in-memory extractors produce non-empty meshes — i.e.
+    //! the exact thing `copperforge-web::board3d::Board3dGeom` does.
+
+    use super::*;
+    use crate::gerber_geom::{extract_copper_from_bytes, extract_mask_from_bytes};
+    use std::io::{Cursor, Read};
+
+    /// Read one named gerber out of the bundled example zip into bytes.
+    fn read_entry(suffix: &str) -> Vec<u8> {
+        let zip_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/media/cparti-fpga-dev-board.zip"
+        );
+        let bytes = std::fs::read(zip_path).expect("bundled CPArti example zip is present");
+        let mut archive =
+            zip::ZipArchive::new(Cursor::new(bytes)).expect("example zip opens");
+        for i in 0..archive.len() {
+            let mut entry = archive.by_index(i).unwrap();
+            if entry.name().to_lowercase().contains(&suffix.to_lowercase()) {
+                let mut buf = Vec::new();
+                entry.read_to_end(&mut buf).unwrap();
+                return buf;
+            }
+        }
+        panic!("no entry matching {suffix:?} in example zip");
+    }
+
+    #[test]
+    fn extracts_board_outline_copper_and_mask_from_memory() {
+        // Outline is the keystone — bbox + contours frame everything else.
+        let edge = read_entry("-Edge_Cuts.gbr");
+        let (outline, _) =
+            extract_outline_from_bytes(&edge).expect("outline mesh from in-memory edge cuts");
+        assert!(
+            !outline.mesh_vertices_2d.is_empty() && !outline.mesh_indices.is_empty(),
+            "outline produced an empty mesh"
+        );
+        // CPArti is a real ~no-larger-than-Eurocard board: bbox must be sane.
+        let w = outline.bbox.max.x - outline.bbox.min.x;
+        let h = outline.bbox.max.y - outline.bbox.min.y;
+        assert!(w > 1.0 && h > 1.0 && w < 1000.0 && h < 1000.0, "bbox {w}×{h} mm out of range");
+
+        // Copper, placed in the outline's frame.
+        let fcu = read_entry("-F_Cu.gbr");
+        let (copper, _) = extract_copper_from_bytes(&fcu, &outline.bbox)
+            .expect("copper mesh from in-memory F.Cu");
+        assert!(!copper.mesh_indices.is_empty(), "F.Cu produced an empty mesh");
+
+        // Soldermask, punched against the outline contours.
+        let fmask = read_entry("-F_Mask.gbr");
+        let (mask, _) = extract_mask_from_bytes(&fmask, &outline.contours, &outline.bbox)
+            .expect("mask mesh from in-memory F.Mask");
+        assert!(!mask.mesh_indices.is_empty(), "F.Mask produced an empty mesh");
+    }
 }

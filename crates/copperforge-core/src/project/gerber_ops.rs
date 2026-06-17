@@ -269,12 +269,24 @@ pub fn load_gerbers_into_viewer(
             &outline_bbox,
             logger,
         );
+        app.services.drill = extract_drill_side(
+            &app.services.layer_store,
+            &outline_bbox,
+            logger,
+        );
     } else {
         app.services.top_copper = None;
         app.services.bottom_copper = None;
         app.services.top_mask = None;
         app.services.bottom_mask = None;
+        app.services.drill = None;
     }
+
+    // The 3D geometry just changed — force the panel to drop the previous
+    // board's GPU meshes and re-upload (its per-layer change detection treats
+    // Some→Some as "no change", so loading a different board would otherwise
+    // keep showing the old one).
+    app.gerber_view_3d_panel.mark_dirty();
 }
 
 /// Look up a copper layer in the store and extract its polygon IR, aligned
@@ -321,6 +333,32 @@ fn extract_copper_side(
         }
         None => {
             logger.log_warning(&format!("{} copper: no geometry extracted", label));
+            None
+        }
+    }
+}
+
+/// Look up the drill layer (exported as gerber by kicad-cli) and recover its
+/// hole centres + radii, aligned to the board outline's bbox so the 3D hole
+/// disks land on their pads.
+fn extract_drill_side(
+    store: &crate::layer_store::LayerStore,
+    outline_bbox: &gerber_viewer::BoundingBox,
+    logger: &ReactiveEventLogger,
+) -> Option<crate::gerber_geom::DrillData> {
+    let layer = store.find(crate::layer_store::LayerType::Drill)?;
+    let path = layer.file_path.as_ref()?;
+    logger.log_info(&format!(
+        "drill: reading {}",
+        path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default(),
+    ));
+    match crate::gerber_geom::extract_drill_gerber(path, outline_bbox) {
+        Some(d) => {
+            logger.log_info(&format!("drill: {} hole(s)", d.holes.len()));
+            Some(d)
+        }
+        None => {
+            logger.log_warning("drill: no holes extracted");
             None
         }
     }

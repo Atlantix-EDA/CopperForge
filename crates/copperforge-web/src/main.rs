@@ -29,6 +29,8 @@ fn main() {
 #[cfg(target_arch = "wasm32")]
 mod app;
 #[cfg(target_arch = "wasm32")]
+mod board3d;
+#[cfg(target_arch = "wasm32")]
 mod board_weight;
 #[cfg(target_arch = "wasm32")]
 mod bom;

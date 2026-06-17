@@ -24,7 +24,7 @@
 //! the FR-4 board mesh. Callers pass the outline bbox in.
 
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Cursor, Read};
 use std::path::Path;
 
 use gerber_parser::parse;
@@ -86,7 +86,23 @@ pub fn extract_copper(
     outline_bbox: &BoundingBox,
 ) -> Option<(CopperData, CopperCounts)> {
     let file = File::open(gerber_path).ok()?;
-    let reader = BufReader::new(file);
+    extract_copper_from_reader(BufReader::new(file), outline_bbox)
+}
+
+/// In-memory variant for wasm32 — see [`super::extract_outline_from_bytes`].
+pub fn extract_copper_from_bytes(
+    bytes: &[u8],
+    outline_bbox: &BoundingBox,
+) -> Option<(CopperData, CopperCounts)> {
+    extract_copper_from_reader(BufReader::new(Cursor::new(bytes)), outline_bbox)
+}
+
+/// Shared core: parse from any buffered reader, walk copper, tessellate
+/// against the outline bbox.
+fn extract_copper_from_reader<R: Read>(
+    reader: BufReader<R>,
+    outline_bbox: &BoundingBox,
+) -> Option<(CopperData, CopperCounts)> {
     let doc = match parse(reader) {
         Ok(d) => d,
         Err((d, _)) => d,

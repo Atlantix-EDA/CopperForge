@@ -6,7 +6,14 @@
 use glow::{Context, HasContext as _};
 use nalgebra::Matrix4;
 
-const VS_UNLIT: &str = r#"#version 330
+// Shader bodies are written *without* a `#version` directive — `compile()`
+// prepends the right one per backend at runtime. Desktop GL gets
+// `#version 330`; WebGL2 (wasm) gets `#version 300 es` + a float precision
+// qualifier, which GLSL ES requires. Hardcoding `#version 330` here would
+// fail to compile under WebGL2 and panic the browser app. The body syntax
+// (`layout(location=…) in`, explicit `out vec4`) is valid in both 330 and
+// ES 3.00, so only the header differs.
+const VS_UNLIT: &str = r#"
 uniform mat4 u_mvp;
 layout(location=0) in vec3 a_pos;
 layout(location=1) in vec3 a_col;
@@ -14,7 +21,7 @@ out vec3 v_col;
 void main() { v_col = a_col; gl_Position = u_mvp * vec4(a_pos, 1.0); }
 "#;
 
-const FS_UNLIT: &str = r#"#version 330
+const FS_UNLIT: &str = r#"
 uniform float u_alpha;
 in vec3 v_col;
 out vec4 o_col;
@@ -69,9 +76,18 @@ unsafe impl Sync for UnlitProgram {}
 
 unsafe fn compile(gl: &Context, vs_src: &str, fs_src: &str) -> glow::Program {
     unsafe {
+        // Pick the GLSL header for the active backend. WebGL2 reports as an
+        // embedded (GLES) context and needs `#version 300 es` plus an
+        // explicit default float precision; desktop GL uses `#version 330`.
+        let header: &str = if gl.version().is_embedded {
+            "#version 300 es\nprecision highp float;\n"
+        } else {
+            "#version 330\n"
+        };
         let make = |kind: u32, src: &str| {
+            let full = format!("{header}{src}");
             let s = gl.create_shader(kind).expect("create_shader");
-            gl.shader_source(s, src);
+            gl.shader_source(s, &full);
             gl.compile_shader(s);
             if !gl.get_shader_compile_status(s) {
                 panic!("shader compile error: {}", gl.get_shader_info_log(s));
