@@ -2,6 +2,8 @@
 //!
 //! Parses the PCB file directly — no live IPC connection to KiCad needed.
 
+pub mod schematic;
+
 use std::path::Path;
 use kiparse::pcb::detail_parser::{DetailParser, ComponentInfo};
 
@@ -170,6 +172,93 @@ pub fn component_summary(entries: &[BomEntry]) -> Vec<(String, usize)> {
     let mut sorted: Vec<_> = counts.into_iter().collect();
     sorted.sort_by(|a, b| b.1.cmp(&a.1));
     sorted
+}
+
+/// Cover-page statistics for a release BOM workbook. Mirrors the metrics the
+/// Board stats panel surfaces, gathered in one pass for the export.
+#[derive(Debug, Clone, Default)]
+pub struct CoverStats {
+    pub top_smt: usize,
+    pub top_th: usize,
+    pub bottom_smt: usize,
+    pub bottom_th: usize,
+    pub dimensions: Option<BoardDimensions>,
+    pub smt_pads: usize,
+    pub th_pads: usize,
+    /// Non-plated through-hole pads (mechanical holes, tooling).
+    pub np_pads: usize,
+    pub vias: usize,
+}
+
+impl CoverStats {
+    pub fn total_components(&self) -> usize {
+        self.top_smt + self.top_th + self.bottom_smt + self.bottom_th
+    }
+    pub fn through_holes(&self) -> usize {
+        self.th_pads + self.vias
+    }
+}
+
+/// SMT vs through-hole from the footprint name. Heuristic — KiCad footprint
+/// libraries name through-hole parts distinctly. The exact answer would read
+/// pad types from kiparse; this matches the stats-panel classification.
+fn is_through_hole(footprint: &str) -> bool {
+    let f = footprint.to_lowercase();
+    f.contains("tht")
+        || f.contains("through")
+        || f.contains("pinheader")
+        || f.contains("pin_header")
+        || f.contains("_th_")
+        || f.contains("radial")
+        || f.contains("axial")
+        || f.contains("dip-")
+        || f.contains("to-220")
+        || f.contains("to-92")
+}
+
+/// Count SMT pads, plated and non-plated through-hole pads, and vias from the
+/// raw PCB text. Board-level and exact (no footprint heuristic involved here).
+fn pad_hole_counts(content: &str) -> (usize, usize, usize, usize) {
+    use once_cell::sync::Lazy;
+    use regex::Regex;
+    static SMD: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r#"\(pad\s+"[^"]*"\s+smd\b"#).unwrap());
+    static TH: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r#"\(pad\s+"[^"]*"\s+thru_hole\b"#).unwrap());
+    static NP: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r#"\(pad\s+"[^"]*"\s+np_thru_hole\b"#).unwrap());
+    static VIA: Lazy<Regex> = Lazy::new(|| Regex::new(r#"\(via\b"#).unwrap());
+    (
+        SMD.find_iter(content).count(),
+        TH.find_iter(content).count(),
+        NP.find_iter(content).count(),
+        VIA.find_iter(content).count(),
+    )
+}
+
+/// Compute cover-page statistics from the parsed entries plus the raw
+/// `.kicad_pcb` content (the caller already read the file for `extract_bom`).
+pub fn cover_stats(entries: &[BomEntry], pcb_content: &str) -> CoverStats {
+    let mut s = CoverStats::default();
+    for e in entries {
+        let bottom = {
+            let l = e.layer.to_lowercase();
+            l.starts_with('b') || l.contains("bottom")
+        };
+        match (bottom, is_through_hole(&e.footprint)) {
+            (false, false) => s.top_smt += 1,
+            (false, true) => s.top_th += 1,
+            (true, false) => s.bottom_smt += 1,
+            (true, true) => s.bottom_th += 1,
+        }
+    }
+    s.dimensions = compute_board_dimensions_from_str(pcb_content);
+    let (smt, th, np, via) = pad_hole_counts(pcb_content);
+    s.smt_pads = smt;
+    s.th_pads = th;
+    s.np_pads = np;
+    s.vias = via;
+    s
 }
 
 #[cfg(test)]

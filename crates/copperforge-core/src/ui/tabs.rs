@@ -390,16 +390,18 @@ fn open_release_modal(app: &mut CopperForgeApp) {
 /// `create_release`, which injects the vendor-specific extras (e.g.
 /// `PCBWAY_FAB_SPECS.md`) into the zip.
 fn open_release_modal_for(app: &mut CopperForgeApp, target: Option<crate::vendor::VendorKind>) {
-    let (existing_releases, description_prefill) = app.projects_panel.panel_state.project_manager_state
+    let (existing_releases, description_prefill, name_prefill) = app.projects_panel.panel_state.project_manager_state
         .as_ref()
         .and_then(|s| s.current_project.as_ref())
-        .map(|p| (p.releases.clone(), p.metadata.description.clone()))
+        .map(|p| (p.releases.clone(), p.metadata.description.clone(), p.metadata.name.clone()))
         .unwrap_or_default();
     let suggested_tag = crate::release::suggest_next_rev_tag(&existing_releases);
     app.projects_panel.panel_state.release_modal = Some(crate::app::ReleaseModalState {
         rev_tag: suggested_tag,
         description: description_prefill,
         changes: String::new(),
+        board_pn: name_prefill,
+        copper_weight: String::new(),
         include_date_in_name: true,
         include_notes_in_zip: true,
         error: None,
@@ -507,10 +509,20 @@ fn open_regenerate_release_modal(app: &mut CopperForgeApp, composite: &str) {
         .cloned();
     let Some(existing) = existing else { return };
 
+    // board_pn/copper_weight aren't persisted on the Release record — prefill
+    // the part number from the project name; copper weight is re-entered.
+    let name_prefill = app.projects_panel.panel_state.project_manager_state
+        .as_ref()
+        .and_then(|pm| pm.project_list.iter().find(|p| p.id == project_id))
+        .map(|p| p.name.clone())
+        .unwrap_or_default();
+
     app.projects_panel.panel_state.release_modal = Some(crate::app::ReleaseModalState {
         rev_tag: existing.tag.clone(),
         description: existing.description.clone(),
         changes: existing.changes.clone(),
+        board_pn: name_prefill,
+        copper_weight: String::new(),
         include_date_in_name: existing.include_date_in_name,
         include_notes_in_zip: existing.include_notes_in_zip,
         error: None,

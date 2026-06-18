@@ -26,6 +26,57 @@ pub struct SymbolMeta {
     pub manufacturer: String,
     pub mpn: String,
     pub datasheet: String,
+    /// Distributor part numbers as `(vendor, part_number)`, e.g.
+    /// `("Digi-Key", "541-301CCT-ND")`. Digi-Key and Mouser are the
+    /// standard pair, but the list is open — Newark, Arrow, LCSC, … land
+    /// here too as libraries start carrying their fields. Ordered with
+    /// Digi-Key and Mouser first (see `commit`).
+    pub vendors: Vec<(String, String)>,
+}
+
+/// Canonical distributor names and the normalised key prefix that identifies
+/// their part-number fields. New distributors are a one-line addition here.
+const KNOWN_VENDORS: &[(&str, &str)] = &[
+    ("Digi-Key", "DIGIKEY"),
+    ("Mouser", "MOUSER"),
+    ("Newark", "NEWARK"),
+    ("Arrow", "ARROW"),
+    ("LCSC", "LCSC"),
+    ("Farnell", "FARNELL"),
+];
+
+/// Output ordering rank: the standard pair first, everything else after in
+/// first-seen order (a stable sort preserves it).
+fn vendor_rank(name: &str) -> u8 {
+    match name {
+        "Digi-Key" => 0,
+        "Mouser" => 1,
+        _ => 2,
+    }
+}
+
+/// If `norm` (a normalised property key) names a distributor's part-number
+/// field, return that distributor's canonical name. Matches the bare vendor
+/// (`MOUSER`) and the common P/N suffixes (`MOUSERPARTNUMBER`, `MOUSERPN`, …).
+fn vendor_field(norm: &str) -> Option<&'static str> {
+    for (display, prefix) in KNOWN_VENDORS {
+        if let Some(rest) = norm.strip_prefix(prefix) {
+            if matches!(rest, "" | "PN" | "PARTNUMBER" | "PARTNO" | "PARTNUM") {
+                return Some(display);
+            }
+        }
+    }
+    None
+}
+
+/// Map a free-text `Supplier` value (e.g. "Digi-Key", "digikey") to a canonical
+/// distributor name, so a generic Supplier/SupplierPN pair routes correctly.
+fn canonical_vendor(supplier: &str) -> Option<&'static str> {
+    let n = norm_key(supplier);
+    KNOWN_VENDORS
+        .iter()
+        .find(|(_, prefix)| n.starts_with(prefix))
+        .map(|(display, _)| *display)
 }
 
 /// Index keyed by `(value, footprint-name)`.
@@ -95,6 +146,13 @@ struct SymbolBuild {
     manufacturer: String,
     mpn: String,
     datasheet: String,
+    // Vendor data is split across libraries: the atlantix-eda resistor libs
+    // carry a generic Supplier="Digi-Key" / SupplierPN pair, while capacitor
+    // libs carry an explicit "Mouser Part Number". Collect both shapes and
+    // resolve to a canonical (vendor, pn) list at commit().
+    supplier: String,
+    supplier_pn: String,
+    vendor_pns: Vec<(String, String)>,
 }
 
 impl SymbolBuild {
@@ -102,6 +160,19 @@ impl SymbolBuild {
         if self.value.is_empty() {
             return;
         }
+        // Explicit per-vendor fields first, then the generic Supplier pair
+        // (routed to a canonical vendor, or kept verbatim if unrecognised).
+        let mut vendors = self.vendor_pns;
+        if !self.supplier_pn.is_empty() {
+            let vendor = canonical_vendor(&self.supplier)
+                .map(str::to_string)
+                .unwrap_or(self.supplier);
+            if !vendor.is_empty() && !vendors.iter().any(|(v, _)| *v == vendor) {
+                vendors.push((vendor, self.supplier_pn));
+            }
+        }
+        vendors.retain(|(_, pn)| !pn.is_empty());
+        vendors.sort_by_key(|(v, _)| vendor_rank(v));
         let key = (self.value, footprint_name(&self.footprint).to_string());
         index.insert(
             key,
@@ -110,6 +181,7 @@ impl SymbolBuild {
                 manufacturer: self.manufacturer,
                 mpn: self.mpn,
                 datasheet: self.datasheet,
+                vendors,
             },
         );
     }
@@ -166,7 +238,8 @@ fn index_kicad_sym(path: &Path, index: &mut SymbolIndex) {
                         // `Manufacturer` / `MANUFACTURER_NAME` / `MF`,
                         // `Part Number` / `MPN` / `MP`, etc. Match on a
                         // normalised key, and keep the first non-empty hit.
-                        match norm_key(&key).as_str() {
+                        let nk = norm_key(&key);
+                        match nk.as_str() {
                             "VALUE" if b.value.is_empty() => b.value = val,
                             "FOOTPRINT" if b.footprint.is_empty() => {
                                 b.footprint = val
@@ -192,7 +265,26 @@ fn index_kicad_sym(path: &Path, index: &mut SymbolIndex) {
                                     b.datasheet = clean(&val)
                                 }
                             }
-                            _ => {}
+                            // Generic supplier pair (atlantix-eda resistor libs).
+                            "SUPPLIER" if b.supplier.is_empty() => {
+                                b.supplier = clean(&val)
+                            }
+                            "SUPPLIERPN" | "SUPPLIERPARTNUMBER"
+                                if b.supplier_pn.is_empty() =>
+                            {
+                                b.supplier_pn = clean(&val)
+                            }
+                            // Explicit per-vendor part-number fields, e.g.
+                            // "Digi-Key Part Number" / "Mouser Part Number".
+                            // First non-empty value per vendor wins.
+                            _ => {
+                                if let Some(vendor) = vendor_field(&nk) {
+                                    if !b.vendor_pns.iter().any(|(v, _)| v == vendor) {
+                                        b.vendor_pns
+                                            .push((vendor.to_string(), clean(&val)));
+                                    }
+                                }
+                            }
                         }
                     }
                 }

@@ -5,6 +5,7 @@
 //! RELEASE_NOTES.md, bundled into a single `.zip` under
 //! `<project_dir>/outputs/<rev_name>/`.
 
+use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -52,6 +53,10 @@ pub struct ReleaseRequest {
     pub rev_tag: String,
     pub description: String,
     pub changes: String,
+    /// Board part number for the BOM cover page.
+    pub board_pn: String,
+    /// Copper weight for the BOM cover page, e.g. "2 oz".
+    pub copper_weight: String,
     pub include_date_in_name: bool,
     pub include_notes_in_zip: bool,
     pub target: Option<VendorKind>,
@@ -62,7 +67,10 @@ pub struct ReleaseRequest {
 pub struct ReleaseSources<'a> {
     pub pcb_path: &'a Path,
     pub gerber_dir: &'a Path,
-    pub kicad_cli: std::process::Command,
+    /// kicad-cli method key (e.g. "flatpak", "snap", "custom:/path"). A fresh
+    /// `Command` is built per export — drill and ODB++ each need their own,
+    /// since `Command` is consumed by `output()`.
+    pub kicad_cli_method: String,
     pub kicad_version: Option<String>,
     pub os_description: String,
 }
@@ -105,7 +113,21 @@ pub fn create_release(
     let drill_dir = rev_dir.join("drill_staging");
     std::fs::create_dir_all(&drill_dir)
         .map_err(|e| format!("Failed to create drill staging dir: {}", e))?;
-    export_drill(sources.kicad_cli, sources.pcb_path, &drill_dir, logger)?;
+    let drill_cli = crate::app::CopperForgeApp::build_kicad_cli_command(&sources.kicad_cli_method);
+    export_drill(drill_cli, sources.pcb_path, &drill_dir, logger)?;
+
+    // 1b. Export ODB++ (assembly houses request it). kicad-cli emits a
+    //     compressed archive directly (`--compression zip`, the default), so
+    //     this single .zip is bundled as-is into the release package — a
+    //     self-contained ODB++ archive is exactly what assembly houses expect.
+    //     Non-fatal: a failure logs a warning and the release proceeds.
+    let mut fab_files: Vec<PathBuf> = Vec::new();
+    let odb_path = rev_dir.join(format!("{}-odb.zip", project_stem));
+    let odb_cli = crate::app::CopperForgeApp::build_kicad_cli_command(&sources.kicad_cli_method);
+    match export_odb(odb_cli, sources.pcb_path, &odb_path, logger) {
+        Ok(()) => fab_files.push(odb_path),
+        Err(e) => logger.log_warning(&format!("ODB++ export skipped: {}", e)),
+    }
 
     // 2. Resolve git commit (optional). A `-dirty` suffix means the project
     //    directory has uncommitted or untracked files — the hash alone does
@@ -149,46 +171,82 @@ pub fn create_release(
     std::fs::write(&notes_path, &notes_markdown)
         .map_err(|e| format!("Failed to write RELEASE_NOTES.md: {}", e))?;
 
-    // 4b. Fabrication data: centroid (CPL) + BOM (CSV and XLSX), written next
-    //     to the zip and bundled into it. Non-fatal — a BOM parse failure logs
-    //     a warning and the release proceeds without these files.
-    let mut fab_files: Vec<PathBuf> = Vec::new();
-    match crate::bom::extract_bom(sources.pcb_path) {
-        Ok(entries) if !entries.is_empty() => {
-            type Writer = fn(&[crate::bom::BomEntry], &Path) -> Result<(), String>;
-            let targets: [(&str, PathBuf, Writer); 3] = [
-                (
-                    "Centroid file",
-                    rev_dir.join(format!("{}-centroid.csv", project_stem)),
-                    crate::export::centroid::write_cpl_csv,
-                ),
-                (
-                    "BOM CSV",
-                    rev_dir.join(format!("{}-bom.csv", project_stem)),
-                    crate::export::bom::write_bom_csv,
-                ),
-                (
-                    "BOM XLSX",
-                    rev_dir.join(format!("{}-bom.xlsx", project_stem)),
-                    crate::export::bom::write_bom_xlsx,
-                ),
-            ];
-            for (label, path, write) in targets {
-                match write(&entries, &path) {
+    // 4b. Fabrication data, written next to the zip and bundled into it. Each
+    //     step is best-effort — a failure logs a warning and the release
+    //     proceeds without that file.
+    //
+    //     - Centroid (CPL): PCB component positions (kiparse).
+    //     - BOM: schematic-sourced (kicad-cli sch export bom), a two-page
+    //       Cover + BOM workbook plus a CSV. The schematic is the canonical
+    //       source of part fields, DNP and "exclude from BOM"; cover-page
+    //       stats (counts, board size, pad/via counts) come from the PCB.
+    let pcb_content = std::fs::read_to_string(sources.pcb_path).unwrap_or_default();
+    let entries = crate::bom::extract_bom(sources.pcb_path).unwrap_or_default();
+
+    if entries.is_empty() {
+        logger.log_warning("PCB has no components — centroid not bundled.");
+    } else {
+        let cpl = rev_dir.join(format!("{}-centroid.csv", project_stem));
+        match crate::export::centroid::write_cpl_csv(&entries, &cpl) {
+            Ok(()) => {
+                logger.log_info(&format!("Centroid file: {}", cpl.display()));
+                fab_files.push(cpl);
+            }
+            Err(e) => logger.log_warning(&format!("Centroid file skipped: {}", e)),
+        }
+    }
+
+    let sch_path = sources.pcb_path.with_extension("kicad_sch");
+    if !sch_path.exists() {
+        logger.log_warning(&format!(
+            "Schematic not found ({}) — BOM not bundled.",
+            sch_path.display()
+        ));
+    } else {
+        match crate::bom::schematic::export_sch_bom(
+            &sources.kicad_cli_method,
+            &sch_path,
+            &rev_dir,
+            "Digi-Key",
+            "Mouser",
+        ) {
+            Ok(lines) if !lines.is_empty() => {
+                let cover = crate::export::bom::CoverInfo {
+                    board_pn: req.board_pn.clone(),
+                    rev: req.rev_tag.clone(),
+                    date: now_local.format("%d %B %Y").to_string(),
+                    copper: req.copper_weight.clone(),
+                    logo_path: None,
+                    stats: crate::bom::cover_stats(&entries, &pcb_content),
+                };
+                let csv = rev_dir.join(format!("{}-bom.csv", project_stem));
+                match crate::export::bom::write_release_bom_csv(&lines, &csv) {
                     Ok(()) => {
-                        logger.log_info(&format!("{}: {}", label, path.display()));
-                        fab_files.push(path);
+                        logger.log_info(&format!("BOM CSV: {}", csv.display()));
+                        fab_files.push(csv);
                     }
-                    Err(e) => logger.log_warning(&format!("{} skipped: {}", label, e)),
+                    Err(e) => logger.log_warning(&format!("BOM CSV skipped: {}", e)),
                 }
+                let xlsx = rev_dir.join(format!("{}-bom.xlsx", project_stem));
+                match crate::export::bom::write_release_bom_xlsx(&lines, &xlsx, &cover) {
+                    Ok(()) => {
+                        logger.log_info(&format!("BOM XLSX: {}", xlsx.display()));
+                        fab_files.push(xlsx);
+                    }
+                    Err(e) => logger.log_warning(&format!("BOM XLSX skipped: {}", e)),
+                }
+                logger.log_info(&format!(
+                    "BOM: {} line items (schematic-sourced)",
+                    lines.len()
+                ));
+            }
+            Ok(_) => {
+                logger.log_warning("Schematic BOM export produced no lines — BOM not bundled.")
+            }
+            Err(e) => {
+                logger.log_warning(&format!("BOM export failed — BOM not bundled: {}", e))
             }
         }
-        Ok(_) => logger
-            .log_warning("BOM extraction found no components — centroid/BOM not bundled."),
-        Err(e) => logger.log_warning(&format!(
-            "BOM extraction failed — centroid/BOM not bundled: {}",
-            e
-        )),
     }
 
     // 4c. Vendor-specific extras (PCBWay fab-specs sheet, etc.). Treated
@@ -414,6 +472,35 @@ fn export_drill(
     Ok(())
 }
 
+/// Export ODB++ to a single compressed archive at `odb_zip`. kicad-cli's
+/// `--compression zip` (the default) writes the archive directly, so the
+/// output is one `.zip` ready to bundle into the release package.
+fn export_odb(
+    mut cmd: std::process::Command,
+    pcb_path: &Path,
+    odb_zip: &Path,
+    logger: &ReactiveEventLogger,
+) -> Result<(), String> {
+    let output = cmd
+        .arg("pcb")
+        .arg("export")
+        .arg("odb")
+        .arg("--compression")
+        .arg("zip")
+        .arg("--output")
+        .arg(odb_zip)
+        .arg(pcb_path)
+        .output()
+        .map_err(|e| format!("kicad-cli odb export failed to spawn: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("kicad-cli odb export failed: {}", stderr.trim()));
+    }
+    logger.log_info(&format!("ODB++ archive: {}", odb_zip.display()));
+    Ok(())
+}
+
 fn git_head_short(project_dir: &Path) -> Option<String> {
     let out = std::process::Command::new("git")
         .args(["rev-parse", "--short", "HEAD"])
@@ -509,31 +596,49 @@ fn write_release_zip(
     let opts: SimpleFileOptions = SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
 
-    // Gerbers
-    for entry in std::fs::read_dir(gerber_dir)? {
-        let path = entry?.path();
-        if path.is_file() {
-            add_to_zip(&mut zw, &path, None, opts)?;
-        }
-    }
+    // The zip is assembled from several source dirs that can legitimately hold
+    // files of the same bare name (most commonly an Excellon `.drl`: the
+    // freshly-exported one in `drill_dir`, and a stale copy left in
+    // `gerber_dir` when the user loaded a previous release's gerbers from the
+    // extraction cache). `start_file` rejects a duplicate name outright, so we
+    // dedup by name-in-zip and keep the FIRST writer to claim each name.
+    let mut seen: HashSet<String> = HashSet::new();
 
-    // Drills
+    // Drills first — freshly exported into drill_dir, authoritative for this
+    // release. Any same-named drill encountered later (e.g. a stale cache copy
+    // in gerber_dir) is then skipped rather than shipped.
     for entry in std::fs::read_dir(drill_dir)? {
         let path = entry?.path();
         if path.is_file() {
-            add_to_zip(&mut zw, &path, None, opts)?;
+            add_to_zip(&mut zw, &mut seen, &path, None, opts)?;
+        }
+    }
+
+    // Gerbers. Skip raw Excellon drills here — drills come from drill_dir
+    // above; a `.drl` in gerber_dir is only ever a stale loaded-release
+    // artifact, and adding it would collide.
+    for entry in std::fs::read_dir(gerber_dir)? {
+        let path = entry?.path();
+        if path.is_file() {
+            if path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("drl"))
+            {
+                continue;
+            }
+            add_to_zip(&mut zw, &mut seen, &path, None, opts)?;
         }
     }
 
     // Notes
     if let Some((notes_path, name_in_zip)) = notes {
-        add_to_zip(&mut zw, notes_path, Some(name_in_zip), opts)?;
+        add_to_zip(&mut zw, &mut seen, notes_path, Some(name_in_zip), opts)?;
     }
 
     // Fabrication data (centroid, BOM)
     for path in extra_files {
         if path.is_file() {
-            add_to_zip(&mut zw, path, None, opts)?;
+            add_to_zip(&mut zw, &mut seen, path, None, opts)?;
         }
     }
 
@@ -555,6 +660,7 @@ fn open_directory(dir: &Path) {
 
 fn add_to_zip(
     zw: &mut ZipWriter<File>,
+    seen: &mut HashSet<String>,
     src: &Path,
     alias: Option<&str>,
     opts: SimpleFileOptions,
@@ -562,6 +668,12 @@ fn add_to_zip(
     let name = alias
         .map(|s| s.to_string())
         .unwrap_or_else(|| src.file_name().unwrap().to_string_lossy().into_owned());
+    // Skip a name already claimed by an earlier source dir — prevents the
+    // `zip` crate's "Duplicate filename" error when the same bare name
+    // appears in more than one source (see write_release_zip).
+    if !seen.insert(name.clone()) {
+        return Ok(());
+    }
     zw.start_file(name, opts)?;
     let mut f = File::open(src)?;
     let mut buf = Vec::new();

@@ -38,14 +38,6 @@ pub fn show_projects_modals(
     show_project_import_modal(panel_state, services, ctx);
 }
 
-/// Build a kicad-cli Command for the configured method, if any.
-fn kicad_cli_command(services: &SharedServices) -> Option<std::process::Command> {
-    services
-        .kicad_cli_method
-        .as_deref()
-        .map(crate::app::CopperForgeApp::build_kicad_cli_command)
-}
-
 /// Render the release modal and handle Create/Cancel actions.
 fn show_release_modal(
     panel_state: &mut ProjectsPanelState,
@@ -94,6 +86,16 @@ fn show_release_modal(
                 .show(ui, |ui| {
                     ui.label("Rev tag:");
                     ui.text_edit_singleline(&mut modal.rev_tag);
+                    ui.end_row();
+
+                    ui.label("Board P/N:");
+                    ui.add(egui::TextEdit::singleline(&mut modal.board_pn)
+                        .hint_text("BOM cover page part number"));
+                    ui.end_row();
+
+                    ui.label("Copper weight:");
+                    ui.add(egui::TextEdit::singleline(&mut modal.copper_weight)
+                        .hint_text("e.g. 2 oz"));
                     ui.end_row();
 
                     ui.label("Include date in filename:");
@@ -189,10 +191,11 @@ fn execute_release_from_modal(panel_state: &mut ProjectsPanelState, services: &m
         }
     }
 
-    // Build kicad-cli Command for drill export
-    let Some(kicad_cli) = kicad_cli_command(services) else {
+    // kicad-cli method for the drill + ODB++ exports (a fresh Command is built
+    // per export inside create_release).
+    let Some(kicad_cli_method) = services.kicad_cli_method.clone() else {
         if let Some(ref mut m) = panel_state.release_modal {
-            m.error = Some("kicad-cli not discovered at startup — cannot export drill files.".into());
+            m.error = Some("kicad-cli not discovered at startup — cannot export drill/ODB++ files.".into());
         }
         return;
     };
@@ -207,6 +210,8 @@ fn execute_release_from_modal(panel_state: &mut ProjectsPanelState, services: &m
         rev_tag: modal.rev_tag.clone(),
         description: modal.description.clone(),
         changes: modal.changes.clone(),
+        board_pn: modal.board_pn.clone(),
+        copper_weight: modal.copper_weight.clone(),
         include_date_in_name: modal.include_date_in_name,
         include_notes_in_zip: modal.include_notes_in_zip,
         target: modal.target,
@@ -214,7 +219,7 @@ fn execute_release_from_modal(panel_state: &mut ProjectsPanelState, services: &m
     let sources = crate::release::ReleaseSources {
         pcb_path: &pcb_path,
         gerber_dir: &gerber_dir,
-        kicad_cli,
+        kicad_cli_method,
         kicad_version,
         os_description,
     };
@@ -1075,6 +1080,8 @@ impl ReleaseModalState {
             rev_tag: self.rev_tag.clone(),
             description: self.description.clone(),
             changes: self.changes.clone(),
+            board_pn: self.board_pn.clone(),
+            copper_weight: self.copper_weight.clone(),
             include_date_in_name: self.include_date_in_name,
             include_notes_in_zip: self.include_notes_in_zip,
             target: self.target,
@@ -1086,6 +1093,8 @@ struct ReleaseModalSnapshot {
     rev_tag: String,
     description: String,
     changes: String,
+    board_pn: String,
+    copper_weight: String,
     include_date_in_name: bool,
     include_notes_in_zip: bool,
     target: Option<crate::vendor::VendorKind>,
