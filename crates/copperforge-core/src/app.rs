@@ -182,6 +182,12 @@ pub struct ReleaseModalState {
     pub rev_tag: String,
     pub description: String,
     pub changes: String,
+    /// Board part number for the BOM cover page. Prefilled from the project
+    /// name; user-editable per release.
+    pub board_pn: String,
+    /// Copper weight for the BOM cover page, e.g. "2 oz". No board metadata
+    /// records this, so it's entered per release.
+    pub copper_weight: String,
     pub include_date_in_name: bool,
     pub include_notes_in_zip: bool,
     pub error: Option<String>,

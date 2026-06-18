@@ -84,6 +84,14 @@ pub struct ReleaseArgs {
     /// Skip the `_DDMmmYYYY` suffix on the zip filename.
     #[arg(long)]
     pub no_date: bool,
+
+    /// Board part number for the BOM cover page. Defaults to the PCB file stem.
+    #[arg(long)]
+    pub board_pn: Option<String>,
+
+    /// Copper weight for the BOM cover page, e.g. "2 oz".
+    #[arg(long, default_value = "")]
+    pub copper: String,
 }
 
 /// Run the CLI command. Returns the process exit code so `main` can
@@ -131,8 +139,6 @@ fn run_release(args: ReleaseArgs) -> Result<PathBuf, String> {
     let kicad_cli_method = kicad_cli_method.ok_or_else(|| {
         "kicad-cli not found. Install KiCad (PATH, Flatpak, or Snap) and retry.".to_string()
     })?;
-    let kicad_cli = CopperForgeApp::build_kicad_cli_command(&kicad_cli_method);
-
     // ── 3. Logger sink (CLI mode prints log lines as they queue) ─
     let logger_state = Dynamic::new(ReactiveEventLoggerState::new());
     let log_colors = Dynamic::new(LogColors::default());
@@ -164,10 +170,20 @@ fn run_release(args: ReleaseArgs) -> Result<PathBuf, String> {
         args.changes.clone()
     };
 
+    let board_pn = args.board_pn.clone().unwrap_or_else(|| {
+        pcb_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string()
+    });
+
     let req = ReleaseRequest {
         rev_tag: rev_tag.clone(),
         description: args.description.clone(),
         changes,
+        board_pn,
+        copper_weight: args.copper.clone(),
         include_date_in_name: !args.no_date,
         include_notes_in_zip: true,
         target: if args.pcbway { Some(VendorKind::PcbWay) } else { None },
@@ -176,7 +192,7 @@ fn run_release(args: ReleaseArgs) -> Result<PathBuf, String> {
     let sources = ReleaseSources {
         pcb_path: &pcb_path,
         gerber_dir: &gerber_dir,
-        kicad_cli,
+        kicad_cli_method: kicad_cli_method.clone(),
         kicad_version,
         os_description: build_os_description(),
     };
