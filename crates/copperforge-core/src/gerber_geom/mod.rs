@@ -479,6 +479,40 @@ fn sort_and_bbox(mut contours: Vec<Vec<Point2<f32>>>) -> (Vec<Vec<Point2<f32>>>,
     (contours, BoundingBox { min, max })
 }
 
+/// Even-odd fill tessellation of the outline contours in RAW gerber coords
+/// (no centering). For the 2D substrate fill, which maps each vertex through
+/// the view's gerber→screen transform. The even-odd rule cuts out interior
+/// rings (routed slots / cutouts) so a framed panel's gaps stay open.
+pub fn fill_mesh(contours: &[Vec<Point2<f32>>]) -> Option<(Vec<[f32; 2]>, Vec<u32>)> {
+    let mut builder = LyonPath::builder();
+    for contour in contours {
+        if contour.len() < 3 {
+            continue;
+        }
+        builder.begin(LyonPoint::new(contour[0].x, contour[0].y));
+        for p in &contour[1..] {
+            builder.line_to(LyonPoint::new(p.x, p.y));
+        }
+        builder.close();
+    }
+    let path = builder.build();
+
+    let mut geometry: VertexBuffers<[f32; 2], u32> = VertexBuffers::new();
+    let mut tess = FillTessellator::new();
+    tess.tessellate_path(
+        &path,
+        &FillOptions::default().with_fill_rule(FillRule::EvenOdd),
+        &mut BuffersBuilder::new(&mut geometry, |v: lyon::tessellation::FillVertex| {
+            [v.position().x, v.position().y]
+        }),
+    )
+    .ok()?;
+    if geometry.indices.is_empty() {
+        return None;
+    }
+    Some((geometry.vertices, geometry.indices))
+}
+
 fn tessellate(
     contours: &[Vec<Point2<f32>>],
     bbox: &BoundingBox,

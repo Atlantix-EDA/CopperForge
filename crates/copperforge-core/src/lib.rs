@@ -16,6 +16,7 @@ pub mod cuforge_client;
 pub mod cuforge_api;
 // layer_operations module removed - all functionality moved to layer_store
 pub mod navigation;
+pub mod perspectives;
 pub mod platform;
 pub mod project;
 pub mod project_manager;
