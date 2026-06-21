@@ -478,27 +478,22 @@ fn load_release_gerbers(app: &mut CopperForgeApp, composite: &str) {
         }
     };
 
-    // Drive the existing loader + transition to Ready so the rest of the
-    // app behaves as it does after a normal Generate+Load cycle.
-    app.services.project_state.set(crate::project::ProjectState::LoadingGerbers {
-        pcb_path: pcb_path.clone(),
-        gerber_dir: gerber_dir.clone(),
-    });
+    // Load the release gerbers into the viewer for INSPECTION ONLY. A release
+    // is a fab DELIVERABLE, not the project — so we deliberately do NOT touch
+    // `project_state` here. Leaving it on the actual project means a clean app
+    // close (which persists `project_state` via `save_settings` in `Drop`) saves
+    // the project, never the release's extracted gerbers. Previously this set
+    // `Ready { release_gerbers }`, which got persisted and wrongly restored as
+    // "the project" on the next launch.
     crate::project::gerber_ops::load_gerbers_into_viewer(
         app,
         &pcb_path,
         &gerber_dir,
         &logger,
     );
-    let last_modified = std::fs::metadata(&pcb_path)
-        .and_then(|m| m.modified())
-        .unwrap_or(std::time::SystemTime::now());
-    app.services.project_state.set(crate::project::ProjectState::Ready {
-        pcb_path,
-        gerber_dir,
-        last_modified,
-    });
-    logger.log_info(&format!("Loaded gerbers from release '{rev_tag}'"));
+    logger.log_info(&format!(
+        "Loaded gerbers from release '{rev_tag}' for inspection (project unchanged)"
+    ));
 }
 
 /// Open the release modal in Regenerate mode — seeded from the existing
