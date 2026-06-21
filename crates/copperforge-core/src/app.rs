@@ -63,6 +63,14 @@ pub struct CopperForgeApp {
 
     // ── Dock state (eframe owns) ──────────────────────────────
     dock_state: DockState<Tab>,
+    /// Last persisted dock-layout JSON, for change-detected eager saving — the
+    /// working layout is written the moment panels are rearranged, so a
+    /// force-kill (or crash) can't lose it the way a Drop-only save would.
+    last_layout: Option<String>,
+    /// Named, saveable/deletable dock perspectives + a startup default.
+    perspectives: crate::perspectives::PerspectiveStore,
+    /// "Save current as…" name buffer for the Perspectives menu.
+    perspective_save_buf: String,
 
     // ── File dialogs (I/O handles) ────────────────────────────
     pub pcb_file_dialog: egui_file_dialog::FileDialog,
@@ -418,6 +426,7 @@ impl CopperForgeApp {
             ui_state: UiState::default(),
             needs_initial_view: true,
             rotation_degrees: 0.0,
+            board_geometry_gen: 0,
             board_outline: None,
             top_copper: None,
             bottom_copper: None,
@@ -468,13 +477,29 @@ impl CopperForgeApp {
         dispatcher.activate(&CitizenId::new("gerber_view"));
         let _ = dispatcher.drain_messages();
 
-        let dock_state = Self::create_default_dock_state();
+        // Restore the working layout, then let a saved default perspective
+        // override it on startup (plugin tabs are re-added by `register_panel`,
+        // so strip any persisted ones first).
+        let perspectives = crate::perspectives::PerspectiveStore::load();
+        let mut dock_state = Self::create_default_dock_state();
+        if let Some(json) = perspectives.default_json() {
+            if let Ok(mut ds) = serde_json::from_str::<DockState<Tab>>(json) {
+                ds.retain_tabs(|tab| !matches!(&tab.kind, TabKind::Plugin(_)));
+                dock_state = ds;
+            }
+        }
+        // Seed the change-detector with the restored/default layout so we only
+        // write once the user actually rearranges something.
+        let last_layout = serde_json::to_string(&dock_state).ok();
 
         let mut app = Self {
             services,
             dispatcher,
             app_messages: Vec::new(),
             dock_state,
+            last_layout,
+            perspectives,
+            perspective_save_buf: String::new(),
             pcb_file_dialog: egui_file_dialog::FileDialog::new(),
             last_picked_pcb_file: None,
             projects_directory_dialog: egui_file_dialog::FileDialog::new(),
@@ -894,6 +919,24 @@ impl CopperForgeApp {
     /// to `plugin_panels` and a tab for it is pushed into the dock. Core
     /// dispatches to it via the `DockPanel` trait without naming it — this
     /// is how external crates contribute panels.
+    /// Apply a saved perspective: replace the dock layout with the
+    /// perspective's, then re-add the registered plugin tabs (their positions
+    /// aren't persisted — indices aren't stable across runs).
+    fn apply_perspective(&mut self, json: &str) {
+        let Ok(mut ds) = serde_json::from_str::<DockState<Tab>>(json) else {
+            return;
+        };
+        ds.retain_tabs(|tab| !matches!(&tab.kind, TabKind::Plugin(_)));
+        self.dock_state = ds;
+        for idx in 0..self.plugin_panels.len() {
+            let tab = Tab::new(TabKind::Plugin(idx), SurfaceIndex::main(), NodeIndex(0));
+            self.dock_state.main_surface_mut().push_to_first_leaf(tab);
+        }
+        // Sync the change-detector so applying doesn't immediately rewrite the
+        // working-layout file with the just-applied state.
+        self.last_layout = serde_json::to_string(&self.dock_state).ok();
+    }
+
     pub fn register_panel(&mut self, panel: Box<dyn crate::dock_panel::DockPanel>) {
         let idx = self.plugin_panels.len();
         self.plugin_panels.push(panel);
@@ -1129,6 +1172,13 @@ impl eframe::App for CopperForgeApp {
         }
 
         // Project Ribbon at the top
+        // Perspective-menu intents, applied after the ribbon closure so we
+        // don't borrow `self` mutably while the menu reads `self.perspectives`.
+        let mut persp_apply: Option<String> = None;
+        let mut persp_save: Option<String> = None;
+        let mut persp_delete: Option<String> = None;
+        let mut persp_set_default: Option<Option<String>> = None;
+
         egui::TopBottomPanel::top("project_ribbon").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 10.0;
@@ -1181,6 +1231,59 @@ impl eframe::App for CopperForgeApp {
                     ui.separator();
                     self.show_clock_display(ui);
                     ui.separator();
+                    ui.menu_button("🗗 Perspectives", |ui| {
+                        let names: Vec<String> = self.perspectives.names().cloned().collect();
+                        let default_name = self.perspectives.default_name().map(str::to_string);
+
+                        if names.is_empty() {
+                            ui.label(egui::RichText::new("(no saved perspectives)").italics());
+                        } else {
+                            ui.label("Open:");
+                            for name in &names {
+                                let star = if default_name.as_deref() == Some(name) { "★ " } else { "" };
+                                if ui.button(format!("{star}{name}")).clicked() {
+                                    persp_apply = self.perspectives.get(name).cloned();
+                                    ui.close();
+                                }
+                            }
+                        }
+
+                        ui.separator();
+                        ui.label("Save current layout as:");
+                        ui.horizontal(|ui| {
+                            ui.text_edit_singleline(&mut self.perspective_save_buf);
+                            let can = !self.perspective_save_buf.trim().is_empty();
+                            if ui.add_enabled(can, egui::Button::new("💾 Save")).clicked() {
+                                persp_save = Some(self.perspective_save_buf.trim().to_string());
+                                ui.close();
+                            }
+                        });
+
+                        if !names.is_empty() {
+                            ui.separator();
+                            ui.menu_button("Set default (startup)", |ui| {
+                                if ui.button("None — use working layout").clicked() {
+                                    persp_set_default = Some(None);
+                                    ui.close();
+                                }
+                                for name in &names {
+                                    if ui.button(name).clicked() {
+                                        persp_set_default = Some(Some(name.clone()));
+                                        ui.close();
+                                    }
+                                }
+                            });
+                            ui.menu_button("Delete", |ui| {
+                                for name in &names {
+                                    if ui.button(name).clicked() {
+                                        persp_delete = Some(name.clone());
+                                        ui.close();
+                                    }
+                                }
+                            });
+                        }
+                    });
+                    ui.separator();
                     ui.menu_button("📋 Hotkeys", |ui| {
                         ui.heading("Keyboard Shortcuts");
                         ui.separator();
@@ -1223,6 +1326,23 @@ impl eframe::App for CopperForgeApp {
             });
         });
 
+        // Apply Perspectives-menu intents (deferred out of the closure).
+        if let Some(json) = persp_apply {
+            self.apply_perspective(&json);
+        }
+        if let Some(name) = persp_save {
+            if let Ok(json) = serde_json::to_string(&self.dock_state) {
+                self.perspectives.save(name, json);
+            }
+            self.perspective_save_buf.clear();
+        }
+        if let Some(name) = persp_delete {
+            self.perspectives.delete(&name);
+        }
+        if let Some(d) = persp_set_default {
+            self.perspectives.set_default(d);
+        }
+
         // Main dock area below the ribbon
         let mut dock_state = self.dock_state.clone();
         let mut dispatcher = std::mem::take(&mut self.dispatcher);
@@ -1247,6 +1367,16 @@ impl eframe::App for CopperForgeApp {
         }
         self.dispatcher = dispatcher;
         self.dock_state = dock_state;
+
+        // Persist the perspective the moment panels are rearranged — compared
+        // against the last-saved JSON so we only write on change, and so a
+        // force-kill can't lose the layout (Drop alone wouldn't have run).
+        if let Ok(json) = serde_json::to_string(&self.dock_state) {
+            if self.last_layout.as_deref() != Some(json.as_str()) {
+                self.save_dock_state();
+                self.last_layout = Some(json);
+            }
+        }
 
         crate::cuforge_client::show_modal_if_open(
             ctx,

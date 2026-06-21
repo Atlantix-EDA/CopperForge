@@ -140,6 +140,13 @@ impl Tab {
                 self.render_gerber_view(ui, params.app);
             }
             TabKind::GerberView3d => {
+                // Rebuild meshes when the board geometry changed via any reload
+                // path (app ribbon or the pro panel through services).
+                let geom_gen = params.app.services.board_geometry_gen;
+                if params.app.gerber_view_3d_panel.last_geometry_gen != geom_gen {
+                    params.app.gerber_view_3d_panel.mark_dirty();
+                    params.app.gerber_view_3d_panel.last_geometry_gen = geom_gen;
+                }
                 let gl = params.app.gl_context.clone();
                 let outline = params.app.services.board_outline.as_ref();
                 let top_copper = params.app.services.top_copper.as_ref();
@@ -471,27 +478,22 @@ fn load_release_gerbers(app: &mut CopperForgeApp, composite: &str) {
         }
     };
 
-    // Drive the existing loader + transition to Ready so the rest of the
-    // app behaves as it does after a normal Generate+Load cycle.
-    app.services.project_state.set(crate::project::ProjectState::LoadingGerbers {
-        pcb_path: pcb_path.clone(),
-        gerber_dir: gerber_dir.clone(),
-    });
+    // Load the release gerbers into the viewer for INSPECTION ONLY. A release
+    // is a fab DELIVERABLE, not the project — so we deliberately do NOT touch
+    // `project_state` here. Leaving it on the actual project means a clean app
+    // close (which persists `project_state` via `save_settings` in `Drop`) saves
+    // the project, never the release's extracted gerbers. Previously this set
+    // `Ready { release_gerbers }`, which got persisted and wrongly restored as
+    // "the project" on the next launch.
     crate::project::gerber_ops::load_gerbers_into_viewer(
         app,
         &pcb_path,
         &gerber_dir,
         &logger,
     );
-    let last_modified = std::fs::metadata(&pcb_path)
-        .and_then(|m| m.modified())
-        .unwrap_or(std::time::SystemTime::now());
-    app.services.project_state.set(crate::project::ProjectState::Ready {
-        pcb_path,
-        gerber_dir,
-        last_modified,
-    });
-    logger.log_info(&format!("Loaded gerbers from release '{rev_tag}'"));
+    logger.log_info(&format!(
+        "Loaded gerbers from release '{rev_tag}' for inspection (project unchanged)"
+    ));
 }
 
 /// Open the release modal in Regenerate mode — seeded from the existing
@@ -826,8 +828,15 @@ fn render_ruler_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
 }
 
 fn setup_viewport(ui: &mut egui::Ui, app: &mut CopperForgeApp) -> (Rect, egui::Response) {
-    ui.ctx().request_repaint();
-    
+    // On-demand rendering. egui already repaints on input (pan / zoom / hover /
+    // keys), so we no longer force a redraw every frame — which previously
+    // re-rendered the whole (multi-up) scene at 60 fps even while idle, the main
+    // steady-state GPU/CPU drain. Keep repainting only while a view reset is
+    // pending, so a freshly loaded board still auto-fits without user input.
+    if app.services.needs_initial_view {
+        ui.ctx().request_repaint();
+    }
+
     let available_size = ui.available_size();
     let size = egui::Vec2::new(
         available_size.x.max(100.0),
@@ -1110,7 +1119,11 @@ fn render_gerber_content(ui: &mut egui::Ui, app: &mut CopperForgeApp, viewport: 
     
     // Draw grid
     crate::display::draw_grid(&painter, viewport, &app.services.view_state, &app.services.grid_settings);
-    
+
+    // Board substrate fill (behind the layers) so bare board — panel rails,
+    // routed gaps — reads as solid material rather than see-through background.
+    render_substrate_fill(app, &painter);
+
     // Draw quadrant axes
     if app.services.display_manager.quadrant_view_enabled {
         draw_quadrant_axes(&painter, viewport, &app.services.view_state, app.services.ui_state.origin_screen_pos);
@@ -1124,9 +1137,69 @@ fn render_gerber_content(ui: &mut egui::Ui, app: &mut CopperForgeApp, viewport: 
     
     // Render overlays
     render_overlays(app, &painter, viewport);
-    
+
+    // Generic producer-supplied overlay (e.g. a dock panel's analysis shapes)
+    render_view_overlay(app, &painter);
+
     // Render cursor info
     render_cursor_info(ui, app, &painter, viewport);
+}
+
+/// Fill the board outline (Edge.Cuts) with an FR-4 colour behind the layers,
+/// so bare board reads as solid. Even-odd tessellation keeps routed slots /
+/// cutouts open. No-op when disabled or no board is loaded.
+fn render_substrate_fill(app: &CopperForgeApp, painter: &Painter) {
+    if !app.services.display_manager.show_substrate {
+        return;
+    }
+    let Some(outline) = app.services.board_outline.as_ref() else { return };
+    let Some((verts, indices)) = crate::gerber_geom::fill_mesh(&outline.contours) else {
+        return;
+    };
+    let vs = &app.services.view_state;
+    let color = Color32::from_rgb(28, 64, 40); // muted FR-4 green (substrate)
+    let vertices: Vec<egui::epaint::Vertex> = verts
+        .iter()
+        .map(|v| egui::epaint::Vertex {
+            pos: vs.gerber_to_screen_coords(nalgebra::Point2::new(v[0] as f64, v[1] as f64)),
+            uv: egui::epaint::WHITE_UV,
+            color,
+        })
+        .collect();
+    painter.add(egui::Shape::mesh(egui::epaint::Mesh {
+        indices,
+        vertices,
+        texture_id: egui::TextureId::default(),
+    }));
+}
+
+/// Draw overlays contributed by registered citizens (the viewport analogue of
+/// `register_panel`). Each plugin returns generic fills / lines / labels in
+/// world (mm) coords; core transforms and paints them without interpreting
+/// them. Core has no idea what any overlay represents.
+fn render_view_overlay(app: &CopperForgeApp, painter: &Painter) {
+    let vs = &app.services.view_state;
+    let pt = |p: (f64, f64)| vs.gerber_to_screen_coords(nalgebra::Point2::new(p.0, p.1));
+    let col = |c: [u8; 4]| Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
+
+    for panel in &app.plugin_panels {
+        let Some(ov) = panel.viewport_overlay(&app.services) else { continue };
+        for r in &ov.fills {
+            painter.rect_filled(egui::Rect::from_two_pos(pt(r.min), pt(r.max)), 0.0, col(r.rgba));
+        }
+        for l in &ov.lines {
+            painter.line_segment([pt(l.from), pt(l.to)], Stroke::new(l.width, col(l.rgba)));
+        }
+        for t in &ov.labels {
+            painter.text(
+                pt(t.at) + Vec2::new(4.0, 4.0),
+                egui::Align2::LEFT_TOP,
+                &t.text,
+                egui::FontId::proportional(t.size),
+                col(t.rgba),
+            );
+        }
+    }
 }
 
 

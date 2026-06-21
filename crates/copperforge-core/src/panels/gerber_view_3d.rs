@@ -19,6 +19,9 @@ pub struct GerberView3dPanel {
     citizen_id: CitizenId,
     citizen_state: CitizenState,
     view: Board3dView,
+    /// Last `services.board_geometry_gen` this panel rebuilt for — when it
+    /// changes (any reload path), the panel marks itself dirty.
+    pub last_geometry_gen: u64,
 }
 
 impl GerberView3dPanel {
@@ -27,6 +30,7 @@ impl GerberView3dPanel {
             citizen_id: CitizenId::new("gerber_view_3d"),
             citizen_state,
             view: Board3dView::new(),
+            last_geometry_gen: 0,
         }
     }
 

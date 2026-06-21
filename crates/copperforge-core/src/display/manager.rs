@@ -77,6 +77,11 @@ pub struct DisplayManager {
     
     /// Offset magnitude for quadrant view (in mm)
     pub quadrant_offset_magnitude: f64,
+
+    /// Paint the board substrate (Edge.Cuts outline filled in an FR-4 colour)
+    /// behind the layers, so bare areas — panel rails, routed gaps — read as
+    /// solid board instead of see-through background. On by default.
+    pub show_substrate: bool,
 }
 
 impl DisplayManager {
@@ -91,6 +96,7 @@ impl DisplayManager {
             user_delta_offset: VectorOffset { x: 0.0, y: 0.0 },
             showing_top: true,
             quadrant_view_enabled: false,
+            show_substrate: true,
             quadrant_offset_magnitude: 141.42, // Default ~100mil in x and y (sqrt(100^2 + 100^2) * 0.0254)
         }
     }

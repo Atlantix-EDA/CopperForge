@@ -6,6 +6,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::event_logger::ReactiveEventLogger;
+use crate::services::SharedServices;
 use crate::CopperForgeApp;
 
 /// Invoke `kicad-cli pcb export gerbers` (main copper/silk/mask/paste/edge-cuts),
@@ -181,21 +182,21 @@ fn copper_layers_from_pcb(pcb_path: &Path) -> String {
 /// `pcb_path` is read to pull the KiCad 10 canonical names for User.N
 /// slots out of the `.kicad_pcb` (e.g. "M1 Board Outline", "Top 3D Body")
 /// so the View Settings panel shows KiCad's own labels.
-pub fn load_gerbers_into_viewer(
-    app: &mut CopperForgeApp,
+pub fn load_gerbers(
+    services: &mut SharedServices,
     pcb_path: &Path,
     gerber_dir: &Path,
     logger: &ReactiveEventLogger,
 ) {
     logger.log_info("Clearing existing gerber layers...");
-    app.services.layer_store.clear_all();
+    services.layer_store.clear_all();
 
     let copper_stack = copper_layers_from_pcb_vec(pcb_path);
     if !copper_stack.is_empty() {
         let cc = copper_stack.len() as u8;
         logger.log_info(&format!(
             "Board has {} copper layers: {}", cc, copper_stack.join(", ")));
-        app.services.layer_store.set_copper_count(cc);
+        services.layer_store.set_copper_count(cc);
     }
 
     match crate::project_manager::kicad_metadata::read_user_layer_names(pcb_path) {
@@ -203,18 +204,18 @@ pub fn load_gerbers_into_viewer(
             if !names.is_empty() {
                 logger.log_info(&format!("Parsed {} formal user-layer name(s) from .kicad_pcb", names.len()));
             }
-            app.services.layer_store.user_layer_names = names;
+            services.layer_store.user_layer_names = names;
         }
         Err(e) => {
             logger.log_warning(&format!("Could not parse user-layer names from PCB: {}", e));
         }
     }
 
-    match app.services.layer_store.load_from_directory(gerber_dir) {
+    match services.layer_store.load_from_directory(gerber_dir) {
         Ok((loaded_count, unassigned_count)) => {
             if loaded_count > 0 {
                 logger.log_info(&format!("Successfully loaded {} gerber layers", loaded_count));
-                app.services.needs_initial_view = true;
+                services.needs_initial_view = true;
             } else if unassigned_count > 0 {
                 logger.log_warning(&format!("{} gerber files could not be automatically assigned", unassigned_count));
             } else {
@@ -231,61 +232,73 @@ pub fn load_gerbers_into_viewer(
     // legacy `gerber_viewer` path has already read it once for the 2D canvas.
     // This duplication is documented in the FDD's "Legacy 2D Rendering Path"
     // section and goes away when Phase 7 retires gerber_viewer.
-    app.services.board_outline = extract_outline_from_layer_store(&app.services.layer_store, logger);
+    services.board_outline = extract_outline_from_layer_store(&services.layer_store, logger);
 
     // Copper layers (Phase 4a). Require an outline bbox so the copper mesh
     // lines up with the board mesh — both share the same world transform
     // (Stage 6 of the FDD pipeline, centered at outline bbox).
-    if let Some(outline) = app.services.board_outline.as_ref() {
+    if let Some(outline) = services.board_outline.as_ref() {
         let outline_bbox = outline.bbox.clone();
         let outline_contours = outline.contours.clone();
-        app.services.top_copper = extract_copper_side(
-            &app.services.layer_store,
+        services.top_copper = extract_copper_side(
+            &services.layer_store,
             crate::layer_store::LayerType::Copper(1),
             "F.Cu",
             &outline_bbox,
             logger,
         );
-        app.services.bottom_copper = extract_copper_side(
-            &app.services.layer_store,
-            app.services.layer_store.bottom_copper_type(),
+        services.bottom_copper = extract_copper_side(
+            &services.layer_store,
+            services.layer_store.bottom_copper_type(),
             "B.Cu",
             &outline_bbox,
             logger,
         );
-        app.services.top_mask = extract_mask_side(
-            &app.services.layer_store,
+        services.top_mask = extract_mask_side(
+            &services.layer_store,
             crate::layer_store::LayerType::Soldermask(crate::layer_store::Side::Top),
             "F.Mask",
             &outline_contours,
             &outline_bbox,
             logger,
         );
-        app.services.bottom_mask = extract_mask_side(
-            &app.services.layer_store,
+        services.bottom_mask = extract_mask_side(
+            &services.layer_store,
             crate::layer_store::LayerType::Soldermask(crate::layer_store::Side::Bottom),
             "B.Mask",
             &outline_contours,
             &outline_bbox,
             logger,
         );
-        app.services.drill = extract_drill_side(
-            &app.services.layer_store,
+        services.drill = extract_drill_side(
+            &services.layer_store,
             &outline_bbox,
             logger,
         );
     } else {
-        app.services.top_copper = None;
-        app.services.bottom_copper = None;
-        app.services.top_mask = None;
-        app.services.bottom_mask = None;
-        app.services.drill = None;
+        services.top_copper = None;
+        services.bottom_copper = None;
+        services.top_mask = None;
+        services.bottom_mask = None;
+        services.drill = None;
     }
 
-    // The 3D geometry just changed — force the panel to drop the previous
-    // board's GPU meshes and re-upload (its per-layer change detection treats
-    // Some→Some as "no change", so loading a different board would otherwise
-    // keep showing the old one).
+    // Signal the new geometry so the 3D panel rebuilds — works no matter who
+    // called us (app ribbon or a dock panel through services).
+    services.board_geometry_gen = services.board_geometry_gen.wrapping_add(1);
+}
+
+/// App-level load: drive [`load_gerbers`] over the shared services, then refresh
+/// the 3D panel — which lives on the app, not services. Its per-layer change
+/// detection treats Some→Some as "no change", so loading a different board
+/// would otherwise keep showing the old one's GPU meshes.
+pub fn load_gerbers_into_viewer(
+    app: &mut CopperForgeApp,
+    pcb_path: &Path,
+    gerber_dir: &Path,
+    logger: &ReactiveEventLogger,
+) {
+    load_gerbers(&mut app.services, pcb_path, gerber_dir, logger);
     app.gerber_view_3d_panel.mark_dirty();
 }
 

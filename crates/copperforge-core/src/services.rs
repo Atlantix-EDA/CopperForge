@@ -18,6 +18,40 @@ use crate::event_logger::{LogColors, ReactiveEventLoggerState};
 use crate::project::{manager::ProjectConfig, ProjectState};
 use crate::project_manager::database::ProjectDatabase;
 
+/// A generic overlay drawn over the board in the gerber view. Coordinates are
+/// world (mm), in the gerber frame, and are transformed by the view like any
+/// other geometry. Core draws these primitives without knowing what they
+/// represent — producers (e.g. a dock panel) build whatever shapes they need.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ViewOverlay {
+    pub fills: Vec<OverlayRect>,
+    pub lines: Vec<OverlayLine>,
+    pub labels: Vec<OverlayLabel>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OverlayRect {
+    pub min: (f64, f64),
+    pub max: (f64, f64),
+    pub rgba: [u8; 4],
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OverlayLine {
+    pub from: (f64, f64),
+    pub to: (f64, f64),
+    pub rgba: [u8; 4],
+    pub width: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OverlayLabel {
+    pub at: (f64, f64),
+    pub text: String,
+    pub rgba: [u8; 4],
+    pub size: f32,
+}
+
 /// Every cross-panel fact lives here. Populated once at init.
 pub struct SharedServices {
     // ── Reactive (observable across panels) ───────────────────
@@ -52,6 +86,10 @@ pub struct SharedServices {
     pub ui_state: UiState,
     pub needs_initial_view: bool,
     pub rotation_degrees: f32,
+    /// Bumped every time the board geometry is (re)loaded. Lets the 3D panel
+    /// detect a new board and rebuild its meshes regardless of which path
+    /// triggered the load (app ribbon or a dock panel via services).
+    pub board_geometry_gen: u64,
 
     // ── 3D pipeline geometry (FDD Stage 3-6 output) ───────────
     /// Board-outline polygon IR extracted from the mechanical-outline

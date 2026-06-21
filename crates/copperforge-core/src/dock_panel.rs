@@ -22,4 +22,15 @@ pub trait DockPanel {
     /// from there (the reactive cells, the project state, etc.); it has
     /// no access to the host app struct.
     fn ui(&mut self, ui: &mut egui::Ui, services: &mut crate::services::SharedServices);
+
+    /// Optionally contribute an overlay drawn over the board in the gerber
+    /// view — the viewport analogue of contributing a tab. Returns generic
+    /// shapes in world (mm) coords; core transforms and paints them without
+    /// interpreting them. Default: none.
+    fn viewport_overlay(
+        &self,
+        _services: &crate::services::SharedServices,
+    ) -> Option<crate::services::ViewOverlay> {
+        None
+    }
 }
