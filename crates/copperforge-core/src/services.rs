@@ -138,13 +138,6 @@ pub struct SharedServices {
     pub latched_measurement_start: Option<nalgebra::Point2<f64>>,
     pub latched_measurement_end: Option<nalgebra::Point2<f64>>,
 
-    // ── Modal flags ───────────────────────────────────────────
-    pub show_about_modal: bool,
-    pub show_kicad_version_modal: bool,
-    /// Toggled by clicking the ribbon's CuForge Services indicator;
-    /// renders the connection-details modal (URL, version, recheck).
-    pub show_cuforge_services_modal: bool,
-
     // ── Cross-panel summaries ─────────────────────────────────
     /// Count of BOM entries loaded in the BOM panel. Mirror so other panels
     /// (e.g. the Shell `status` command) can report it without reaching into
