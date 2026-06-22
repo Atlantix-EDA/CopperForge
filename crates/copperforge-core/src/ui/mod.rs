@@ -1,8 +1,6 @@
-pub mod layer_controls;
 pub mod orientation_panel;
 pub mod drc_panel;
 pub mod grid_settings;
-pub mod view_settings_panel;
 pub mod projects_panel;
 pub mod projects_modals;
 pub mod about_panel;
@@ -11,7 +9,6 @@ pub mod selection;
 pub mod bom_panel_v2;
 
 // Re-export the show functions for each panel
-pub use layer_controls::show_layers_panel;
 pub use drc_panel::show_drc_panel;
 pub use grid_settings::show_grid_panel;
 pub use projects_panel::show_projects_panel;
