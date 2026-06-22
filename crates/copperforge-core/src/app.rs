@@ -104,6 +104,15 @@ pub struct CopperForgeApp {
     /// [`CopperForgeApp::register_panel`]. Dispatched through the
     /// `DockPanel` trait — core never names them. Empty by default.
     pub plugin_panels: Vec<Box<dyn crate::dock_panel::DockPanel>>,
+
+    // ── App-shell modal flags ─────────────────────────────────
+    // Which app-level modal is open. These are shell concerns — not citizen
+    // or shared-panel state — so they live on the app, not in SharedServices.
+    pub show_about_modal: bool,
+    pub show_kicad_version_modal: bool,
+    /// Toggled by clicking the ribbon's CuForge Services indicator;
+    /// renders the connection-details modal (URL, version, recheck).
+    pub show_cuforge_services_modal: bool,
 }
 
 /// Persistent state for the Projects panel, grouped into one struct so
@@ -450,9 +459,6 @@ impl CopperForgeApp {
             ruler_drag_start: None,
             latched_measurement_start: None,
             latched_measurement_end: None,
-            show_about_modal: false,
-            show_kicad_version_modal: false,
-            show_cuforge_services_modal: false,
             bom_component_count: 0,
             cuforge_status: egui_mobius_reactive::Dynamic::new(
                 crate::cuforge_client::CuforgeStatus::Unknown,
@@ -511,6 +517,9 @@ impl CopperForgeApp {
             gl_context: None,
             projects_panel: crate::panels::ProjectsPanel::new(projects_citizen_state),
             plugin_panels: Vec::new(),
+            show_about_modal: false,
+            show_kicad_version_modal: false,
+            show_cuforge_services_modal: false,
         };
 
         let logger = ReactiveEventLogger::with_colors(&app.services.logger_state, &app.services.log_colors);
@@ -664,7 +673,7 @@ impl CopperForgeApp {
 
         if ui.button(egui::RichText::new(format!("CopperForge v{}", VERSION))
             .color(egui::Color32::from_rgb(180, 200, 255))).clicked() {
-            self.services.show_about_modal = true;
+            self.show_about_modal = true;
         }
 
         ui.separator();
@@ -677,7 +686,7 @@ impl CopperForgeApp {
 
         if ui.button(egui::RichText::new(kicad_text)
             .color(egui::Color32::from_rgb(180, 255, 200))).clicked() {
-            self.services.show_kicad_version_modal = true;
+            self.show_kicad_version_modal = true;
         }
 
         ui.separator();
@@ -1226,7 +1235,7 @@ impl eframe::App for CopperForgeApp {
                     )
                     .clicked()
                     {
-                        self.services.show_cuforge_services_modal = true;
+                        self.show_cuforge_services_modal = true;
                     }
                     ui.separator();
                     self.show_clock_display(ui);
@@ -1380,11 +1389,11 @@ impl eframe::App for CopperForgeApp {
 
         crate::cuforge_client::show_modal_if_open(
             ctx,
-            &mut self.services.show_cuforge_services_modal,
+            &mut self.show_cuforge_services_modal,
             &self.services.cuforge_status,
         );
 
-        if self.services.show_about_modal {
+        if self.show_about_modal {
             egui::Window::new("About CopperForge")
                 .collapsible(false)
                 .resizable(true)
@@ -1400,14 +1409,14 @@ impl eframe::App for CopperForgeApp {
                     ui.horizontal(|ui| {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.button("Close").clicked() {
-                                self.services.show_about_modal = false;
+                                self.show_about_modal = false;
                             }
                         });
                     });
                 });
         }
 
-        if self.services.show_kicad_version_modal {
+        if self.show_kicad_version_modal {
             egui::Window::new("KiCad Information")
                 .collapsible(false)
                 .resizable(false)
@@ -1422,7 +1431,7 @@ impl eframe::App for CopperForgeApp {
                     ui.horizontal(|ui| {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.button("Close").clicked() {
-                                self.services.show_kicad_version_modal = false;
+                                self.show_kicad_version_modal = false;
                             }
                         });
                     });
