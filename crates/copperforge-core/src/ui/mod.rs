@@ -5,7 +5,6 @@ pub mod grid_settings;
 pub mod view_settings_panel;
 pub mod projects_panel;
 pub mod projects_modals;
-pub mod settings_panel;
 pub mod about_panel;
 pub mod tabs;
 pub mod selection;
@@ -17,7 +16,6 @@ pub use drc_panel::show_drc_panel;
 pub use grid_settings::show_grid_panel;
 pub use projects_panel::show_projects_panel;
 pub use projects_modals::show_projects_modals;
-pub use settings_panel::show_settings_panel;
 pub use about_panel::AboutPanel;
 pub use bom_panel_v2::{show_bom_panel, BomPanelState};
 
