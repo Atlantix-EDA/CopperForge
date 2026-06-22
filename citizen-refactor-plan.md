@@ -1,6 +1,26 @@
 # CopperForge Citizen Refactor — Implementation Plan
 
-**Version 0.1 — a working plan, iterate freely.**
+**Version 0.2 — collapse phase done; next phase = SharedServices untangle.**
+
+## Status
+
+**Phase 1 (delegation collapse) — essentially done.** Only the *delegator*
+panels had the `panels/`↔`ui/` split, and most aren't clean collapses:
+
+| Panel | Disposition |
+|-------|-------------|
+| `settings` | ✅ **collapsed** (`fe1b5d9`) — render moved into the citizen |
+| `view_settings` | ✅ **collapsed** (`9e8a5f5`) — render moved in; **dead duplicate `ViewSettingsPanel<'a>` removed** |
+| `drc` | 🅿️ **parked — full redesign** (also carries a misplaced `pub LayerInfo` consumed by `drc_operations`) |
+| `bom` | 🅿️ **parked — redesign**: the in-app panel is the *ill-formatted* BOM; the well-formatted one is the **xlsx export engine**. End-state = rebuild the panel to render the export's structured rows (one BOM, shown in-app and shipped). |
+| `projects` | **leave as-is** — not a delegator but a ~1,800-line PM subsystem (`projects_panel.rs` 712 + `projects_modals.rs` 1101) with sound internal structure (modals isolated on `ProjectsPanelState`). Collapsing → an 1,800-line monster. At most: tidy into a `projects/` module dir later. |
+| `gerber_view`, `gerber_view_3d`, `logger`, `terminal`, `board3d_view` | already **one-file** (rendering inline) — no collapse needed. |
+
+**Refined principle (learned doing it):** *collapse keepers (badly **organized**); park redesign candidates (badly **designed**); never force a real subsystem into one file.*
+
+So the remaining readability work is **structural, not collapses** — the
+`SharedServices` untangle (next section), readability passes on the inline giants
+(`board3d_view` 1058, `terminal` 599), and macro/naming consistency.
 
 ## The goal — readability, nothing else
 
@@ -129,6 +149,64 @@ anything heavy.
 - Never combine this with a version bump or any dependency change.
 - Never big-bang. One citizen → build → run → commit → repeat.
 - Engines move by reorganization, not rewrite — unless they fail the read test.
+
+## The SharedServices untangle (the next phase)
+
+`SharedServices` is ~43 fields passed `&mut` everywhere — the god-object. The
+untangle classifies every field into a home and rehomes it. The key realization:
+a large cluster is **gerber-view-private state that leaked into the global struct.**
+
+### The four buckets, applied to the real fields
+
+**Bucket 0 — Private to one citizen** (move INTO that citizen as fields):
+- *Gerber-view interaction cluster (the big win):* `view_state`, `ui_state`,
+  `rotation_degrees`, `needs_initial_view`, `zoom_window_start`,
+  `zoom_window_dragging`, `setting_origin_mode`, `origin_has_been_set`,
+  `ruler_active`, `ruler_start/end/dragging/drag_start`,
+  `latched_measurement_start/end` — ~15 fields, gerber-view-only.
+- `drc_manager` → DrcPanel (drc parked → defer). `bom_component_count` → BomPanel (parked).
+
+**Bucket 1 — Genuinely shared** (stays app-owned — the real graph, leave it):
+- `logger_state` + `log_colors` (9 files — everyone logs); `project_state` (6);
+  `layer_store` (10 — gerber view + 3D + drc, the viewer data plane);
+  `bom_state` (BomPanel↔ProjectsPanel); `display_manager`, `global_units_mils`;
+  `user_timezone`, `use_24_hour_clock` (settings panel ↔ ribbon clock).
+
+**Bucket 2 — Derived** (compute from shared; future `Derived<T>`):
+- `board_outline`, `top_copper`, `bottom_copper`, `top_mask`, `bottom_mask`,
+  `drill` — all recomputed from `layer_store` on load; `board_geometry_gen` is
+  the manual recompute signal.
+
+**Bucket 3 — Backend dispatch** (`Signal`/`Slot`):
+- `cuforge_status` — written by the background health-poller; its result.
+  (Gerber generation's hand-rolled `mpsc` worker is the prototype of this bucket.)
+
+**Not reactive state — init config/handles** (split into a `Config`/`Platform`
+grouping, not mixed with UI state): `config`, `config_path`, `kicad_version`,
+`kicad_cli_method`, `project_db`.
+
+**App-shell, not a citizen** — modal flags: `show_about_modal`,
+`show_kicad_version_modal`, `show_cuforge_services_modal`.
+
+### Highest-value first target
+
+The **gerber-view interaction cluster** (Bucket 0, ~15 fields): one real owner,
+the biggest chunk of the monolith, and moving it makes the gerber view
+self-contained. It's bound up with collapsing the gerber-view rendering
+(`render_gerber_view` in `tabs.rs`) into a stateful `GerberViewPanel` citizen —
+do them together: the citizen owns the interaction state + the render body.
+
+### Incremental method (non-negotiable)
+
+Per field or tight cluster, never the whole struct at once:
+1. `grep` every reader/writer of `services.<field>` — confirm the real owner.
+2. Single-owner → move into that citizen as a private field; fix the (contained) sites.
+3. Genuinely shared → leave it.
+4. `cargo build` green + app runs + **commit**. Then the next field/cluster.
+
+Start with the safest single-owner sub-cluster (ruler / zoom-window / origin —
+gerber-view-only), prove it, then the rest. Leave Bucket 1 alone (legitimate
+shared core). Defer Buckets 2–3 until private-state migration is done.
 
 ## Open questions
 
