@@ -381,7 +381,7 @@ impl PngExporter {
         let offset: Vector2<f64> = combined_offset.into();
         
         let transform = GerberTransform {
-            rotation: app.services.rotation_degrees.to_radians(),
+            rotation: app.services.gerber_view.rotation_degrees.to_radians(),
             mirroring: app.services.display_manager.mirroring.clone().into(),
             origin: origin - offset,
             offset,

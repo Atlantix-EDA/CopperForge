@@ -275,7 +275,7 @@ fn show_layers_panel<'a>(    ui: &mut egui::Ui,
             match app.services.layer_store.assign_gerber(&filename, layer_type) {
                 Ok(_) => {
                     logger.log_info(&format!("Assigned {} to {:?}", filename, layer_type));
-                    app.services.needs_initial_view = true;
+                    app.services.gerber_view.needs_initial_view = true;
                 }
                 Err(e) => {
                     logger.log_error(&format!("Failed to assign {}: {}", filename, e));
@@ -294,7 +294,7 @@ fn show_layers_panel<'a>(    ui: &mut egui::Ui,
                     for (filename, layer_type) in newly_assigned {
                         logger.log_info(&format!("Auto-detected {} as {:?}", filename, layer_type));
                     }
-                    app.services.needs_initial_view = true;
+                    app.services.gerber_view.needs_initial_view = true;
                 }
             }
         }

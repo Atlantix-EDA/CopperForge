@@ -441,7 +441,7 @@ pub fn show_projects_panel(
                     services.bottom_copper = None;
                     services.top_mask = None;
                     services.bottom_mask = None;
-                    services.needs_initial_view = true;
+                    services.gerber_view.needs_initial_view = true;
 
                     // 2. Restore BOM components if available
                     if !project.bom_components.is_empty() {

@@ -114,7 +114,7 @@ pub fn show_grid_panel<'a>(
     // Align to grid button
     ui.horizontal(|ui| {
         if ui.button("⌗ Align View to Grid (A)").clicked() {
-            crate::display::align_to_grid(&mut app.services.view_state, &app.services.grid_settings);
+            crate::display::align_to_grid(&mut app.services.gerber_view.view_state, &app.services.grid_settings);
             logger.log_custom(LOG_TYPE_GRID, "View aligned to grid");
         }
         
@@ -124,7 +124,7 @@ pub fn show_grid_panel<'a>(
     // Show grid visibility status
     if app.services.grid_settings.enabled {
         ui.separator();
-        let status = get_grid_status(&app.services.view_state, app.services.grid_settings.spacing_mm);
+        let status = get_grid_status(&app.services.gerber_view.view_state, app.services.grid_settings.spacing_mm);
         
         match status {
             GridStatus::TooFine => {

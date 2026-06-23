@@ -52,6 +52,48 @@ pub struct OverlayLabel {
     pub size: f32,
 }
 
+/// The gerber view's view + interaction state, grouped into one struct instead
+/// of a flat run of fields on `SharedServices`. Shared state (relationship #2):
+/// the view transform / refit flag / rotation are read by export, the grid, and
+/// the app; the gerber-view citizen owns the behaviour over it.
+pub struct GerberViewState {
+    pub view_state: ViewState,
+    pub ui_state: UiState,
+    pub needs_initial_view: bool,
+    pub rotation_degrees: f32,
+    pub zoom_window_start: Option<Pos2>,
+    pub zoom_window_dragging: bool,
+    pub setting_origin_mode: bool,
+    pub origin_has_been_set: bool,
+    pub ruler_active: bool,
+    pub ruler_start: Option<nalgebra::Point2<f64>>,
+    pub ruler_end: Option<nalgebra::Point2<f64>>,
+    pub ruler_dragging: bool,
+    pub latched_measurement_start: Option<nalgebra::Point2<f64>>,
+    pub latched_measurement_end: Option<nalgebra::Point2<f64>>,
+}
+
+impl Default for GerberViewState {
+    fn default() -> Self {
+        Self {
+            view_state: ViewState::default(),
+            ui_state: UiState::default(),
+            needs_initial_view: true,
+            rotation_degrees: 0.0,
+            zoom_window_start: None,
+            zoom_window_dragging: false,
+            setting_origin_mode: false,
+            origin_has_been_set: false,
+            ruler_active: false,
+            ruler_start: None,
+            ruler_end: None,
+            ruler_dragging: false,
+            latched_measurement_start: None,
+            latched_measurement_end: None,
+        }
+    }
+}
+
 /// Every cross-panel fact lives here. Populated once at init.
 pub struct SharedServices {
     // ── Reactive (observable across panels) ───────────────────
@@ -82,10 +124,8 @@ pub struct SharedServices {
     // ── Gerber / viewport ─────────────────────────────────────
     pub layer_store: crate::layer_store::LayerStore,
     pub gerber_layer: GerberLayer,
-    pub view_state: ViewState,
-    pub ui_state: UiState,
-    pub needs_initial_view: bool,
-    pub rotation_degrees: f32,
+    /// The gerber view's view + interaction state (grouped — see `GerberViewState`).
+    pub gerber_view: GerberViewState,
     /// Bumped every time the board geometry is (re)loaded. Lets the 3D panel
     /// detect a new board and rebuild its meshes regardless of which path
     /// triggered the load (app ribbon or a dock panel via services).
@@ -122,21 +162,6 @@ pub struct SharedServices {
     // ── User preferences ──────────────────────────────────────
     pub user_timezone: Option<String>,
     pub use_24_hour_clock: bool,
-
-    // ── Viewport interaction ──────────────────────────────────
-    pub zoom_window_start: Option<Pos2>,
-    pub zoom_window_dragging: bool,
-    pub setting_origin_mode: bool,
-    pub origin_has_been_set: bool,
-
-    // ── Ruler tool ────────────────────────────────────────────
-    pub ruler_active: bool,
-    pub ruler_start: Option<nalgebra::Point2<f64>>,
-    pub ruler_end: Option<nalgebra::Point2<f64>>,
-    pub ruler_dragging: bool,
-    pub ruler_drag_start: Option<nalgebra::Point2<f64>>,
-    pub latched_measurement_start: Option<nalgebra::Point2<f64>>,
-    pub latched_measurement_end: Option<nalgebra::Point2<f64>>,
 
     // ── Cross-panel summaries ─────────────────────────────────
     /// Count of BOM entries loaded in the BOM panel. Mirror so other panels

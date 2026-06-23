@@ -12,13 +12,13 @@ use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState, LogColo
 use egui_mobius_reactive::*;
 use gerber_viewer::{
    BoundingBox,
-   ViewState, UiState, GerberTransform
+   GerberTransform
 };
 use crate::platform::parameters::gui::VERSION;
 use crate::project;
 use crate::ui;
 use crate::project_manager;
-use crate::services::SharedServices;
+use crate::services::{SharedServices, GerberViewState};
 
 use crate::ui::{Tab, TabKind, TabViewer, initialize_and_show_banner, show_system_info};
 
@@ -334,20 +334,20 @@ impl CopperForgeApp {
     }
 
     pub fn sync_zoom_to_ecs(&mut self) {
-        self.services.layer_store.zoom.set_scale(self.services.view_state.scale);
-        self.services.layer_store.zoom.center_x = self.services.view_state.translation.x;
-        self.services.layer_store.zoom.center_y = self.services.view_state.translation.y;
+        self.services.layer_store.zoom.set_scale(self.services.gerber_view.view_state.scale);
+        self.services.layer_store.zoom.center_x = self.services.gerber_view.view_state.translation.x;
+        self.services.layer_store.zoom.center_y = self.services.gerber_view.view_state.translation.y;
     }
 
     pub fn sync_zoom_from_ecs(&mut self) {
-        self.services.view_state.scale = self.services.layer_store.zoom.scale;
-        self.services.view_state.translation.x = self.services.layer_store.zoom.center_x;
-        self.services.view_state.translation.y = self.services.layer_store.zoom.center_y;
+        self.services.gerber_view.view_state.scale = self.services.layer_store.zoom.scale;
+        self.services.gerber_view.view_state.translation.x = self.services.layer_store.zoom.center_x;
+        self.services.gerber_view.view_state.translation.y = self.services.layer_store.zoom.center_y;
     }
 
     pub fn render_layers_ecs(&mut self, painter: &egui::Painter) {
-        let view_state = self.services.view_state;
-        let rotation = self.services.rotation_degrees;
+        let view_state = self.services.gerber_view.view_state;
+        let rotation = self.services.gerber_view.rotation_degrees;
         self.services.layer_store.render(painter, view_state, &self.services.display_manager, rotation);
     }
 
@@ -431,10 +431,7 @@ impl CopperForgeApp {
             project_db,
             layer_store,
             gerber_layer: load_demo_gerber(),
-            view_state: ViewState::default(),
-            ui_state: UiState::default(),
-            needs_initial_view: true,
-            rotation_degrees: 0.0,
+            gerber_view: GerberViewState::default(),
             board_geometry_gen: 0,
             board_outline: None,
             top_copper: None,
@@ -448,17 +445,6 @@ impl CopperForgeApp {
             global_units_mils: config.global_units_mils,
             user_timezone: config.user_timezone.clone(),
             use_24_hour_clock: config.use_24_hour_clock,
-            zoom_window_start: None,
-            zoom_window_dragging: false,
-            setting_origin_mode: false,
-            origin_has_been_set: false,
-            ruler_active: false,
-            ruler_start: None,
-            ruler_end: None,
-            ruler_dragging: false,
-            ruler_drag_start: None,
-            latched_measurement_start: None,
-            latched_measurement_end: None,
             bom_component_count: 0,
             cuforge_status: egui_mobius_reactive::Dynamic::new(
                 crate::cuforge_client::CuforgeStatus::Unknown,
@@ -574,7 +560,7 @@ impl CopperForgeApp {
             let origin_gerber_x = self.services.display_manager.design_offset.x;
             let origin_gerber_y = self.services.display_manager.design_offset.y;
 
-            self.services.view_state.translation = Vec2::new(
+            self.services.gerber_view.view_state.translation = Vec2::new(
                 origin_screen_x - (origin_gerber_x as f32 * scale),
                 origin_screen_y + (origin_gerber_y as f32 * scale),
             );
@@ -589,7 +575,7 @@ impl CopperForgeApp {
             let origin: nalgebra::Vector2<f64> = self.services.display_manager.center_offset.clone().into();
             let offset: nalgebra::Vector2<f64> = self.services.display_manager.design_offset.clone().into();
             let transform = GerberTransform {
-                rotation: self.services.rotation_degrees.to_radians(),
+                rotation: self.services.gerber_view.rotation_degrees.to_radians(),
                 mirroring: self.services.display_manager.mirroring.clone().into(),
                 origin: origin - offset,
                 offset,
@@ -605,25 +591,25 @@ impl CopperForgeApp {
             let transformed_bbox = BoundingBox::from_points(&outline_vertices);
             let transformed_center = transformed_bbox.center();
 
-            self.services.view_state.translation = Vec2::new(
+            self.services.gerber_view.view_state.translation = Vec2::new(
                 viewport.center().x - (transformed_center.x as f32 * scale),
                 viewport.center().y + (transformed_center.y as f32 * scale),
             );
         }
 
-        self.services.view_state.scale = scale;
+        self.services.gerber_view.view_state.scale = scale;
 
         self.services.layer_store.zoom.set_scale(scale);
         self.services.layer_store.zoom.set_fit_to_view_scale(scale);
-        self.services.layer_store.zoom.center_x = self.services.view_state.translation.x;
-        self.services.layer_store.zoom.center_y = self.services.view_state.translation.y;
+        self.services.layer_store.zoom.center_x = self.services.gerber_view.view_state.translation.x;
+        self.services.layer_store.zoom.center_y = self.services.gerber_view.view_state.translation.y;
 
-        self.services.needs_initial_view = false;
+        self.services.gerber_view.needs_initial_view = false;
     }
 
     /// Zoom to a specific BOM component location
     pub fn zoom_to_component(&mut self, component: &project_manager::bom::BomComponent, viewport: Rect) {
-        if !self.services.origin_has_been_set {
+        if !self.services.gerber_view.origin_has_been_set {
             let logger = ReactiveEventLogger::with_colors(&self.services.logger_state, &self.services.log_colors);
             logger.log_warning("Please set the origin before using cross-probing");
             return;
@@ -633,13 +619,13 @@ impl CopperForgeApp {
         let comp_y = component.y_location;
 
         let viewport_center = viewport.center();
-        self.services.view_state.translation = Vec2::new(
-            viewport_center.x - (comp_x as f32 * self.services.view_state.scale),
-            viewport_center.y + (comp_y as f32 * self.services.view_state.scale),
+        self.services.gerber_view.view_state.translation = Vec2::new(
+            viewport_center.x - (comp_x as f32 * self.services.gerber_view.view_state.scale),
+            viewport_center.y + (comp_y as f32 * self.services.gerber_view.view_state.scale),
         );
 
-        self.services.layer_store.zoom.center_x = self.services.view_state.translation.x;
-        self.services.layer_store.zoom.center_y = self.services.view_state.translation.y;
+        self.services.layer_store.zoom.center_x = self.services.gerber_view.view_state.translation.x;
+        self.services.layer_store.zoom.center_y = self.services.gerber_view.view_state.translation.y;
 
         let logger = ReactiveEventLogger::with_colors(&self.services.logger_state, &self.services.log_colors);
         logger.log_info(&format!("Cross-probed to component: {} at ({:.2}, {:.2})",
@@ -1092,39 +1078,39 @@ impl eframe::App for CopperForgeApp {
                 }
 
                 if two_d_view_active && i.key_pressed(egui::Key::R) {
-                    self.services.rotation_degrees = (self.services.rotation_degrees + 90.0) % 360.0;
+                    self.services.gerber_view.rotation_degrees = (self.services.gerber_view.rotation_degrees + 90.0) % 360.0;
                     self.services.layer_store.mark_dirty();
 
                     let logger = ReactiveEventLogger::with_colors(&self.services.logger_state, &self.services.log_colors);
                     logger.log_custom(
                         project::constants::LOG_TYPE_ROTATION,
-                        &format!("Rotated board to {:.0}° (R key)", self.services.rotation_degrees)
+                        &format!("Rotated board to {:.0}° (R key)", self.services.gerber_view.rotation_degrees)
                     );
                 }
 
                 if two_d_view_active && i.key_pressed(egui::Key::A) {
-                    display::align_to_grid(&mut self.services.view_state, &self.services.grid_settings);
+                    display::align_to_grid(&mut self.services.gerber_view.view_state, &self.services.grid_settings);
                     let logger = ReactiveEventLogger::with_colors(&self.services.logger_state, &self.services.log_colors);
                     logger.log_info("Aligned view to grid (A key)");
                 }
 
                 if two_d_view_active && i.key_pressed(egui::Key::M) {
-                    if self.services.ruler_active {
-                        if self.services.ruler_start.is_some() && self.services.ruler_end.is_some() {
-                            self.services.latched_measurement_start = self.services.ruler_start;
-                            self.services.latched_measurement_end = self.services.ruler_end;
+                    if self.services.gerber_view.ruler_active {
+                        if self.services.gerber_view.ruler_start.is_some() && self.services.gerber_view.ruler_end.is_some() {
+                            self.services.gerber_view.latched_measurement_start = self.services.gerber_view.ruler_start;
+                            self.services.gerber_view.latched_measurement_end = self.services.gerber_view.ruler_end;
                         }
-                        self.services.ruler_active = false;
-                        self.services.ruler_start = None;
-                        self.services.ruler_end = None;
-                        self.services.ruler_dragging = false;
+                        self.services.gerber_view.ruler_active = false;
+                        self.services.gerber_view.ruler_start = None;
+                        self.services.gerber_view.ruler_end = None;
+                        self.services.gerber_view.ruler_dragging = false;
 
                         let logger = ReactiveEventLogger::with_colors(&self.services.logger_state, &self.services.log_colors);
                         logger.log_info("Ruler mode deactivated (M key) - measurement latched");
                     } else {
-                        self.services.latched_measurement_start = None;
-                        self.services.latched_measurement_end = None;
-                        self.services.ruler_active = true;
+                        self.services.gerber_view.latched_measurement_start = None;
+                        self.services.gerber_view.latched_measurement_end = None;
+                        self.services.gerber_view.ruler_active = true;
 
                         let logger = ReactiveEventLogger::with_colors(&self.services.logger_state, &self.services.log_colors);
                         logger.log_info("Ruler mode activated (M key) - previous measurement cleared");
@@ -1154,13 +1140,13 @@ impl eframe::App for CopperForgeApp {
                     }
                 }
 
-                if i.key_pressed(egui::Key::Escape) && self.services.ruler_active {
-                    if self.services.ruler_start.is_some() && self.services.ruler_end.is_some() {
-                        self.services.latched_measurement_start = self.services.ruler_start;
-                        self.services.latched_measurement_end = self.services.ruler_end;
+                if i.key_pressed(egui::Key::Escape) && self.services.gerber_view.ruler_active {
+                    if self.services.gerber_view.ruler_start.is_some() && self.services.gerber_view.ruler_end.is_some() {
+                        self.services.gerber_view.latched_measurement_start = self.services.gerber_view.ruler_start;
+                        self.services.gerber_view.latched_measurement_end = self.services.gerber_view.ruler_end;
 
                         let logger = ReactiveEventLogger::with_colors(&self.services.logger_state, &self.services.log_colors);
-                        if let (Some(start), Some(end)) = (self.services.ruler_start, self.services.ruler_end) {
+                        if let (Some(start), Some(end)) = (self.services.gerber_view.ruler_start, self.services.gerber_view.ruler_end) {
                             logger.log_info(&format!("Latching measurement - Start: ({:.6}, {:.6}), End: ({:.6}, {:.6})",
                                                     start.x, start.y, end.x, end.y));
                             let dx = end.x - start.x;
@@ -1169,10 +1155,10 @@ impl eframe::App for CopperForgeApp {
                         }
                     }
 
-                    self.services.ruler_active = false;
-                    self.services.ruler_start = None;
-                    self.services.ruler_end = None;
-                    self.services.ruler_dragging = false;
+                    self.services.gerber_view.ruler_active = false;
+                    self.services.gerber_view.ruler_start = None;
+                    self.services.gerber_view.ruler_end = None;
+                    self.services.gerber_view.ruler_dragging = false;
 
                     let logger = ReactiveEventLogger::with_colors(&self.services.logger_state, &self.services.log_colors);
                     logger.log_info("Ruler mode cancelled (ESC key) - measurement latched");
