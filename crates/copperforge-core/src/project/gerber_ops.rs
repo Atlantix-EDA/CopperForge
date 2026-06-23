@@ -215,7 +215,7 @@ pub fn load_gerbers(
         Ok((loaded_count, unassigned_count)) => {
             if loaded_count > 0 {
                 logger.log_info(&format!("Successfully loaded {} gerber layers", loaded_count));
-                services.needs_initial_view = true;
+                services.gerber_view.needs_initial_view = true;
             } else if unassigned_count > 0 {
                 logger.log_warning(&format!("{} gerber files could not be automatically assigned", unassigned_count));
             } else {
