@@ -421,16 +421,14 @@ fn show_release_info_modal(
                     ui.label(egui::RichText::new("Archive").strong());
                     ui.label(
                         egui::RichText::new(release.archive_path.display().to_string())
-                            .monospace()
-                            .small(),
+                            .monospace(),
                     );
                     ui.end_row();
 
                     ui.label(egui::RichText::new("Notes").strong());
                     ui.label(
                         egui::RichText::new(release.notes_path.display().to_string())
-                            .monospace()
-                            .small(),
+                            .monospace(),
                     );
                     ui.end_row();
                 });

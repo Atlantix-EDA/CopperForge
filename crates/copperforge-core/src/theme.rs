@@ -55,7 +55,11 @@ pub fn apply_visuals(ctx: &egui::Context) {
     visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, TokyoNight::BLUE);
 
     visuals.widgets.active.bg_fill = TokyoNight::BLUE;
-    visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, TokyoNight::BG_DARK);
+    // NOTE: egui 0.34 derives `.strong()` text color from `widgets.active`
+    // (`strong_text_color()` returns `widgets.active.text_color()`), ignoring
+    // `override_text_color`. Keep this light so emphasized labels stay visible
+    // on dark panels — a dark value here makes every `.strong()` invisible.
+    visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, TokyoNight::FG);
     visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, TokyoNight::CYAN);
 
     visuals.override_text_color = Some(TokyoNight::FG);
