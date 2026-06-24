@@ -46,21 +46,21 @@ repository = "https://github.com/Atlantix-EDA/CopperForge"
 license = "MIT"
 
 [workspace.dependencies]
-egui = "0.33"
+egui = "0.34"
 # eframe features: disable `accesskit` (~10 direct + ~30 transitive crates:
 # accesskit_*, atspi, zbus, zvariant — screen-reader plumbing CopperForge
 # doesn't target). Keep glow (default OpenGL backend), default_fonts, the
 # Linux display servers (wayland + x11), and winit defaults.
-eframe = { version = "0.33", default-features = false, features = [
+eframe = { version = "0.34", default-features = false, features = [
     "default_fonts",
     "glow",
     "wayland",
     "x11",
 ] }
-egui-file-dialog = "0.12.0"
+egui-file-dialog = "0.13.0"
 
 # Image and graphics handling
-egui_extras = { version = "0.33", features = ["image"] } # For image loading and other utilities
+egui_extras = { version = "0.34", features = ["image"] } # For image loading and other utilities
 # Only PNG decoding/encoding is needed — quadrant export writes PNG, About
 # panel loads a PNG logo. Narrowing default-features off cuts JPEG/GIF/TIFF/
 # BMP/ICO/WebP decoders (~25 transitive crates). Bumped to 0.25 to match
@@ -68,15 +68,15 @@ egui_extras = { version = "0.33", features = ["image"] } # For image loading and
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 # Gerber and PCB handling
-gerber_viewer = "0.5.0"
+gerber_viewer = "0.6.1"
 gerber_types = { package = "gerber-types", version = "0.7.0" }
 gerber_parser = "0.4.0"
 lyon = "1"
 nalgebra = "0.34"
 
 # 3D renderer (Phase 1: glow-based axes gizmo; see develop/task3d-plan.md)
-glow = "0.16"
-egui_glow = { version = "0.33", default-features = false }
+glow = "0.17"
+egui_glow = { version = "0.34", default-features = false }
 bytemuck = "1.23"
 
 # Egui Mobius framework — fetched from the egui_mobius monorepo so a plain
@@ -84,10 +84,9 @@ bytemuck = "1.23"
 # a (gitignored) .cargo/config.toml `paths` entry — see .cargo/config.toml.example.
 egui_mobius_reactive = { git = "https://github.com/saturn77/egui_mobius", tag = "v0.4.0" }
 
-# Citizen panel lifecycle (lives in the same egui_mobius monorepo).
-# Note: egui_mobius v0.4.0 requires egui 0.34; gerber_viewer 0.5.0
-# pins egui 0.33. Until one side rebases, citizen/lens integration in
-# the wasm app is deferred — copperforge-web rolls its own dock + log.
+# Citizen panel lifecycle (lives in the same egui_mobius monorepo). egui_mobius
+# v0.4.0 and gerber_viewer 0.6.1 both target egui 0.34, so the whole tree unifies
+# on 0.34 — the prior conflict that deferred citizen/lens integration is resolved.
 egui_citizen = { git = "https://github.com/saturn77/egui_mobius", tag = "v0.4.0" }
 
 # KiCad file parsing (BOM extraction from .kicad_pcb)
@@ -102,7 +101,7 @@ serde_json = "1.0"
 sysinfo = "0.35.1"
 chrono = { version = "0.4.41", features = ["serde"] }
 chrono-tz = "0.10"
-egui_dock = {version = "0.18.0", features=["serde"]}
+egui_dock = {version = "0.19.1", features=["serde"]}
 
 regex = "1.10"
 once_cell = "1.19"
@@ -114,7 +113,7 @@ bincode = "1.3"
 thiserror = "1.0"
 
 # Tree view
-egui_ltreeview = "0.6.0"
+egui_ltreeview = "0.7.0"
 
 # Release archives (gerber+drill zip)
 zip = { version = "2.2", default-features = false, features = ["deflate"] }

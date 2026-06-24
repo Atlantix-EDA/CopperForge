@@ -64,7 +64,7 @@ impl TerminalPanel {
                                 .id(text_id)
                                 .desired_width(ui.available_width())
                                 .font(egui::TextStyle::Monospace)
-                                .frame(false)
+                                .frame(egui::Frame::NONE)
                                 .text_color(TokyoNight::FG),
                         );
 

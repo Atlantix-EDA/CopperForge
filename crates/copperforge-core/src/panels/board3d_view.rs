@@ -464,7 +464,7 @@ impl Board3dView {
             self.camera.orbit(response.drag_delta());
         }
         if response.hovered() {
-            let scroll = ui.input(|i| i.raw_scroll_delta.y);
+            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll.abs() > 0.0 {
                 self.camera.zoom_by(1.0 + scroll * 0.001);
             }

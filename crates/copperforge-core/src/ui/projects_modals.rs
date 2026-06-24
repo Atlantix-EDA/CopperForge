@@ -915,12 +915,11 @@ fn show_project_import_modal(
             ui.horizontal(|ui| {
                 ui.label("KiCad Project File (.kicad_pro):");
                 if ui.button("Browse...").clicked() {
-                    use std::sync::Arc;
                     use std::mem;
                     use egui_file_dialog::FileDialog;
                     let dialog = mem::replace(&mut panel_state.project_import_dialog, FileDialog::new());
                     let mut dialog = dialog
-                        .add_file_filter("KiCad Project", Arc::new(|path: &std::path::Path| {
+                        .add_file_filter("KiCad Project", egui_file_dialog::Filter::new(|path: &std::path::Path| {
                             path.extension().and_then(|e| e.to_str()).map(|e| e == "kicad_pro").unwrap_or(false)
                         }))
                         .default_file_filter("KiCad Project");

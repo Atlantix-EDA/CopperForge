@@ -971,7 +971,11 @@ impl CopperForgeApp {
 }
 
 impl eframe::App for CopperForgeApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    // eframe 0.34: `update` is deprecated in favour of `ui` (the runner hands us
+    // a root Ui). We drive ctx-level panels, so derive the Context — a cheap Arc
+    // clone, owned so it doesn't borrow `ui` (frees it for `show_inside` below).
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
         // First-frame: spawn the cuforge-services health poller. Single
         // background thread; updates self.services.cuforge_status and
         // calls ctx.request_repaint() on every status change.
@@ -1169,7 +1173,7 @@ impl eframe::App for CopperForgeApp {
         let mut persp_delete: Option<String> = None;
         let mut persp_set_default: Option<Option<String>> = None;
 
-        egui::TopBottomPanel::top("project_ribbon").show(ctx, |ui| {
+        egui::TopBottomPanel::top("project_ribbon").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 10.0;
 
@@ -1349,7 +1353,7 @@ impl eframe::App for CopperForgeApp {
                 .style(style)
                 .show_add_buttons(true)
                 .show_close_buttons(true)
-                .show(ctx, &mut tab_viewer);
+                .show_inside(ui, &mut tab_viewer);
         }
 
         for msg in dispatcher.drain_messages() {
@@ -1369,7 +1373,7 @@ impl eframe::App for CopperForgeApp {
         }
 
         crate::cuforge_client::show_modal_if_open(
-            ctx,
+            &ctx,
             &mut self.show_cuforge_services_modal,
             &self.services.cuforge_status,
         );
@@ -1383,7 +1387,7 @@ impl eframe::App for CopperForgeApp {
                     ctx.content_rect().center().x - 200.0,
                     ctx.content_rect().center().y - 275.0
                 ))
-                .show(ctx, |ui| {
+                .show(&ctx, |ui| {
                     ui::AboutPanel::render(ui);
 
                     ui.add_space(20.0);
@@ -1405,7 +1409,7 @@ impl eframe::App for CopperForgeApp {
                     ctx.content_rect().center().x - 200.0,
                     ctx.content_rect().center().y - 150.0
                 ))
-                .show(ctx, |ui| {
+                .show(&ctx, |ui| {
                     self.render_kicad_info_modal(ui);
 
                     ui.add_space(20.0);
