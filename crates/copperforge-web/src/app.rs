@@ -1160,6 +1160,10 @@ impl WebApp {
             geom.and_then(|g| g.bottom_copper.as_ref()),
             geom.and_then(|g| g.top_mask.as_ref()),
             geom.and_then(|g| g.bottom_mask.as_ref()),
+            // Silkscreen: the browser geometry builder doesn't extract silk
+            // yet (native-only for now), so pass none.
+            None,
+            None,
             geom.and_then(|g| g.drill.as_ref()),
             self.units_mils,
         );

@@ -254,6 +254,22 @@ pub fn load_gerbers(
             &outline_bbox,
             logger,
         );
+        // Silkscreen reuses the copper extractor — the silk gerber draws the
+        // same primitive types, so its mesh IR is a `CopperData`.
+        services.geometry.top_silk = extract_copper_side(
+            &services.layer_store,
+            crate::layer_store::LayerType::Silkscreen(crate::layer_store::Side::Top),
+            "F.SilkS",
+            &outline_bbox,
+            logger,
+        );
+        services.geometry.bottom_silk = extract_copper_side(
+            &services.layer_store,
+            crate::layer_store::LayerType::Silkscreen(crate::layer_store::Side::Bottom),
+            "B.SilkS",
+            &outline_bbox,
+            logger,
+        );
         services.geometry.top_mask = extract_mask_side(
             &services.layer_store,
             crate::layer_store::LayerType::Soldermask(crate::layer_store::Side::Top),
@@ -278,6 +294,8 @@ pub fn load_gerbers(
     } else {
         services.geometry.top_copper = None;
         services.geometry.bottom_copper = None;
+        services.geometry.top_silk = None;
+        services.geometry.bottom_silk = None;
         services.geometry.top_mask = None;
         services.geometry.bottom_mask = None;
         services.geometry.drill = None;

@@ -109,6 +109,12 @@ pub struct BoardGeometry {
     pub top_mask: Option<crate::gerber_geom::MaskData>,
     /// B.Mask polygon IR — bottom soldermask.
     pub bottom_mask: Option<crate::gerber_geom::MaskData>,
+    /// F.SilkS polygon IR — top silkscreen legend. Same mesh shape as
+    /// copper (the silk gerber uses the same primitive types), so it reuses
+    /// `CopperData`.
+    pub top_silk: Option<crate::gerber_geom::CopperData>,
+    /// B.SilkS polygon IR — bottom silkscreen legend.
+    pub bottom_silk: Option<crate::gerber_geom::CopperData>,
     /// Drilled hole centres + radii in the board's world frame.
     pub drill: Option<crate::gerber_geom::DrillData>,
 }

@@ -51,6 +51,16 @@ const MASK_Z_BOTTOM: f32 = -0.050;
 /// green tint — matches KiCad's built-in 3D viewer at default settings.
 const MASK_ALPHA: f32 = 0.55;
 
+/// Off-white silkscreen legend. Top reads a hair brighter than bottom so the
+/// two are distinguishable when both are edge-on in the same view.
+const SILK_COLOR_TOP: [f32; 3] = [0.92, 0.92, 0.89];
+const SILK_COLOR_BOTTOM: [f32; 3] = [0.88, 0.88, 0.85];
+/// Silk Z offsets: just above the top mask / just below the bottom mask, so
+/// the legend reads as printed on top of the soldermask on each face. A hair
+/// above `MASK_Z_TOP` (0.030) and below `MASK_Z_BOTTOM` (-0.050).
+const SILK_Z_TOP: f32 = 0.040;
+const SILK_Z_BOTTOM: f32 = -0.060;
+
 const GRID_COLOR: [f32; 3] = [0.28, 0.30, 0.35];
 
 /// Dark hole colour — a drilled hole / barrel reads as near-black against
@@ -98,6 +108,8 @@ pub struct Board3dView {
     last_had_bottom_copper: bool,
     last_had_top_mask: bool,
     last_had_bottom_mask: bool,
+    last_had_top_silk: bool,
+    last_had_bottom_silk: bool,
     /// Presence flag for the drill layer (hole disks).
     last_had_drill: bool,
     /// Board dims (mm) cached from the last uploaded outline. Drives the
@@ -167,6 +179,11 @@ struct GpuResources {
     top_mask_ready: bool,
     bottom_mask: ColoredMesh,
     bottom_mask_ready: bool,
+    /// Silkscreen legend meshes (off-white), one per side.
+    top_silk: ColoredMesh,
+    top_silk_ready: bool,
+    bottom_silk: ColoredMesh,
+    bottom_silk_ready: bool,
     /// Dark hole disks, one mesh per side (same circles, different Z) so the
     /// holes read from both the top and bottom views.
     top_holes: ColoredMesh,
@@ -184,6 +201,8 @@ impl Board3dView {
             last_had_bottom_copper: false,
             last_had_top_mask: false,
             last_had_bottom_mask: false,
+            last_had_top_silk: false,
+            last_had_bottom_silk: false,
             last_had_drill: false,
             last_board_dim: None,
             grid_step: GridStep::Auto,
@@ -251,6 +270,8 @@ impl Board3dView {
         bottom_copper: Option<&CopperData>,
         top_mask: Option<&MaskData>,
         bottom_mask: Option<&MaskData>,
+        top_silk: Option<&CopperData>,
+        bottom_silk: Option<&CopperData>,
         drill: Option<&DrillData>,
         units_mils: bool,
     ) {
@@ -278,6 +299,7 @@ impl Board3dView {
             &mut canvas_ui, gl, board_outline,
             top_copper, bottom_copper,
             top_mask, bottom_mask,
+            top_silk, bottom_silk,
             drill,
             units_mils,
         );
@@ -372,6 +394,8 @@ impl Board3dView {
         bottom_copper: Option<&CopperData>,
         top_mask: Option<&MaskData>,
         bottom_mask: Option<&MaskData>,
+        top_silk: Option<&CopperData>,
+        bottom_silk: Option<&CopperData>,
         drill: Option<&DrillData>,
         units_mils: bool,
     ) {
@@ -504,6 +528,8 @@ impl Board3dView {
                     let bottom_copper = ColoredMesh::new(gl, glow::TRIANGLES);
                     let top_mask = ColoredMesh::new(gl, glow::TRIANGLES);
                     let bottom_mask = ColoredMesh::new(gl, glow::TRIANGLES);
+                    let top_silk = ColoredMesh::new(gl, glow::TRIANGLES);
+                    let bottom_silk = ColoredMesh::new(gl, glow::TRIANGLES);
                     let top_holes = ColoredMesh::new(gl, glow::TRIANGLES);
                     let bottom_holes = ColoredMesh::new(gl, glow::TRIANGLES);
 
@@ -521,6 +547,10 @@ impl Board3dView {
                         top_mask_ready: false,
                         bottom_mask,
                         bottom_mask_ready: false,
+                        top_silk,
+                        top_silk_ready: false,
+                        bottom_silk,
+                        bottom_silk_ready: false,
                         top_holes,
                         bottom_holes,
                         holes_ready: false,
@@ -621,6 +651,34 @@ impl Board3dView {
                 g.bottom_mask_ready = false;
             }
             self.last_had_bottom_mask = has_bottom_mask;
+        }
+
+        // ── Silkscreen meshes (F.SilkS / B.SilkS) ─────────────────
+        let has_top_silk = top_silk.is_some();
+        if force || has_top_silk != self.last_had_top_silk {
+            if let (Some(s), Ok(mut g)) = (top_silk, gpu.lock()) {
+                let verts = build_copper_vertices(s, SILK_COLOR_TOP, SILK_Z_TOP);
+                unsafe {
+                    g.top_silk.upload(gl, &verts);
+                }
+                g.top_silk_ready = true;
+            } else if let Ok(mut g) = gpu.lock() {
+                g.top_silk_ready = false;
+            }
+            self.last_had_top_silk = has_top_silk;
+        }
+        let has_bottom_silk = bottom_silk.is_some();
+        if force || has_bottom_silk != self.last_had_bottom_silk {
+            if let (Some(s), Ok(mut g)) = (bottom_silk, gpu.lock()) {
+                let verts = build_copper_vertices(s, SILK_COLOR_BOTTOM, SILK_Z_BOTTOM);
+                unsafe {
+                    g.bottom_silk.upload(gl, &verts);
+                }
+                g.bottom_silk_ready = true;
+            } else if let Ok(mut g) = gpu.lock() {
+                g.bottom_silk_ready = false;
+            }
+            self.last_had_bottom_silk = has_bottom_silk;
         }
 
         // ── Drill holes (top + bottom dark disks) ──────────────────
@@ -753,6 +811,15 @@ impl Board3dView {
                 if g.holes_ready {
                     g.top_holes.draw(gl);
                     g.bottom_holes.draw(gl);
+                }
+                // Silkscreen legend: opaque off-white, drawn last among the
+                // board layers (depth-write still on) at a Z just above the
+                // mask so it reads as printed on top of the soldermask.
+                if g.top_silk_ready {
+                    g.top_silk.draw(gl);
+                }
+                if g.bottom_silk_ready {
+                    g.bottom_silk.draw(gl);
                 }
                 if show_grid {
                     gl.line_width(1.0);
