@@ -135,12 +135,12 @@ impl Tab {
                     params.app.gerber_view_3d_panel.last_geometry_gen = geom_gen;
                 }
                 let gl = params.app.gl_context.clone();
-                let outline = params.app.services.board_outline.as_ref();
-                let top_copper = params.app.services.top_copper.as_ref();
-                let bottom_copper = params.app.services.bottom_copper.as_ref();
-                let top_mask = params.app.services.top_mask.as_ref();
-                let bottom_mask = params.app.services.bottom_mask.as_ref();
-                let drill = params.app.services.drill.as_ref();
+                let outline = params.app.services.geometry.board_outline.as_ref();
+                let top_copper = params.app.services.geometry.top_copper.as_ref();
+                let bottom_copper = params.app.services.geometry.bottom_copper.as_ref();
+                let top_mask = params.app.services.geometry.top_mask.as_ref();
+                let bottom_mask = params.app.services.geometry.bottom_mask.as_ref();
+                let drill = params.app.services.geometry.drill.as_ref();
                 let units_mils = params.app.services.global_units_mils;
                 params.app.gerber_view_3d_panel.show(
                     ui,

@@ -436,11 +436,11 @@ pub fn show_projects_panel(
                     // gerbers are loaded (via Generate, Load, or right-click a
                     // release → Load Release Gerbers).
                     services.layer_store.clear_all();
-                    services.board_outline = None;
-                    services.top_copper = None;
-                    services.bottom_copper = None;
-                    services.top_mask = None;
-                    services.bottom_mask = None;
+                    services.geometry.board_outline = None;
+                    services.geometry.top_copper = None;
+                    services.geometry.bottom_copper = None;
+                    services.geometry.top_mask = None;
+                    services.geometry.bottom_mask = None;
                     services.gerber_view.needs_initial_view = true;
 
                     // 2. Restore BOM components if available

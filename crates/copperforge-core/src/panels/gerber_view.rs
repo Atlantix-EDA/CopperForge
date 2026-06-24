@@ -1008,7 +1008,7 @@ fn render_substrate_fill(app: &CopperForgeApp, painter: &Painter) {
     if !app.services.display_manager.show_substrate {
         return;
     }
-    let Some(outline) = app.services.board_outline.as_ref() else { return };
+    let Some(outline) = app.services.geometry.board_outline.as_ref() else { return };
     let Some((verts, indices)) = crate::gerber_geom::fill_mesh(&outline.contours) else {
         return;
     };

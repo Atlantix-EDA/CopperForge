@@ -18,7 +18,7 @@ use crate::platform::parameters::gui::VERSION;
 use crate::project;
 use crate::ui;
 use crate::project_manager;
-use crate::services::{SharedServices, GerberViewState};
+use crate::services::{SharedServices, GerberViewState, BoardGeometry};
 
 use crate::ui::{Tab, TabKind, TabViewer, initialize_and_show_banner, show_system_info};
 
@@ -433,12 +433,7 @@ impl CopperForgeApp {
             gerber_layer: load_demo_gerber(),
             gerber_view: GerberViewState::default(),
             board_geometry_gen: 0,
-            board_outline: None,
-            top_copper: None,
-            bottom_copper: None,
-            top_mask: None,
-            bottom_mask: None,
-            drill: None,
+            geometry: BoardGeometry::default(),
             display_manager: DisplayManager::new(),
             drc_manager: DrcManager::new(),
             grid_settings: GridSettings::default(),
