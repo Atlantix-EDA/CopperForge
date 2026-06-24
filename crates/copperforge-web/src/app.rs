@@ -441,7 +441,7 @@ impl WebApp {
         // the cursor. smooth_scroll_delta was wrong — it's zero unless
         // there's already an animation in flight.
         if response.hovered() {
-            let scroll = ui.input(|i| i.raw_scroll_delta.y);
+            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll != 0.0 {
                 if let Some(mouse_pos) = response.hover_pos() {
                     let zoom_factor = if scroll > 0.0 { 1.1 } else { 1.0 / 1.1 };
@@ -1394,7 +1394,12 @@ impl WebApp {
 }
 
 impl eframe::App for WebApp {
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        // egui 0.34: `App::ui` replaces the deprecated `App::update`. Panels
+        // below mount via `show_inside(ui)`; the floating About window and the
+        // `ctx.*` calls use a cheap clone of the context.
+        let ctx = ui.ctx().clone();
+
         self.drain_pending();
 
         // Stash the WebGL2 context for the 3D tab. `render_*_tab` only
@@ -1405,7 +1410,7 @@ impl eframe::App for WebApp {
         // ── Top bar ─────────────────────────────────────────────────
         egui::TopBottomPanel::top("top_bar")
             .exact_height(36.0)
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     // Brand label — display-only. The About modal is
                     // opened via the dedicated ℹ About button in the
@@ -1433,7 +1438,7 @@ impl eframe::App for WebApp {
                         .on_hover_text("Upload a release ZIP (gerbers + drill files)")
                         .clicked()
                     {
-                        self.pick_release_zip(ctx);
+                        self.pick_release_zip(&ctx);
                     }
                     // Example release — bundled as raw bytes so first-time
                     // visitors see a real board without having to find +
@@ -1660,7 +1665,7 @@ impl eframe::App for WebApp {
         if self.scene.is_some() {
             egui::TopBottomPanel::bottom("status_bar")
                 .exact_height(22.0)
-                .show(ctx, |ui| {
+                .show_inside(ui, |ui| {
                     ui.horizontal_centered(|ui| {
                         match self.cursor_world {
                             Some(p) => {
@@ -1747,7 +1752,7 @@ impl eframe::App for WebApp {
             let copper_soft = egui::Color32::from_rgb(170, 140, 110);
             let body = egui::Color32::from_rgb(210, 205, 195);
             let muted = egui::Color32::from_rgb(150, 145, 135);
-            let frame = egui::Frame::window(&ctx.style())
+            let frame = egui::Frame::window(&ctx.global_style())
                 .fill(bg)
                 .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(70, 60, 50)))
                 .corner_radius(8.0)
@@ -1764,7 +1769,7 @@ impl eframe::App for WebApp {
             // doesn't cover the centre canvas immediately.
             .default_pos(egui::pos2(120.0, 80.0))
             .frame(frame)
-            .show(ctx, |ui| {
+            .show(&ctx, |ui| {
                 // Hero banner across the top of the modal — embedded
                 // via `include_bytes!`, decoded by egui_extras's
                 // image loader registered in main.rs. The 800×535
@@ -1839,7 +1844,7 @@ impl eframe::App for WebApp {
         // ── Central panel: egui_dock area with Canvas / Layers /
         //    Board / Logger tabs. All four are draggable, splittable,
         //    and closable. Initial layout in `default_dock_layout()`.
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show_inside(ui, |ui| {
             // Clone the layout so the TabViewer can hold `&mut self`
             // exclusively for the duration of the dock render — same
             // pattern zicad/src/main.rs uses. Cheap (it's a small
@@ -1847,7 +1852,7 @@ impl eframe::App for WebApp {
             // drags/splits persist across frames.
             let mut dock_state = self.dock_state.clone();
             {
-                let style = egui_dock::Style::from_egui(ctx.style().as_ref());
+                let style = egui_dock::Style::from_egui(ctx.global_style().as_ref());
                 let mut viewer = TabViewer { app: self };
                 DockArea::new(&mut dock_state)
                     .style(style)
