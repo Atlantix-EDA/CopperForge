@@ -94,6 +94,25 @@ impl Default for GerberViewState {
     }
 }
 
+/// Extracted board-geometry IR for the 3D view — the FDD Stage 3-6 output, all
+/// derived from the loaded gerbers and repopulated/cleared together by
+/// `load_gerbers`. Grouped out of the flat `SharedServices` field list.
+#[derive(Default)]
+pub struct BoardGeometry {
+    /// Board-outline polygon IR from the mechanical-outline gerber.
+    pub board_outline: Option<crate::gerber_geom::OutlineData>,
+    /// F.Cu polygon IR — top-side copper.
+    pub top_copper: Option<crate::gerber_geom::CopperData>,
+    /// B.Cu polygon IR — bottom-side copper.
+    pub bottom_copper: Option<crate::gerber_geom::CopperData>,
+    /// F.Mask polygon IR — top soldermask (holes already cut).
+    pub top_mask: Option<crate::gerber_geom::MaskData>,
+    /// B.Mask polygon IR — bottom soldermask.
+    pub bottom_mask: Option<crate::gerber_geom::MaskData>,
+    /// Drilled hole centres + radii in the board's world frame.
+    pub drill: Option<crate::gerber_geom::DrillData>,
+}
+
 /// Every cross-panel fact lives here. Populated once at init.
 pub struct SharedServices {
     // ── Reactive (observable across panels) ───────────────────
@@ -132,26 +151,8 @@ pub struct SharedServices {
     pub board_geometry_gen: u64,
 
     // ── 3D pipeline geometry (FDD Stage 3-6 output) ───────────
-    /// Board-outline polygon IR extracted from the mechanical-outline
-    /// gerber. `None` until a project with an Edge.Cuts gerber loads.
-    /// Repopulated on every `load_gerbers_into_viewer` call.
-    pub board_outline: Option<crate::gerber_geom::OutlineData>,
-    /// F.Cu polygon IR — copper on the top side. Extracted from the top-
-    /// copper gerber, tessellated in the same world frame as the board
-    /// outline so the meshes align on the GPU.
-    pub top_copper: Option<crate::gerber_geom::CopperData>,
-    /// B.Cu polygon IR — copper on the bottom side.
-    pub bottom_copper: Option<crate::gerber_geom::CopperData>,
-    /// F.Mask polygon IR — soldermask on the top side. Already holes-cut,
-    /// i.e. a board-outline-shaped sheet with pad/via openings punched
-    /// out. Same world frame as the board and copper meshes.
-    pub top_mask: Option<crate::gerber_geom::MaskData>,
-    /// B.Mask polygon IR — soldermask on the bottom side.
-    pub bottom_mask: Option<crate::gerber_geom::MaskData>,
-    /// Drilled hole centres + radii, in the board's world frame. Extracted
-    /// from the drill-as-gerber layer (`LayerType::Drill`); drives the 3D
-    /// view's hole disks. `None` until a project with a drill layer loads.
-    pub drill: Option<crate::gerber_geom::DrillData>,
+    /// Extracted board geometry IR (outline / copper / mask / drill), grouped.
+    pub geometry: BoardGeometry,
 
     // ── Display / DRC / grid ──────────────────────────────────
     pub display_manager: DisplayManager,

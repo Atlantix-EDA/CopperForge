@@ -232,29 +232,29 @@ pub fn load_gerbers(
     // legacy `gerber_viewer` path has already read it once for the 2D canvas.
     // This duplication is documented in the FDD's "Legacy 2D Rendering Path"
     // section and goes away when Phase 7 retires gerber_viewer.
-    services.board_outline = extract_outline_from_layer_store(&services.layer_store, logger);
+    services.geometry.board_outline = extract_outline_from_layer_store(&services.layer_store, logger);
 
     // Copper layers (Phase 4a). Require an outline bbox so the copper mesh
     // lines up with the board mesh — both share the same world transform
     // (Stage 6 of the FDD pipeline, centered at outline bbox).
-    if let Some(outline) = services.board_outline.as_ref() {
+    if let Some(outline) = services.geometry.board_outline.as_ref() {
         let outline_bbox = outline.bbox.clone();
         let outline_contours = outline.contours.clone();
-        services.top_copper = extract_copper_side(
+        services.geometry.top_copper = extract_copper_side(
             &services.layer_store,
             crate::layer_store::LayerType::Copper(1),
             "F.Cu",
             &outline_bbox,
             logger,
         );
-        services.bottom_copper = extract_copper_side(
+        services.geometry.bottom_copper = extract_copper_side(
             &services.layer_store,
             services.layer_store.bottom_copper_type(),
             "B.Cu",
             &outline_bbox,
             logger,
         );
-        services.top_mask = extract_mask_side(
+        services.geometry.top_mask = extract_mask_side(
             &services.layer_store,
             crate::layer_store::LayerType::Soldermask(crate::layer_store::Side::Top),
             "F.Mask",
@@ -262,7 +262,7 @@ pub fn load_gerbers(
             &outline_bbox,
             logger,
         );
-        services.bottom_mask = extract_mask_side(
+        services.geometry.bottom_mask = extract_mask_side(
             &services.layer_store,
             crate::layer_store::LayerType::Soldermask(crate::layer_store::Side::Bottom),
             "B.Mask",
@@ -270,17 +270,17 @@ pub fn load_gerbers(
             &outline_bbox,
             logger,
         );
-        services.drill = extract_drill_side(
+        services.geometry.drill = extract_drill_side(
             &services.layer_store,
             &outline_bbox,
             logger,
         );
     } else {
-        services.top_copper = None;
-        services.bottom_copper = None;
-        services.top_mask = None;
-        services.bottom_mask = None;
-        services.drill = None;
+        services.geometry.top_copper = None;
+        services.geometry.bottom_copper = None;
+        services.geometry.top_mask = None;
+        services.geometry.bottom_mask = None;
+        services.geometry.drill = None;
     }
 
     // Signal the new geometry so the 3D panel rebuilds — works no matter who
