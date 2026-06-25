@@ -75,6 +75,12 @@ const SILK_COLOR_BOTTOM: [f32; 3] = [0.88, 0.88, 0.85];
 const SILK_Z_TOP: f32 = MASK_Z_TOP + SILK_THICKNESS;
 const SILK_Z_BOTTOM: f32 = MASK_Z_BOTTOM - SILK_THICKNESS;
 
+/// Exposed copper (mask openings / pads) sits a hair above the mask sheet so
+/// each pad reads as solid exposed copper regardless of how its opening
+/// overlaps neighbours. Below `HOLE_Z` so the dark bore caps punch through.
+const EXPOSED_Z_TOP: f32 = MASK_Z_TOP + 0.002;
+const EXPOSED_Z_BOTTOM: f32 = MASK_Z_BOTTOM - 0.002;
+
 const GRID_COLOR: [f32; 3] = [0.28, 0.30, 0.35];
 
 /// Dark hole colour — a drilled hole / barrel reads as near-black against
@@ -202,6 +208,11 @@ struct GpuResources {
     top_mask_ready: bool,
     bottom_mask: ColoredMesh,
     bottom_mask_ready: bool,
+    /// Exposed-copper pads (mask openings as solid copper), one per side.
+    top_exposed: ColoredMesh,
+    top_exposed_ready: bool,
+    bottom_exposed: ColoredMesh,
+    bottom_exposed_ready: bool,
     /// Silkscreen legend meshes (off-white), one per side.
     top_silk: ColoredMesh,
     top_silk_ready: bool,
@@ -556,6 +567,8 @@ impl Board3dView {
                     let bottom_copper = ColoredMesh::new(gl, glow::TRIANGLES);
                     let top_mask = ColoredMesh::new(gl, glow::TRIANGLES);
                     let bottom_mask = ColoredMesh::new(gl, glow::TRIANGLES);
+                    let top_exposed = ColoredMesh::new(gl, glow::TRIANGLES);
+                    let bottom_exposed = ColoredMesh::new(gl, glow::TRIANGLES);
                     let top_silk = ColoredMesh::new(gl, glow::TRIANGLES);
                     let bottom_silk = ColoredMesh::new(gl, glow::TRIANGLES);
                     let top_holes = ColoredMesh::new(gl, glow::TRIANGLES);
@@ -577,6 +590,10 @@ impl Board3dView {
                         top_mask_ready: false,
                         bottom_mask,
                         bottom_mask_ready: false,
+                        top_exposed,
+                        top_exposed_ready: false,
+                        bottom_exposed,
+                        bottom_exposed_ready: false,
                         top_silk,
                         top_silk_ready: false,
                         bottom_silk,
@@ -687,12 +704,17 @@ impl Board3dView {
         if force || has_top_mask != self.last_had_top_mask {
             if let (Some(m), Ok(mut g)) = (top_mask, gpu.lock()) {
                 let verts = build_mask_vertices(m, MASK_COLOR_TOP, MASK_Z_TOP);
+                // Exposed copper pads are derived from the same mask's openings.
+                let exposed = build_exposed_copper_vertices(m, COPPER_COLOR_TOP, EXPOSED_Z_TOP);
                 unsafe {
                     g.top_mask.upload(gl, &verts);
+                    g.top_exposed.upload(gl, &exposed);
                 }
                 g.top_mask_ready = true;
+                g.top_exposed_ready = !exposed.is_empty();
             } else if let Ok(mut g) = gpu.lock() {
                 g.top_mask_ready = false;
+                g.top_exposed_ready = false;
             }
             self.last_had_top_mask = has_top_mask;
         }
@@ -700,12 +722,16 @@ impl Board3dView {
         if force || has_bottom_mask != self.last_had_bottom_mask {
             if let (Some(m), Ok(mut g)) = (bottom_mask, gpu.lock()) {
                 let verts = build_mask_vertices(m, MASK_COLOR_BOTTOM, MASK_Z_BOTTOM);
+                let exposed = build_exposed_copper_vertices(m, COPPER_COLOR_BOTTOM, EXPOSED_Z_BOTTOM);
                 unsafe {
                     g.bottom_mask.upload(gl, &verts);
+                    g.bottom_exposed.upload(gl, &exposed);
                 }
                 g.bottom_mask_ready = true;
+                g.bottom_exposed_ready = !exposed.is_empty();
             } else if let Ok(mut g) = gpu.lock() {
                 g.bottom_mask_ready = false;
+                g.bottom_exposed_ready = false;
             }
             self.last_had_bottom_mask = has_bottom_mask;
         }
@@ -875,6 +901,16 @@ impl Board3dView {
                 g.unlit.set_alpha(gl, 1.0);
                 gl.depth_mask(true);
                 gl.disable(glow::BLEND);
+                // Exposed copper pads: solid copper in the mask openings,
+                // opaque on top of the mask sheet, so each pad reads as fully
+                // exposed even where openings overlap. Drawn before the drill
+                // holes so the dark bore caps punch back through.
+                if g.bottom_exposed_ready {
+                    g.bottom_exposed.draw(gl);
+                }
+                if g.top_exposed_ready {
+                    g.top_exposed.draw(gl);
+                }
                 // Drill holes: opaque dark disks on each face, drawn after the
                 // mask so they read as crisp holes punched through the pads
                 // (depth-write back on, no blend).
@@ -1123,6 +1159,18 @@ fn inner_layer_z(stack_index: u8, copper_count: u8) -> f32 {
     }
     let t = (stack_index as f32 - 1.0) / (copper_count as f32 - 1.0);
     COPPER_Z_TOP + (COPPER_Z_BOTTOM - COPPER_Z_TOP) * t
+}
+
+/// Exposed-copper pads from the mask's opening tessellation (the solid pad
+/// shapes), as a flat sheet at `z`. Empty when the mask has no openings.
+fn build_exposed_copper_vertices(m: &MaskData, rgb: [f32; 3], z: f32) -> Vec<f32> {
+    let [r, g, b] = rgb;
+    let mut out = Vec::with_capacity(m.opening_indices.len() * 6);
+    for &idx in &m.opening_indices {
+        let v = m.opening_vertices_2d[idx as usize];
+        out.extend_from_slice(&[v[0], v[1], z, r, g, b]);
+    }
+    out
 }
 
 fn build_mask_vertices(m: &MaskData, rgb: [f32; 3], z: f32) -> Vec<f32> {

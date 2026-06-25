@@ -43,6 +43,13 @@ use super::copper::{walk_copper, CopperCounts};
 pub struct MaskData {
     pub mesh_vertices_2d: Vec<[f32; 2]>,
     pub mesh_indices: Vec<u32>,
+    /// The mask *openings* (pad / via apertures) tessellated on their own
+    /// under `FillRule::NonZero`, so overlapping pads union instead of
+    /// cancelling. The 3D view draws this as solid exposed copper just above
+    /// the mask sheet, so each pad reads as fully exposed. Empty when the
+    /// mask has no openings.
+    pub opening_vertices_2d: Vec<[f32; 2]>,
+    pub opening_indices: Vec<u32>,
 }
 
 /// Primitive counts from the mask gerber walk. Same breakdown as
@@ -105,10 +112,17 @@ fn extract_mask_from_reader<R: Read>(
     let (mesh_vertices_2d, mesh_indices) =
         tessellate_with_holes(outline_contours, &opening_contours, outline_bbox)?;
 
+    // The same openings, tessellated solo (NonZero) for the exposed-copper
+    // pads. Empty when there are no openings — a fully-tented mask.
+    let (opening_vertices_2d, opening_indices) =
+        tessellate_openings(&opening_contours, outline_bbox);
+
     Some((
         MaskData {
             mesh_vertices_2d,
             mesh_indices,
+            opening_vertices_2d,
+            opening_indices,
         },
         counts,
     ))
@@ -161,4 +175,52 @@ fn tessellate_with_holes(
     }
 
     Some((geometry.vertices, geometry.indices))
+}
+
+/// Tessellate the mask openings on their own (the exposed-copper pads), under
+/// `FillRule::NonZero` so overlapping pad apertures union into solid copper
+/// rather than cancelling under even-odd. Centered by the outline bbox to
+/// match the mask / copper / board meshes. Returns empty buffers when the
+/// mask has no openings (a fully-tented mask) — the caller treats that as
+/// "no exposed copper."
+fn tessellate_openings(
+    openings: &[Vec<Point2<f32>>],
+    outline_bbox: &BoundingBox,
+) -> (Vec<[f32; 2]>, Vec<u32>) {
+    let mut builder = LyonPath::builder();
+    for c in openings {
+        if c.len() < 3 {
+            continue;
+        }
+        builder.begin(LyonPoint::new(c[0].x, c[0].y));
+        for p in &c[1..] {
+            builder.line_to(LyonPoint::new(p.x, p.y));
+        }
+        builder.close();
+    }
+    let path = builder.build();
+
+    let mut geometry: VertexBuffers<[f32; 2], u32> = VertexBuffers::new();
+    let mut tess = FillTessellator::new();
+    if tess
+        .tessellate_path(
+            &path,
+            &FillOptions::default().with_fill_rule(FillRule::NonZero),
+            &mut BuffersBuilder::new(&mut geometry, |v: lyon::tessellation::FillVertex| {
+                [v.position().x, v.position().y]
+            }),
+        )
+        .is_err()
+    {
+        return (Vec::new(), Vec::new());
+    }
+
+    let cx = ((outline_bbox.min.x + outline_bbox.max.x) * 0.5) as f32;
+    let cy = ((outline_bbox.min.y + outline_bbox.max.y) * 0.5) as f32;
+    for v in &mut geometry.vertices {
+        v[0] -= cx;
+        v[1] -= cy;
+    }
+
+    (geometry.vertices, geometry.indices)
 }
