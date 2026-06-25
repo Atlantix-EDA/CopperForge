@@ -30,11 +30,25 @@ const COPPER_COLOR_TOP: [f32; 3] = [0.85, 0.68, 0.31];
 /// confirmation that the depth test is correctly hiding B.Cu behind the
 /// FR-4 from a top view and hiding F.Cu from a bottom view.
 const COPPER_COLOR_BOTTOM: [f32; 3] = [0.72, 0.45, 0.20];
-/// Flat-slab Z offsets for the copper layers. Positive = top side (F.Cu
-/// floats above the FR-4 plane), negative = bottom (B.Cu sits beneath).
-/// Phase 4a is flat-slab extrusion; Phase 4b adds side walls.
-const COPPER_Z_TOP: f32 = 0.020;
-const COPPER_Z_BOTTOM: f32 = -0.040;
+/// FR-4 substrate is a real slab with side walls (was a flat sheet in the
+/// Phase-4a interim). Top face at z=0, bottom one board-thickness below.
+/// 1.55 mm is the common 2-layer default and reads as a believable edge.
+const BOARD_Z_TOP: f32 = 0.0;
+const BOARD_THICKNESS: f32 = 1.55;
+const BOARD_Z_BOTTOM: f32 = BOARD_Z_TOP - BOARD_THICKNESS;
+/// Caps stay opaque; the side walls render translucent so buried inner
+/// copper reads through the board edge.
+const BOARD_WALL_ALPHA: f32 = 0.45;
+
+/// Real film thicknesses so layers stack flush on the slab faces instead of
+/// floating: 1 oz Cu ≈ 35 µm, LPI mask ≈ 20 µm, silk ink ≈ 15 µm. Each
+/// sheet is still zero-thickness; its Z marks the layer's outer surface.
+const COPPER_THICKNESS: f32 = 0.035;
+const MASK_THICKNESS: f32 = 0.020;
+const SILK_THICKNESS: f32 = 0.015;
+/// F.Cu outer face = board top + copper plating; B.Cu mirrors on the bottom.
+const COPPER_Z_TOP: f32 = BOARD_Z_TOP + COPPER_THICKNESS;
+const COPPER_Z_BOTTOM: f32 = BOARD_Z_BOTTOM - COPPER_THICKNESS;
 
 /// Soldermask green (~RAL 6000 territory). A hair darker + more saturated
 /// than the bare-FR-4 colour so the mask reads as a distinct layer when
@@ -42,11 +56,9 @@ const COPPER_Z_BOTTOM: f32 = -0.040;
 /// pixels).
 const MASK_COLOR_TOP: [f32; 3] = [0.11, 0.38, 0.18];
 const MASK_COLOR_BOTTOM: [f32; 3] = [0.09, 0.32, 0.15];
-/// Mask Z offsets: ~10 µm above F.Cu on top, ~10 µm below B.Cu on bottom.
-/// Enough to keep the mask stable over copper under typical camera angles
-/// without introducing a visible gap between the two.
-const MASK_Z_TOP: f32 = 0.030;
-const MASK_Z_BOTTOM: f32 = -0.050;
+/// Mask outer face = copper outer face + mask film (conforms over copper).
+const MASK_Z_TOP: f32 = COPPER_Z_TOP + MASK_THICKNESS;
+const MASK_Z_BOTTOM: f32 = COPPER_Z_BOTTOM - MASK_THICKNESS;
 /// Mask blend alpha. 0.55 lets copper traces read through as a darker
 /// green tint — matches KiCad's built-in 3D viewer at default settings.
 const MASK_ALPHA: f32 = 0.55;
@@ -55,22 +67,20 @@ const MASK_ALPHA: f32 = 0.55;
 /// two are distinguishable when both are edge-on in the same view.
 const SILK_COLOR_TOP: [f32; 3] = [0.92, 0.92, 0.89];
 const SILK_COLOR_BOTTOM: [f32; 3] = [0.88, 0.88, 0.85];
-/// Silk Z offsets: just above the top mask / just below the bottom mask, so
-/// the legend reads as printed on top of the soldermask on each face. A hair
-/// above `MASK_Z_TOP` (0.030) and below `MASK_Z_BOTTOM` (-0.050).
-const SILK_Z_TOP: f32 = 0.040;
-const SILK_Z_BOTTOM: f32 = -0.060;
+/// Silk ink printed on top of the mask: mask outer face + ink thickness.
+const SILK_Z_TOP: f32 = MASK_Z_TOP + SILK_THICKNESS;
+const SILK_Z_BOTTOM: f32 = MASK_Z_BOTTOM - SILK_THICKNESS;
 
 const GRID_COLOR: [f32; 3] = [0.28, 0.30, 0.35];
 
 /// Dark hole colour — a drilled hole / barrel reads as near-black against
 /// both copper and soldermask.
 const HOLE_COLOR: [f32; 3] = [0.06, 0.06, 0.07];
-/// Hole-disk Z offsets: a hair above the top mask and below the bottom mask,
-/// so the dark disk sits on top of copper+mask on each face and reads as a
-/// hole punched through the pad from whichever side faces the camera.
-const HOLE_Z_TOP: f32 = 0.034;
-const HOLE_Z_BOTTOM: f32 = -0.054;
+/// Hole-disk Z: a hair above the top mask / below the bottom mask, so the
+/// dark disk sits on top of copper+mask on each face and reads as a hole
+/// punched through the pad from whichever side faces the camera.
+const HOLE_Z_TOP: f32 = MASK_Z_TOP + 0.006;
+const HOLE_Z_BOTTOM: f32 = MASK_Z_BOTTOM - 0.006;
 /// Triangle-fan segment count for a hole disk. Holes are small on screen, so
 /// 16 segments is plenty smooth without ballooning the vertex count on
 /// hole-dense boards.
@@ -167,9 +177,12 @@ struct GpuResources {
     unlit: UnlitProgram,
     axes: ColoredMesh,
     grid: ColoredMesh,
-    /// Flat board outline. Triangle soup with FR-4 colour. Empty until a
-    /// project with a parseable Edge.Cuts gerber loads.
+    /// FR-4 slab caps (top + bottom faces). Triangle soup with FR-4 colour.
+    /// Empty until a project with a parseable Edge.Cuts gerber loads.
     board: ColoredMesh,
+    /// FR-4 slab side walls (the board edge), drawn translucent so buried
+    /// inner copper reads through the edge. Built alongside the caps.
+    board_walls: ColoredMesh,
     board_ready: bool,
     top_copper: ColoredMesh,
     top_copper_ready: bool,
@@ -524,6 +537,7 @@ impl Board3dView {
                     grid.upload(gl, &grid_vertices(5.0, 1.0, GRID_COLOR));
 
                     let board = ColoredMesh::new(gl, glow::TRIANGLES);
+                    let board_walls = ColoredMesh::new(gl, glow::TRIANGLES);
                     let top_copper = ColoredMesh::new(gl, glow::TRIANGLES);
                     let bottom_copper = ColoredMesh::new(gl, glow::TRIANGLES);
                     let top_mask = ColoredMesh::new(gl, glow::TRIANGLES);
@@ -538,6 +552,7 @@ impl Board3dView {
                         axes,
                         grid,
                         board,
+                        board_walls,
                         board_ready: false,
                         top_copper,
                         top_copper_ready: false,
@@ -571,9 +586,11 @@ impl Board3dView {
             if let (Some(outline), Ok(mut g)) = (board_outline, gpu.lock()) {
                 let w = (outline.bbox.max.x - outline.bbox.min.x) as f32;
                 let h = (outline.bbox.max.y - outline.bbox.min.y) as f32;
-                let verts = build_board_vertices(outline, FR4_COLOR, 0.0);
+                let caps = build_board_cap_vertices(outline, FR4_COLOR, BOARD_Z_TOP, BOARD_Z_BOTTOM);
+                let walls = build_board_wall_vertices(outline, FR4_COLOR, BOARD_Z_TOP, BOARD_Z_BOTTOM);
                 unsafe {
-                    g.board.upload(gl, &verts);
+                    g.board.upload(gl, &caps);
+                    g.board_walls.upload(gl, &walls);
                 }
                 g.board_ready = true;
                 self.last_board_dim = Some((w, h));
@@ -795,6 +812,13 @@ impl Board3dView {
                 gl.enable(glow::BLEND);
                 gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
                 gl.depth_mask(false);
+                // Translucent FR-4 side walls first, so the board edge blends
+                // over whatever the opaque pass wrote (inner copper, once it
+                // lands) and the multilayer stackup reads through the edge.
+                if g.board_ready {
+                    g.unlit.set_alpha(gl, BOARD_WALL_ALPHA);
+                    g.board_walls.draw(gl);
+                }
                 g.unlit.set_alpha(gl, MASK_ALPHA);
                 if g.bottom_mask_ready {
                     g.bottom_mask.draw(gl);
@@ -971,12 +995,49 @@ impl Default for Board3dView {
 // Mesh helpers
 // ────────────────────────────────────────────────────────────────────────
 
-fn build_board_vertices(outline: &OutlineData, rgb: [f32; 3], z: f32) -> Vec<f32> {
+/// FR-4 slab caps: the top face (+Z) and bottom face (−Z), reusing the
+/// outline's centered triangle soup at each Z. No backface culling, so the
+/// shared winding is fine for both faces.
+fn build_board_cap_vertices(outline: &OutlineData, rgb: [f32; 3], z_top: f32, z_bottom: f32) -> Vec<f32> {
     let [r, g, b] = rgb;
-    let mut out = Vec::with_capacity(outline.mesh_indices.len() * 6);
+    let mut out = Vec::with_capacity(outline.mesh_indices.len() * 2 * 6);
     for &idx in &outline.mesh_indices {
         let v = outline.mesh_vertices_2d[idx as usize];
-        out.extend_from_slice(&[v[0], v[1], z, r, g, b]);
+        out.extend_from_slice(&[v[0], v[1], z_top, r, g, b]);
+    }
+    for &idx in &outline.mesh_indices {
+        let v = outline.mesh_vertices_2d[idx as usize];
+        out.extend_from_slice(&[v[0], v[1], z_bottom, r, g, b]);
+    }
+    out
+}
+
+/// FR-4 substrate side walls (the board edge), as a quad (two triangles) per
+/// outline edge spanning `z_top`→`z_bottom`. `outline.contours` are in the
+/// gerber's original coordinate space, so center them by the bbox to match
+/// the caps and the other (already-centered) layers.
+fn build_board_wall_vertices(outline: &OutlineData, rgb: [f32; 3], z_top: f32, z_bottom: f32) -> Vec<f32> {
+    let [r, g, b] = rgb;
+    let cx = ((outline.bbox.min.x + outline.bbox.max.x) * 0.5) as f32;
+    let cy = ((outline.bbox.min.y + outline.bbox.max.y) * 0.5) as f32;
+    let mut out = Vec::new();
+    for contour in &outline.contours {
+        let n = contour.len();
+        if n < 3 {
+            continue;
+        }
+        for i in 0..n {
+            let p0 = contour[i];
+            let p1 = contour[(i + 1) % n];
+            let (a0x, a0y) = (p0.x - cx, p0.y - cy);
+            let (a1x, a1y) = (p1.x - cx, p1.y - cy);
+            out.extend_from_slice(&[a0x, a0y, z_top, r, g, b]);
+            out.extend_from_slice(&[a1x, a1y, z_top, r, g, b]);
+            out.extend_from_slice(&[a1x, a1y, z_bottom, r, g, b]);
+            out.extend_from_slice(&[a0x, a0y, z_top, r, g, b]);
+            out.extend_from_slice(&[a1x, a1y, z_bottom, r, g, b]);
+            out.extend_from_slice(&[a0x, a0y, z_bottom, r, g, b]);
+        }
     }
     out
 }
