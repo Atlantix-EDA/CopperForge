@@ -1014,7 +1014,18 @@ impl Board3dView {
             );
         }
 
-        ui.ctx().request_repaint();
+        // Only keep the render loop running while the user is actively
+        // dragging (orbit / pan / measure / zoom-box), or for the one frame
+        // after a fresh load (`force`): the mesh upload + camera auto-fit run
+        // *after* `mvp` is computed this frame, so the fitted view only shows
+        // next frame — same "repaint while a view reset is pending" guard the
+        // 2D view uses. When idle the scene is static and the camera has no
+        // easing, so egui's input-driven repaint (clicks, scroll, hover) is
+        // enough — an unconditional repaint here just renders the whole scene
+        // at max FPS forever and spins the GPU fans for nothing.
+        if response.dragged() || force {
+            ui.ctx().request_repaint();
+        }
     }
 }
 
