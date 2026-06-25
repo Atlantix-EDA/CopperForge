@@ -254,6 +254,39 @@ pub fn load_gerbers(
             &outline_bbox,
             logger,
         );
+        // Inner copper layers: stack positions Copper(2)..Copper(N-1), between
+        // F.Cu (Copper(1)) and B.Cu (Copper(N)). Empty on 2-layer boards.
+        let copper_count = services.layer_store.copper_count;
+        let mut inner_copper = Vec::new();
+        for n in 2..copper_count {
+            let name = format!("In{}.Cu", n - 1);
+            if let Some(cu) = extract_copper_side(
+                &services.layer_store,
+                crate::layer_store::LayerType::Copper(n),
+                &name,
+                &outline_bbox,
+                logger,
+            ) {
+                inner_copper.push((n, cu));
+            }
+        }
+        services.geometry.inner_copper = inner_copper;
+        // Silkscreen reuses the copper extractor — the silk gerber draws the
+        // same primitive types, so its mesh IR is a `CopperData`.
+        services.geometry.top_silk = extract_copper_side(
+            &services.layer_store,
+            crate::layer_store::LayerType::Silkscreen(crate::layer_store::Side::Top),
+            "F.SilkS",
+            &outline_bbox,
+            logger,
+        );
+        services.geometry.bottom_silk = extract_copper_side(
+            &services.layer_store,
+            crate::layer_store::LayerType::Silkscreen(crate::layer_store::Side::Bottom),
+            "B.SilkS",
+            &outline_bbox,
+            logger,
+        );
         services.geometry.top_mask = extract_mask_side(
             &services.layer_store,
             crate::layer_store::LayerType::Soldermask(crate::layer_store::Side::Top),
@@ -278,6 +311,9 @@ pub fn load_gerbers(
     } else {
         services.geometry.top_copper = None;
         services.geometry.bottom_copper = None;
+        services.geometry.inner_copper.clear();
+        services.geometry.top_silk = None;
+        services.geometry.bottom_silk = None;
         services.geometry.top_mask = None;
         services.geometry.bottom_mask = None;
         services.geometry.drill = None;

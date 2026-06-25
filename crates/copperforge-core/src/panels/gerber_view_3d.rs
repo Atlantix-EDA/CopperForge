@@ -68,6 +68,9 @@ impl GerberView3dPanel {
         bottom_copper: Option<&CopperData>,
         top_mask: Option<&MaskData>,
         bottom_mask: Option<&MaskData>,
+        top_silk: Option<&CopperData>,
+        bottom_silk: Option<&CopperData>,
+        inner_copper: &[(u8, CopperData)],
         drill: Option<&DrillData>,
         units_mils: bool,
     ) {
@@ -75,6 +78,8 @@ impl GerberView3dPanel {
             ui, gl, board_outline,
             top_copper, bottom_copper,
             top_mask, bottom_mask,
+            top_silk, bottom_silk,
+            inner_copper,
             drill,
             units_mils,
         );

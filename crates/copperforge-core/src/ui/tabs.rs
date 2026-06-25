@@ -140,6 +140,9 @@ impl Tab {
                 let bottom_copper = params.app.services.geometry.bottom_copper.as_ref();
                 let top_mask = params.app.services.geometry.top_mask.as_ref();
                 let bottom_mask = params.app.services.geometry.bottom_mask.as_ref();
+                let top_silk = params.app.services.geometry.top_silk.as_ref();
+                let bottom_silk = params.app.services.geometry.bottom_silk.as_ref();
+                let inner_copper = params.app.services.geometry.inner_copper.as_slice();
                 let drill = params.app.services.geometry.drill.as_ref();
                 let units_mils = params.app.services.global_units_mils;
                 params.app.gerber_view_3d_panel.show(
@@ -150,6 +153,9 @@ impl Tab {
                     bottom_copper,
                     top_mask,
                     bottom_mask,
+                    top_silk,
+                    bottom_silk,
+                    inner_copper,
                     drill,
                     units_mils,
                 );

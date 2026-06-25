@@ -30,11 +30,29 @@ const COPPER_COLOR_TOP: [f32; 3] = [0.85, 0.68, 0.31];
 /// confirmation that the depth test is correctly hiding B.Cu behind the
 /// FR-4 from a top view and hiding F.Cu from a bottom view.
 const COPPER_COLOR_BOTTOM: [f32; 3] = [0.72, 0.45, 0.20];
-/// Flat-slab Z offsets for the copper layers. Positive = top side (F.Cu
-/// floats above the FR-4 plane), negative = bottom (B.Cu sits beneath).
-/// Phase 4a is flat-slab extrusion; Phase 4b adds side walls.
-const COPPER_Z_TOP: f32 = 0.020;
-const COPPER_Z_BOTTOM: f32 = -0.040;
+/// Inner copper planes read as copper too, a touch dimmer than F.Cu so the
+/// buried layers don't visually compete with the outer ones when seen
+/// through the translucent board edge.
+const INNER_COPPER_COLOR: [f32; 3] = [0.78, 0.60, 0.28];
+/// FR-4 substrate is a real slab with side walls (was a flat sheet in the
+/// Phase-4a interim). Top face at z=0, bottom one board-thickness below.
+/// 1.55 mm is the common 2-layer default and reads as a believable edge.
+const BOARD_Z_TOP: f32 = 0.0;
+const BOARD_THICKNESS: f32 = 1.55;
+const BOARD_Z_BOTTOM: f32 = BOARD_Z_TOP - BOARD_THICKNESS;
+/// Caps stay opaque; the side walls render translucent so buried inner
+/// copper reads through the board edge.
+const BOARD_WALL_ALPHA: f32 = 0.45;
+
+/// Real film thicknesses so layers stack flush on the slab faces instead of
+/// floating: 1 oz Cu ≈ 35 µm, LPI mask ≈ 20 µm, silk ink ≈ 15 µm. Each
+/// sheet is still zero-thickness; its Z marks the layer's outer surface.
+const COPPER_THICKNESS: f32 = 0.035;
+const MASK_THICKNESS: f32 = 0.020;
+const SILK_THICKNESS: f32 = 0.015;
+/// F.Cu outer face = board top + copper plating; B.Cu mirrors on the bottom.
+const COPPER_Z_TOP: f32 = BOARD_Z_TOP + COPPER_THICKNESS;
+const COPPER_Z_BOTTOM: f32 = BOARD_Z_BOTTOM - COPPER_THICKNESS;
 
 /// Soldermask green (~RAL 6000 territory). A hair darker + more saturated
 /// than the bare-FR-4 colour so the mask reads as a distinct layer when
@@ -42,25 +60,37 @@ const COPPER_Z_BOTTOM: f32 = -0.040;
 /// pixels).
 const MASK_COLOR_TOP: [f32; 3] = [0.11, 0.38, 0.18];
 const MASK_COLOR_BOTTOM: [f32; 3] = [0.09, 0.32, 0.15];
-/// Mask Z offsets: ~10 µm above F.Cu on top, ~10 µm below B.Cu on bottom.
-/// Enough to keep the mask stable over copper under typical camera angles
-/// without introducing a visible gap between the two.
-const MASK_Z_TOP: f32 = 0.030;
-const MASK_Z_BOTTOM: f32 = -0.050;
+/// Mask outer face = copper outer face + mask film (conforms over copper).
+const MASK_Z_TOP: f32 = COPPER_Z_TOP + MASK_THICKNESS;
+const MASK_Z_BOTTOM: f32 = COPPER_Z_BOTTOM - MASK_THICKNESS;
 /// Mask blend alpha. 0.55 lets copper traces read through as a darker
 /// green tint — matches KiCad's built-in 3D viewer at default settings.
 const MASK_ALPHA: f32 = 0.55;
+
+/// Off-white silkscreen legend. Top reads a hair brighter than bottom so the
+/// two are distinguishable when both are edge-on in the same view.
+const SILK_COLOR_TOP: [f32; 3] = [0.92, 0.92, 0.89];
+const SILK_COLOR_BOTTOM: [f32; 3] = [0.88, 0.88, 0.85];
+/// Silk ink printed on top of the mask: mask outer face + ink thickness.
+const SILK_Z_TOP: f32 = MASK_Z_TOP + SILK_THICKNESS;
+const SILK_Z_BOTTOM: f32 = MASK_Z_BOTTOM - SILK_THICKNESS;
+
+/// Exposed copper (mask openings / pads) sits a hair above the mask sheet so
+/// each pad reads as solid exposed copper regardless of how its opening
+/// overlaps neighbours. Below `HOLE_Z` so the dark bore caps punch through.
+const EXPOSED_Z_TOP: f32 = MASK_Z_TOP + 0.002;
+const EXPOSED_Z_BOTTOM: f32 = MASK_Z_BOTTOM - 0.002;
 
 const GRID_COLOR: [f32; 3] = [0.28, 0.30, 0.35];
 
 /// Dark hole colour — a drilled hole / barrel reads as near-black against
 /// both copper and soldermask.
 const HOLE_COLOR: [f32; 3] = [0.06, 0.06, 0.07];
-/// Hole-disk Z offsets: a hair above the top mask and below the bottom mask,
-/// so the dark disk sits on top of copper+mask on each face and reads as a
-/// hole punched through the pad from whichever side faces the camera.
-const HOLE_Z_TOP: f32 = 0.034;
-const HOLE_Z_BOTTOM: f32 = -0.054;
+/// Hole-disk Z: a hair above the top mask / below the bottom mask, so the
+/// dark disk sits on top of copper+mask on each face and reads as a hole
+/// punched through the pad from whichever side faces the camera.
+const HOLE_Z_TOP: f32 = MASK_Z_TOP + 0.006;
+const HOLE_Z_BOTTOM: f32 = MASK_Z_BOTTOM - 0.006;
 /// Triangle-fan segment count for a hole disk. Holes are small on screen, so
 /// 16 segments is plenty smooth without ballooning the vertex count on
 /// hole-dense boards.
@@ -98,6 +128,11 @@ pub struct Board3dView {
     last_had_bottom_copper: bool,
     last_had_top_mask: bool,
     last_had_bottom_mask: bool,
+    last_had_top_silk: bool,
+    last_had_bottom_silk: bool,
+    /// Count of inner-copper meshes currently on the GPU. Inner layers are a
+    /// `Vec` (variable count), so the meshes rebuild when this count changes.
+    last_inner_copper_count: usize,
     /// Presence flag for the drill layer (hole disks).
     last_had_drill: bool,
     /// Board dims (mm) cached from the last uploaded outline. Drives the
@@ -155,18 +190,34 @@ struct GpuResources {
     unlit: UnlitProgram,
     axes: ColoredMesh,
     grid: ColoredMesh,
-    /// Flat board outline. Triangle soup with FR-4 colour. Empty until a
-    /// project with a parseable Edge.Cuts gerber loads.
+    /// FR-4 slab caps (top + bottom faces). Triangle soup with FR-4 colour.
+    /// Empty until a project with a parseable Edge.Cuts gerber loads.
     board: ColoredMesh,
+    /// FR-4 slab side walls (the board edge), drawn translucent so buried
+    /// inner copper reads through the edge. Built alongside the caps.
+    board_walls: ColoredMesh,
     board_ready: bool,
     top_copper: ColoredMesh,
     top_copper_ready: bool,
     bottom_copper: ColoredMesh,
     bottom_copper_ready: bool,
+    /// Inner copper layers (variable count), each baked at its stack depth.
+    /// Drawn opaque in the buried pass; read through the translucent edge.
+    inner_copper: Vec<ColoredMesh>,
     top_mask: ColoredMesh,
     top_mask_ready: bool,
     bottom_mask: ColoredMesh,
     bottom_mask_ready: bool,
+    /// Exposed-copper pads (mask openings as solid copper), one per side.
+    top_exposed: ColoredMesh,
+    top_exposed_ready: bool,
+    bottom_exposed: ColoredMesh,
+    bottom_exposed_ready: bool,
+    /// Silkscreen legend meshes (off-white), one per side.
+    top_silk: ColoredMesh,
+    top_silk_ready: bool,
+    bottom_silk: ColoredMesh,
+    bottom_silk_ready: bool,
     /// Dark hole disks, one mesh per side (same circles, different Z) so the
     /// holes read from both the top and bottom views.
     top_holes: ColoredMesh,
@@ -184,6 +235,9 @@ impl Board3dView {
             last_had_bottom_copper: false,
             last_had_top_mask: false,
             last_had_bottom_mask: false,
+            last_had_top_silk: false,
+            last_had_bottom_silk: false,
+            last_inner_copper_count: 0,
             last_had_drill: false,
             last_board_dim: None,
             grid_step: GridStep::Auto,
@@ -251,6 +305,9 @@ impl Board3dView {
         bottom_copper: Option<&CopperData>,
         top_mask: Option<&MaskData>,
         bottom_mask: Option<&MaskData>,
+        top_silk: Option<&CopperData>,
+        bottom_silk: Option<&CopperData>,
+        inner_copper: &[(u8, CopperData)],
         drill: Option<&DrillData>,
         units_mils: bool,
     ) {
@@ -278,6 +335,8 @@ impl Board3dView {
             &mut canvas_ui, gl, board_outline,
             top_copper, bottom_copper,
             top_mask, bottom_mask,
+            top_silk, bottom_silk,
+            inner_copper,
             drill,
             units_mils,
         );
@@ -372,6 +431,9 @@ impl Board3dView {
         bottom_copper: Option<&CopperData>,
         top_mask: Option<&MaskData>,
         bottom_mask: Option<&MaskData>,
+        top_silk: Option<&CopperData>,
+        bottom_silk: Option<&CopperData>,
+        inner_copper: &[(u8, CopperData)],
         drill: Option<&DrillData>,
         units_mils: bool,
     ) {
@@ -500,10 +562,15 @@ impl Board3dView {
                     grid.upload(gl, &grid_vertices(5.0, 1.0, GRID_COLOR));
 
                     let board = ColoredMesh::new(gl, glow::TRIANGLES);
+                    let board_walls = ColoredMesh::new(gl, glow::TRIANGLES);
                     let top_copper = ColoredMesh::new(gl, glow::TRIANGLES);
                     let bottom_copper = ColoredMesh::new(gl, glow::TRIANGLES);
                     let top_mask = ColoredMesh::new(gl, glow::TRIANGLES);
                     let bottom_mask = ColoredMesh::new(gl, glow::TRIANGLES);
+                    let top_exposed = ColoredMesh::new(gl, glow::TRIANGLES);
+                    let bottom_exposed = ColoredMesh::new(gl, glow::TRIANGLES);
+                    let top_silk = ColoredMesh::new(gl, glow::TRIANGLES);
+                    let bottom_silk = ColoredMesh::new(gl, glow::TRIANGLES);
                     let top_holes = ColoredMesh::new(gl, glow::TRIANGLES);
                     let bottom_holes = ColoredMesh::new(gl, glow::TRIANGLES);
 
@@ -512,15 +579,25 @@ impl Board3dView {
                         axes,
                         grid,
                         board,
+                        board_walls,
                         board_ready: false,
                         top_copper,
                         top_copper_ready: false,
                         bottom_copper,
                         bottom_copper_ready: false,
+                        inner_copper: Vec::new(),
                         top_mask,
                         top_mask_ready: false,
                         bottom_mask,
                         bottom_mask_ready: false,
+                        top_exposed,
+                        top_exposed_ready: false,
+                        bottom_exposed,
+                        bottom_exposed_ready: false,
+                        top_silk,
+                        top_silk_ready: false,
+                        bottom_silk,
+                        bottom_silk_ready: false,
                         top_holes,
                         bottom_holes,
                         holes_ready: false,
@@ -541,9 +618,11 @@ impl Board3dView {
             if let (Some(outline), Ok(mut g)) = (board_outline, gpu.lock()) {
                 let w = (outline.bbox.max.x - outline.bbox.min.x) as f32;
                 let h = (outline.bbox.max.y - outline.bbox.min.y) as f32;
-                let verts = build_board_vertices(outline, FR4_COLOR, 0.0);
+                let caps = build_board_cap_vertices(outline, FR4_COLOR, BOARD_Z_TOP, BOARD_Z_BOTTOM);
+                let walls = build_board_wall_vertices(outline, FR4_COLOR, BOARD_Z_TOP, BOARD_Z_BOTTOM);
                 unsafe {
-                    g.board.upload(gl, &verts);
+                    g.board.upload(gl, &caps);
+                    g.board_walls.upload(gl, &walls);
                 }
                 g.board_ready = true;
                 self.last_board_dim = Some((w, h));
@@ -595,17 +674,47 @@ impl Board3dView {
             self.last_had_bottom_copper = has_bottom_copper;
         }
 
+        // ── Inner copper layers (rebuild when the count changes) ───
+        if force || inner_copper.len() != self.last_inner_copper_count {
+            if let Ok(mut g) = gpu.lock() {
+                g.inner_copper.clear();
+                // Stack height from the deepest inner index: B.Cu is
+                // Copper(N), so N = max inner stack index + 1.
+                let copper_count = inner_copper
+                    .iter()
+                    .map(|(n, _)| *n)
+                    .max()
+                    .map(|m| m + 1)
+                    .unwrap_or(2);
+                for (n, cu) in inner_copper {
+                    let z = inner_layer_z(*n, copper_count);
+                    let verts = build_copper_vertices(cu, INNER_COPPER_COLOR, z);
+                    let mut mesh = unsafe { ColoredMesh::new(gl, glow::TRIANGLES) };
+                    unsafe {
+                        mesh.upload(gl, &verts);
+                    }
+                    g.inner_copper.push(mesh);
+                }
+            }
+            self.last_inner_copper_count = inner_copper.len();
+        }
+
         // ── Soldermask meshes (F.Mask / B.Mask) ───────────────────
         let has_top_mask = top_mask.is_some();
         if force || has_top_mask != self.last_had_top_mask {
             if let (Some(m), Ok(mut g)) = (top_mask, gpu.lock()) {
                 let verts = build_mask_vertices(m, MASK_COLOR_TOP, MASK_Z_TOP);
+                // Exposed copper pads are derived from the same mask's openings.
+                let exposed = build_exposed_copper_vertices(m, COPPER_COLOR_TOP, EXPOSED_Z_TOP);
                 unsafe {
                     g.top_mask.upload(gl, &verts);
+                    g.top_exposed.upload(gl, &exposed);
                 }
                 g.top_mask_ready = true;
+                g.top_exposed_ready = !exposed.is_empty();
             } else if let Ok(mut g) = gpu.lock() {
                 g.top_mask_ready = false;
+                g.top_exposed_ready = false;
             }
             self.last_had_top_mask = has_top_mask;
         }
@@ -613,14 +722,46 @@ impl Board3dView {
         if force || has_bottom_mask != self.last_had_bottom_mask {
             if let (Some(m), Ok(mut g)) = (bottom_mask, gpu.lock()) {
                 let verts = build_mask_vertices(m, MASK_COLOR_BOTTOM, MASK_Z_BOTTOM);
+                let exposed = build_exposed_copper_vertices(m, COPPER_COLOR_BOTTOM, EXPOSED_Z_BOTTOM);
                 unsafe {
                     g.bottom_mask.upload(gl, &verts);
+                    g.bottom_exposed.upload(gl, &exposed);
                 }
                 g.bottom_mask_ready = true;
+                g.bottom_exposed_ready = !exposed.is_empty();
             } else if let Ok(mut g) = gpu.lock() {
                 g.bottom_mask_ready = false;
+                g.bottom_exposed_ready = false;
             }
             self.last_had_bottom_mask = has_bottom_mask;
+        }
+
+        // ── Silkscreen meshes (F.SilkS / B.SilkS) ─────────────────
+        let has_top_silk = top_silk.is_some();
+        if force || has_top_silk != self.last_had_top_silk {
+            if let (Some(s), Ok(mut g)) = (top_silk, gpu.lock()) {
+                let verts = build_copper_vertices(s, SILK_COLOR_TOP, SILK_Z_TOP);
+                unsafe {
+                    g.top_silk.upload(gl, &verts);
+                }
+                g.top_silk_ready = true;
+            } else if let Ok(mut g) = gpu.lock() {
+                g.top_silk_ready = false;
+            }
+            self.last_had_top_silk = has_top_silk;
+        }
+        let has_bottom_silk = bottom_silk.is_some();
+        if force || has_bottom_silk != self.last_had_bottom_silk {
+            if let (Some(s), Ok(mut g)) = (bottom_silk, gpu.lock()) {
+                let verts = build_copper_vertices(s, SILK_COLOR_BOTTOM, SILK_Z_BOTTOM);
+                unsafe {
+                    g.bottom_silk.upload(gl, &verts);
+                }
+                g.bottom_silk_ready = true;
+            } else if let Ok(mut g) = gpu.lock() {
+                g.bottom_silk_ready = false;
+            }
+            self.last_had_bottom_silk = has_bottom_silk;
         }
 
         // ── Drill holes (top + bottom dark disks) ──────────────────
@@ -721,6 +862,12 @@ impl Board3dView {
                 if g.bottom_copper_ready {
                     g.bottom_copper.draw(gl);
                 }
+                // Inner copper planes, buried at their stack depth. Opaque —
+                // the FR-4 caps occlude them straight-on, but they read
+                // through the translucent edge walls (the multilayer stackup).
+                for m in &g.inner_copper {
+                    m.draw(gl);
+                }
                 if g.board_ready {
                     g.board.draw(gl);
                 }
@@ -737,6 +884,13 @@ impl Board3dView {
                 gl.enable(glow::BLEND);
                 gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
                 gl.depth_mask(false);
+                // Translucent FR-4 side walls first, so the board edge blends
+                // over whatever the opaque pass wrote (inner copper, once it
+                // lands) and the multilayer stackup reads through the edge.
+                if g.board_ready {
+                    g.unlit.set_alpha(gl, BOARD_WALL_ALPHA);
+                    g.board_walls.draw(gl);
+                }
                 g.unlit.set_alpha(gl, MASK_ALPHA);
                 if g.bottom_mask_ready {
                     g.bottom_mask.draw(gl);
@@ -747,12 +901,31 @@ impl Board3dView {
                 g.unlit.set_alpha(gl, 1.0);
                 gl.depth_mask(true);
                 gl.disable(glow::BLEND);
+                // Exposed copper pads: solid copper in the mask openings,
+                // opaque on top of the mask sheet, so each pad reads as fully
+                // exposed even where openings overlap. Drawn before the drill
+                // holes so the dark bore caps punch back through.
+                if g.bottom_exposed_ready {
+                    g.bottom_exposed.draw(gl);
+                }
+                if g.top_exposed_ready {
+                    g.top_exposed.draw(gl);
+                }
                 // Drill holes: opaque dark disks on each face, drawn after the
                 // mask so they read as crisp holes punched through the pads
                 // (depth-write back on, no blend).
                 if g.holes_ready {
                     g.top_holes.draw(gl);
                     g.bottom_holes.draw(gl);
+                }
+                // Silkscreen legend: opaque off-white, drawn last among the
+                // board layers (depth-write still on) at a Z just above the
+                // mask so it reads as printed on top of the soldermask.
+                if g.top_silk_ready {
+                    g.top_silk.draw(gl);
+                }
+                if g.bottom_silk_ready {
+                    g.bottom_silk.draw(gl);
                 }
                 if show_grid {
                     gl.line_width(1.0);
@@ -877,7 +1050,18 @@ impl Board3dView {
             );
         }
 
-        ui.ctx().request_repaint();
+        // Only keep the render loop running while the user is actively
+        // dragging (orbit / pan / measure / zoom-box), or for the one frame
+        // after a fresh load (`force`): the mesh upload + camera auto-fit run
+        // *after* `mvp` is computed this frame, so the fitted view only shows
+        // next frame — same "repaint while a view reset is pending" guard the
+        // 2D view uses. When idle the scene is static and the camera has no
+        // easing, so egui's input-driven repaint (clicks, scroll, hover) is
+        // enough — an unconditional repaint here just renders the whole scene
+        // at max FPS forever and spins the GPU fans for nothing.
+        if response.dragged() || force {
+            ui.ctx().request_repaint();
+        }
     }
 }
 
@@ -904,12 +1088,49 @@ impl Default for Board3dView {
 // Mesh helpers
 // ────────────────────────────────────────────────────────────────────────
 
-fn build_board_vertices(outline: &OutlineData, rgb: [f32; 3], z: f32) -> Vec<f32> {
+/// FR-4 slab caps: the top face (+Z) and bottom face (−Z), reusing the
+/// outline's centered triangle soup at each Z. No backface culling, so the
+/// shared winding is fine for both faces.
+fn build_board_cap_vertices(outline: &OutlineData, rgb: [f32; 3], z_top: f32, z_bottom: f32) -> Vec<f32> {
     let [r, g, b] = rgb;
-    let mut out = Vec::with_capacity(outline.mesh_indices.len() * 6);
+    let mut out = Vec::with_capacity(outline.mesh_indices.len() * 2 * 6);
     for &idx in &outline.mesh_indices {
         let v = outline.mesh_vertices_2d[idx as usize];
-        out.extend_from_slice(&[v[0], v[1], z, r, g, b]);
+        out.extend_from_slice(&[v[0], v[1], z_top, r, g, b]);
+    }
+    for &idx in &outline.mesh_indices {
+        let v = outline.mesh_vertices_2d[idx as usize];
+        out.extend_from_slice(&[v[0], v[1], z_bottom, r, g, b]);
+    }
+    out
+}
+
+/// FR-4 substrate side walls (the board edge), as a quad (two triangles) per
+/// outline edge spanning `z_top`→`z_bottom`. `outline.contours` are in the
+/// gerber's original coordinate space, so center them by the bbox to match
+/// the caps and the other (already-centered) layers.
+fn build_board_wall_vertices(outline: &OutlineData, rgb: [f32; 3], z_top: f32, z_bottom: f32) -> Vec<f32> {
+    let [r, g, b] = rgb;
+    let cx = ((outline.bbox.min.x + outline.bbox.max.x) * 0.5) as f32;
+    let cy = ((outline.bbox.min.y + outline.bbox.max.y) * 0.5) as f32;
+    let mut out = Vec::new();
+    for contour in &outline.contours {
+        let n = contour.len();
+        if n < 3 {
+            continue;
+        }
+        for i in 0..n {
+            let p0 = contour[i];
+            let p1 = contour[(i + 1) % n];
+            let (a0x, a0y) = (p0.x - cx, p0.y - cy);
+            let (a1x, a1y) = (p1.x - cx, p1.y - cy);
+            out.extend_from_slice(&[a0x, a0y, z_top, r, g, b]);
+            out.extend_from_slice(&[a1x, a1y, z_top, r, g, b]);
+            out.extend_from_slice(&[a1x, a1y, z_bottom, r, g, b]);
+            out.extend_from_slice(&[a0x, a0y, z_top, r, g, b]);
+            out.extend_from_slice(&[a1x, a1y, z_bottom, r, g, b]);
+            out.extend_from_slice(&[a0x, a0y, z_bottom, r, g, b]);
+        }
     }
     out
 }
@@ -922,6 +1143,31 @@ fn build_copper_vertices(cu: &CopperData, rgb: [f32; 3], z: f32) -> Vec<f32> {
     let mut out = Vec::with_capacity(cu.mesh_indices.len() * 6);
     for &idx in &cu.mesh_indices {
         let v = cu.mesh_vertices_2d[idx as usize];
+        out.extend_from_slice(&[v[0], v[1], z, r, g, b]);
+    }
+    out
+}
+
+/// Depth of an inner copper layer, interpolated evenly between the F.Cu and
+/// B.Cu outer faces by its 1-based stack index. `Copper(1)` = top,
+/// `Copper(copper_count)` = bottom; inner layers land at the fractions
+/// between. Even spacing is an approximation (real stackups vary) but reads
+/// correctly for registration / cross-section inspection.
+fn inner_layer_z(stack_index: u8, copper_count: u8) -> f32 {
+    if copper_count <= 1 {
+        return COPPER_Z_TOP;
+    }
+    let t = (stack_index as f32 - 1.0) / (copper_count as f32 - 1.0);
+    COPPER_Z_TOP + (COPPER_Z_BOTTOM - COPPER_Z_TOP) * t
+}
+
+/// Exposed-copper pads from the mask's opening tessellation (the solid pad
+/// shapes), as a flat sheet at `z`. Empty when the mask has no openings.
+fn build_exposed_copper_vertices(m: &MaskData, rgb: [f32; 3], z: f32) -> Vec<f32> {
+    let [r, g, b] = rgb;
+    let mut out = Vec::with_capacity(m.opening_indices.len() * 6);
+    for &idx in &m.opening_indices {
+        let v = m.opening_vertices_2d[idx as usize];
         out.extend_from_slice(&[v[0], v[1], z, r, g, b]);
     }
     out
