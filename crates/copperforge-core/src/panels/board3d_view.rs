@@ -30,6 +30,10 @@ const COPPER_COLOR_TOP: [f32; 3] = [0.85, 0.68, 0.31];
 /// confirmation that the depth test is correctly hiding B.Cu behind the
 /// FR-4 from a top view and hiding F.Cu from a bottom view.
 const COPPER_COLOR_BOTTOM: [f32; 3] = [0.72, 0.45, 0.20];
+/// Inner copper planes read as copper too, a touch dimmer than F.Cu so the
+/// buried layers don't visually compete with the outer ones when seen
+/// through the translucent board edge.
+const INNER_COPPER_COLOR: [f32; 3] = [0.78, 0.60, 0.28];
 /// FR-4 substrate is a real slab with side walls (was a flat sheet in the
 /// Phase-4a interim). Top face at z=0, bottom one board-thickness below.
 /// 1.55 mm is the common 2-layer default and reads as a believable edge.
@@ -120,6 +124,9 @@ pub struct Board3dView {
     last_had_bottom_mask: bool,
     last_had_top_silk: bool,
     last_had_bottom_silk: bool,
+    /// Count of inner-copper meshes currently on the GPU. Inner layers are a
+    /// `Vec` (variable count), so the meshes rebuild when this count changes.
+    last_inner_copper_count: usize,
     /// Presence flag for the drill layer (hole disks).
     last_had_drill: bool,
     /// Board dims (mm) cached from the last uploaded outline. Drives the
@@ -188,6 +195,9 @@ struct GpuResources {
     top_copper_ready: bool,
     bottom_copper: ColoredMesh,
     bottom_copper_ready: bool,
+    /// Inner copper layers (variable count), each baked at its stack depth.
+    /// Drawn opaque in the buried pass; read through the translucent edge.
+    inner_copper: Vec<ColoredMesh>,
     top_mask: ColoredMesh,
     top_mask_ready: bool,
     bottom_mask: ColoredMesh,
@@ -216,6 +226,7 @@ impl Board3dView {
             last_had_bottom_mask: false,
             last_had_top_silk: false,
             last_had_bottom_silk: false,
+            last_inner_copper_count: 0,
             last_had_drill: false,
             last_board_dim: None,
             grid_step: GridStep::Auto,
@@ -285,6 +296,7 @@ impl Board3dView {
         bottom_mask: Option<&MaskData>,
         top_silk: Option<&CopperData>,
         bottom_silk: Option<&CopperData>,
+        inner_copper: &[(u8, CopperData)],
         drill: Option<&DrillData>,
         units_mils: bool,
     ) {
@@ -313,6 +325,7 @@ impl Board3dView {
             top_copper, bottom_copper,
             top_mask, bottom_mask,
             top_silk, bottom_silk,
+            inner_copper,
             drill,
             units_mils,
         );
@@ -409,6 +422,7 @@ impl Board3dView {
         bottom_mask: Option<&MaskData>,
         top_silk: Option<&CopperData>,
         bottom_silk: Option<&CopperData>,
+        inner_copper: &[(u8, CopperData)],
         drill: Option<&DrillData>,
         units_mils: bool,
     ) {
@@ -558,6 +572,7 @@ impl Board3dView {
                         top_copper_ready: false,
                         bottom_copper,
                         bottom_copper_ready: false,
+                        inner_copper: Vec::new(),
                         top_mask,
                         top_mask_ready: false,
                         bottom_mask,
@@ -640,6 +655,31 @@ impl Board3dView {
                 g.bottom_copper_ready = false;
             }
             self.last_had_bottom_copper = has_bottom_copper;
+        }
+
+        // ── Inner copper layers (rebuild when the count changes) ───
+        if force || inner_copper.len() != self.last_inner_copper_count {
+            if let Ok(mut g) = gpu.lock() {
+                g.inner_copper.clear();
+                // Stack height from the deepest inner index: B.Cu is
+                // Copper(N), so N = max inner stack index + 1.
+                let copper_count = inner_copper
+                    .iter()
+                    .map(|(n, _)| *n)
+                    .max()
+                    .map(|m| m + 1)
+                    .unwrap_or(2);
+                for (n, cu) in inner_copper {
+                    let z = inner_layer_z(*n, copper_count);
+                    let verts = build_copper_vertices(cu, INNER_COPPER_COLOR, z);
+                    let mut mesh = unsafe { ColoredMesh::new(gl, glow::TRIANGLES) };
+                    unsafe {
+                        mesh.upload(gl, &verts);
+                    }
+                    g.inner_copper.push(mesh);
+                }
+            }
+            self.last_inner_copper_count = inner_copper.len();
         }
 
         // ── Soldermask meshes (F.Mask / B.Mask) ───────────────────
@@ -795,6 +835,12 @@ impl Board3dView {
                 // correctly before the blended pass reads from it.
                 if g.bottom_copper_ready {
                     g.bottom_copper.draw(gl);
+                }
+                // Inner copper planes, buried at their stack depth. Opaque —
+                // the FR-4 caps occlude them straight-on, but they read
+                // through the translucent edge walls (the multilayer stackup).
+                for m in &g.inner_copper {
+                    m.draw(gl);
                 }
                 if g.board_ready {
                     g.board.draw(gl);
@@ -1053,6 +1099,19 @@ fn build_copper_vertices(cu: &CopperData, rgb: [f32; 3], z: f32) -> Vec<f32> {
         out.extend_from_slice(&[v[0], v[1], z, r, g, b]);
     }
     out
+}
+
+/// Depth of an inner copper layer, interpolated evenly between the F.Cu and
+/// B.Cu outer faces by its 1-based stack index. `Copper(1)` = top,
+/// `Copper(copper_count)` = bottom; inner layers land at the fractions
+/// between. Even spacing is an approximation (real stackups vary) but reads
+/// correctly for registration / cross-section inspection.
+fn inner_layer_z(stack_index: u8, copper_count: u8) -> f32 {
+    if copper_count <= 1 {
+        return COPPER_Z_TOP;
+    }
+    let t = (stack_index as f32 - 1.0) / (copper_count as f32 - 1.0);
+    COPPER_Z_TOP + (COPPER_Z_BOTTOM - COPPER_Z_TOP) * t
 }
 
 fn build_mask_vertices(m: &MaskData, rgb: [f32; 3], z: f32) -> Vec<f32> {
