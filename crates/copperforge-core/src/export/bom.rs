@@ -257,14 +257,14 @@ use crate::bom::schematic::SchBomLine;
 const LOGO_PNG: &[u8] = include_bytes!("../../assets/atlantix-logo.png");
 
 /// Canonical release-BOM columns, matching the kiverse Python output.
-const RELEASE_COLUMNS: [&str; 11] = [
+const RELEASE_COLUMNS: [&str; 12] = [
     "Item", "Reference", "Qty", "Description",
-    "Manufacturer", "Manufacturer P/N",
+    "Manufacturer", "Manufacturer P/N", "LCSC #",
     "Vendor 1", "Vendor 1 P/N", "Vendor 2", "Vendor 2 P/N", "DNP",
 ];
 
 /// Each release column's value for `line`, in `RELEASE_COLUMNS` order.
-fn release_cells(line: &SchBomLine) -> [String; 11] {
+fn release_cells(line: &SchBomLine) -> [String; 12] {
     [
         line.item.to_string(),
         line.reference.clone(),
@@ -272,6 +272,7 @@ fn release_cells(line: &SchBomLine) -> [String; 11] {
         line.description.clone(),
         line.manufacturer.clone(),
         line.mpn.clone(),
+        line.lcsc.clone(),
         line.vendor1.clone(),
         line.vendor1_pn.clone(),
         line.vendor2.clone(),
@@ -488,7 +489,7 @@ fn write_release_bom_sheet(
         }
     }
 
-    let widths = [6.0, 34.0, 6.0, 46.0, 18.0, 24.0, 11.0, 18.0, 11.0, 18.0, 6.0];
+    let widths = [6.0, 34.0, 6.0, 46.0, 18.0, 24.0, 14.0, 11.0, 18.0, 11.0, 18.0, 6.0];
     for (i, w) in widths.iter().enumerate() {
         sheet.set_column_width(i as u16, *w).map_err(xlsx_err)?;
     }

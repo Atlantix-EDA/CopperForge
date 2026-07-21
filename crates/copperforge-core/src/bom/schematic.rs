@@ -20,6 +20,9 @@ pub struct SchBomLine {
     pub description: String,
     pub manufacturer: String,
     pub mpn: String,
+    /// LCSC / JLCPCB part number (e.g. "C42411119"), from the "LCSC Part #"
+    /// symbol field. Empty when the part carries none.
+    pub lcsc: String,
     pub vendor1: String,
     pub vendor1_pn: String,
     pub vendor2: String,
@@ -33,6 +36,7 @@ pub struct SchBomLine {
 // coalesce on whatever labels actually appear in the exported header.
 const MFR_LABELS: [&str; 4] = ["Mfr", "Mfr_Name", "MANUF", "MF"];
 const MPN_LABELS: [&str; 6] = ["MPN_a", "MPN_b", "PartNum", "PartNum2", "PartNum3", "PartNum4"];
+const LCSC_LABELS: [&str; 3] = ["LCSC_a", "LCSC_b", "LCSC_c"];
 
 /// Export and parse the schematic BOM. Stages the raw CSV in `stage_dir`
 /// (kicad-cli under Flatpak is sandboxed away from /tmp, so we stage inside
@@ -45,14 +49,16 @@ pub fn export_sch_bom(
     vendor2: &str,
 ) -> Result<Vec<SchBomLine>, String> {
     // Mirror the kiverse generate_bom.py field/label union exactly.
-    let fields = "Reference,${QUANTITY},Value,Description,\
+    let fields = "Reference,${QUANTITY},Value,Description,Footprint,\
         Manufacturer,Manufacturer_Name,MANUFACTURER,MF,\
         Manufacturer_Part_Number,MPN,Part Number,PART NUMBER,PARTNUMBER,Manufacturer P/N,\
-        Supplier,SupplierPN,Digi-Key Part Number,Mouser Part Number,${DNP}";
-    let labels = "Reference,Qty,Value,Description,\
+        Supplier,SupplierPN,Digi-Key Part Number,Mouser Part Number,\
+        LCSC Part #,LCSC PN,LCSC,${DNP}";
+    let labels = "Reference,Qty,Value,Description,Footprint,\
         Mfr,Mfr_Name,MANUF,MF,\
         MPN_a,MPN_b,PartNum,PartNum2,PartNum3,PartNum4,\
-        Supplier,SupplierPN,DigiKeyPNField,MouserPNField,DNP";
+        Supplier,SupplierPN,DigiKeyPNField,MouserPNField,\
+        LCSC_a,LCSC_b,LCSC_c,DNP";
 
     let raw_csv = stage_dir.join(".bom_raw.csv");
     let mut cmd = crate::app::CopperForgeApp::build_kicad_cli_command(kicad_cli_method);
@@ -65,7 +71,7 @@ pub fn export_sch_bom(
         .arg("--labels")
         .arg(labels)
         .arg("--group-by")
-        .arg("Value")
+        .arg("Value,Footprint")
         .arg("--sort-field")
         .arg("Reference")
         .arg("--ref-range-delimiter") // expand ranges -> match existing BOM style
@@ -120,6 +126,7 @@ fn parse_bom_csv(content: &str, vendor1: &str, vendor2: &str) -> Vec<SchBomLine>
             description: get("Description"),
             manufacturer: first_nonempty(&header, &record, &MFR_LABELS),
             mpn: first_nonempty(&header, &record, &MPN_LABELS),
+            lcsc: first_nonempty(&header, &record, &LCSC_LABELS),
             vendor1: if pn1.is_empty() { String::new() } else { vendor1.to_string() },
             vendor1_pn: pn1,
             vendor2: if pn2.is_empty() { String::new() } else { vendor2.to_string() },
@@ -254,6 +261,16 @@ mod tests {
         assert_eq!(l.vendor1_pn, "");
         assert_eq!(l.vendor2, "Mouser");
         assert_eq!(l.vendor2_pn, "603-RC0603");
+    }
+
+    #[test]
+    fn carries_lcsc_part_number() {
+        // The "LCSC Part #" field (label LCSC_a) flows into the lcsc column.
+        let csv = "Reference,Qty,Value,Description,Mfr,Mfr_Name,MANUF,MF,MPN_a,MPN_b,PartNum,PartNum2,PartNum3,PartNum4,Supplier,SupplierPN,DigiKeyPNField,MouserPNField,LCSC_a,LCSC_b,LCSC_c,DNP\n\
+            C1,1,100n,Cap,KEMET,,,,C100,,,,,,,,,,C42411119,,,\n";
+        let lines = parse_bom_csv(csv, "Digi-Key", "Mouser");
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].lcsc, "C42411119");
     }
 
     #[test]
