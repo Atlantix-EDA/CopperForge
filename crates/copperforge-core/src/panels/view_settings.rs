@@ -1,4 +1,3 @@
-use egui_citizen::{Citizen, CitizenId, CitizenState};
 use super::citizen_panel;
 use crate::{CopperForgeApp, layer_store::{LayerType, Side}};
 use crate::event_logger::{ReactiveEventLogger, ReactiveEventLoggerState, LogColors};

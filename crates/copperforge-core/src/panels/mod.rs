@@ -24,31 +24,4 @@ pub use gerber_view_3d::GerberView3dPanel;
 pub use terminal::TerminalPanel;
 pub use logger::LoggerPanel;
 
-/// Helper to create a citizen panel with standard boilerplate.
-macro_rules! citizen_panel {
-    ($name:ident, $id:expr $(, $field:ident : $ty:ty = $default:expr)*) => {
-        pub struct $name {
-            citizen_id: CitizenId,
-            citizen_state: CitizenState,
-            $( pub $field: $ty, )*
-        }
-
-        impl $name {
-            pub fn new(citizen_state: CitizenState) -> Self {
-                Self {
-                    citizen_id: CitizenId::new($id),
-                    citizen_state,
-                    $( $field: $default, )*
-                }
-            }
-        }
-
-        impl Citizen for $name {
-            fn id(&self) -> &CitizenId { &self.citizen_id }
-            fn citizen_state(&self) -> &CitizenState { &self.citizen_state }
-            fn citizen_state_mut(&mut self) -> &mut CitizenState { &mut self.citizen_state }
-        }
-    };
-}
-
-pub(crate) use citizen_panel;
+pub(crate) use egui_citizen::citizen_panel;

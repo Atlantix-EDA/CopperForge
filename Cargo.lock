@@ -681,7 +681,7 @@ dependencies = [
  "eframe",
  "egui",
  "egui_extras",
- "egui_mobius_reactive",
+ "egui_mobius_reactive 0.4.0",
  "env_logger",
  "log",
 ]
@@ -704,7 +704,7 @@ dependencies = [
  "egui_extras",
  "egui_glow",
  "egui_ltreeview",
- "egui_mobius_reactive",
+ "egui_mobius_reactive 0.4.0",
  "env_logger",
  "gerber-types",
  "gerber_parser 0.4.0",
@@ -1113,10 +1113,9 @@ dependencies = [
 
 [[package]]
 name = "egui_citizen"
-version = "0.4.0"
-source = "git+https://github.com/saturn77/egui_mobius?tag=v0.4.0#a86386ba7f1b10755dd8112e35e8d238439591c1"
+version = "0.5.0"
 dependencies = [
- "egui_mobius_reactive",
+ "egui_mobius_reactive 0.5.0",
 ]
 
 [[package]]
@@ -1177,6 +1176,13 @@ dependencies = [
 name = "egui_mobius_reactive"
 version = "0.4.0"
 source = "git+https://github.com/saturn77/egui_mobius?tag=v0.4.0#a86386ba7f1b10755dd8112e35e8d238439591c1"
+dependencies = [
+ "parking_lot",
+]
+
+[[package]]
+name = "egui_mobius_reactive"
+version = "0.5.0"
 dependencies = [
  "parking_lot",
 ]

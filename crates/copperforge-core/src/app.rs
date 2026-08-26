@@ -58,7 +58,7 @@ pub struct CopperForgeApp {
     pub services: SharedServices,
 
     // ── Citizen infrastructure ────────────────────────────────
-    pub dispatcher: egui_citizen::Dispatcher,
+    pub registrar: egui_citizen::Registrar,
     pub app_messages: Vec<crate::messages::AppMessage>,
 
     // ── Dock state (eframe owns) ──────────────────────────────
@@ -448,21 +448,21 @@ impl CopperForgeApp {
         };
 
         // ── Stage 5: Register citizens ───────────────────────────
-        let mut dispatcher = egui_citizen::Dispatcher::new();
+        let mut registrar = egui_citizen::Registrar::new();
         use egui_citizen::message::CitizenId;
         for id in [
             "gerber_view", "gerber_view_3d", "view_settings", "drc",
             "settings", "bom",
             "terminal", "logger",
         ] {
-            dispatcher.register(CitizenId::new(id));
+            registrar.register(CitizenId::new(id));
         }
         // Projects is a stored citizen — capture its registered CitizenState
         // (NOT ::default(), which severs the reactive link with the
-        // dispatcher) and hand it to the panel below.
-        let projects_citizen_state = dispatcher.register(CitizenId::new("projects"));
-        dispatcher.activate(&CitizenId::new("gerber_view"));
-        let _ = dispatcher.drain_messages();
+        // registrar) and hand it to the panel below.
+        let projects_citizen_state = registrar.register(CitizenId::new("projects"));
+        registrar.activate(&CitizenId::new("gerber_view"));
+        let _ = registrar.drain_messages();
 
         // Restore the working layout, then let a saved default perspective
         // override it on startup (plugin tabs are re-added by `register_panel`,
@@ -481,7 +481,7 @@ impl CopperForgeApp {
 
         let mut app = Self {
             services,
-            dispatcher,
+            registrar,
             app_messages: Vec::new(),
             dock_state,
             last_layout,
@@ -1018,14 +1018,14 @@ impl eframe::App for CopperForgeApp {
         // the 3D view (planned: `F` = flip, `R` = 90° in-plane, `M` = 3D
         // ruler) must not fire simultaneously on both. The active tab is
         // tracked by egui_citizen — on_tab_button calls
-        // `dispatcher.activate()`, which flips the one-hot active bit on
+        // `registrar.activate()`, which flips the one-hot active bit on
         // the matching `CitizenState`. Here we read that bit to gate the
         // 2D handlers so hitting F while the 3D tab is active doesn't
         // silently flip the 2D gerber behind it. When 3D F/R/M handlers
         // land they gate on the inverse of the same check.
         let text_input_active = ctx.memory(|mem| mem.focused().is_some());
         let three_d_active = self
-            .dispatcher
+            .registrar
             .get(&egui_citizen::message::CitizenId::new("gerber_view_3d"))
             .map(|s| s.active.get())
             .unwrap_or(false);
@@ -1339,11 +1339,11 @@ impl eframe::App for CopperForgeApp {
 
         // Main dock area below the ribbon
         let mut dock_state = self.dock_state.clone();
-        let mut dispatcher = std::mem::take(&mut self.dispatcher);
+        let mut registrar = std::mem::take(&mut self.registrar);
         {
             let mut tab_viewer = TabViewer {
                 app: self,
-                dispatcher: &mut dispatcher,
+                registrar: &mut registrar,
             };
             let mut style = Style::from_egui(ctx.style().as_ref());
             style.dock_area_padding = None;
@@ -1356,10 +1356,10 @@ impl eframe::App for CopperForgeApp {
                 .show_inside(ui, &mut tab_viewer);
         }
 
-        for msg in dispatcher.drain_messages() {
+        for msg in registrar.drain_messages() {
             self.app_messages.push(crate::messages::AppMessage::Citizen(msg));
         }
-        self.dispatcher = dispatcher;
+        self.registrar = registrar;
         self.dock_state = dock_state;
 
         // Persist the perspective the moment panels are rearranged — compared

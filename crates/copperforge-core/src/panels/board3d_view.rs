@@ -989,7 +989,7 @@ impl Board3dView {
                 } else {
                     egui::Color32::from_rgba_unmultiplied(255, 220, 90, 180)
                 };
-                ui.painter().line_segment([ps, pe], egui::Stroke::new(2.0, color));
+                ui.painter().line_segment([ps, pe], egui::Stroke::new(2.0_f32, color));
                 ui.painter().circle_filled(ps, 3.5, color);
                 ui.painter().circle_filled(pe, 3.5, color);
                 let dist_mm = (we - ws).norm();
@@ -1045,7 +1045,7 @@ impl Board3dView {
             ui.painter().rect_stroke(
                 box_rect,
                 0.0,
-                egui::Stroke::new(1.5, egui::Color32::from_rgb(255, 200, 60)),
+                egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(255, 200, 60)),
                 egui::StrokeKind::Inside,
             );
         }

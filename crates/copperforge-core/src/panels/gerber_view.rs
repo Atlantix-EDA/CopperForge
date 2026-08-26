@@ -1223,7 +1223,7 @@ fn render_zoom_window(app: &mut CopperForgeApp, painter: &Painter) {
             );
             
             // Draw border
-            let stroke = Stroke::new(2.0, Color32::from_rgb(100, 150, 255));
+            let stroke = Stroke::new(2.0_f32, Color32::from_rgb(100, 150, 255));
             painter.line_segment([zoom_rect.min, Pos2::new(zoom_rect.max.x, zoom_rect.min.y)], stroke);
             painter.line_segment([Pos2::new(zoom_rect.max.x, zoom_rect.min.y), zoom_rect.max], stroke);
             painter.line_segment([zoom_rect.max, Pos2::new(zoom_rect.min.x, zoom_rect.max.y)], stroke);
@@ -1268,19 +1268,19 @@ fn render_ruler_measurement(app: &mut CopperForgeApp, painter: &Painter, start_o
         
         // Draw start point
         painter.circle_filled(start_screen, 4.0, point_color);
-        painter.circle_stroke(start_screen, 6.0, Stroke::new(2.0, line_color));
+        painter.circle_stroke(start_screen, 6.0, Stroke::new(2.0_f32, line_color));
         
         if let Some(end) = end_opt {
             let end_screen = app.services.gerber_view.view_state.gerber_to_screen_coords(end);
             
             // Draw end point
             painter.circle_filled(end_screen, 4.0, point_color);
-            painter.circle_stroke(end_screen, 6.0, Stroke::new(2.0, line_color));
+            painter.circle_stroke(end_screen, 6.0, Stroke::new(2.0_f32, line_color));
             
             // Draw ruler line
             painter.line_segment(
                 [start_screen, end_screen],
-                Stroke::new(3.0, line_color)
+                Stroke::new(3.0_f32, line_color)
             );
             
             let dx = end.x - start.x;
@@ -1467,14 +1467,14 @@ fn render_cursor_info(ui: &mut egui::Ui, app: &mut CopperForgeApp, painter: &Pai
                     mouse_screen_pos - Vec2::new(crosshair_size, 0.0),
                     mouse_screen_pos + Vec2::new(crosshair_size, 0.0)
                 ],
-                Stroke::new(1.0, Color32::WHITE)
+                Stroke::new(1.0_f32, Color32::WHITE)
             );
             painter.line_segment(
                 [
                     mouse_screen_pos - Vec2::new(0.0, crosshair_size),
                     mouse_screen_pos + Vec2::new(0.0, crosshair_size)
                 ],
-                Stroke::new(1.0, Color32::WHITE)
+                Stroke::new(1.0_f32, Color32::WHITE)
             );
         }
     }
@@ -1526,7 +1526,7 @@ fn render_measurement_crosshair(app: &mut CopperForgeApp, painter: &Painter) {
 
 fn draw_measurement_crosshair(painter: &Painter, center: Pos2, color: Color32) {
     let crosshair_size = 12.0;
-    let stroke = egui::Stroke::new(2.0, color);
+    let stroke = egui::Stroke::new(2.0_f32, color);
     
     // Horizontal line
     painter.line_segment(
@@ -1576,7 +1576,7 @@ fn render_zoom_display(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
 /// Draw a red X marker for DRC violations
 fn draw_violation_marker(painter: &Painter, center: Pos2, size: f32, color: Color32) {
     let half_size = size / 2.0;
-    let stroke = Stroke::new(2.0, color);
+    let stroke = Stroke::new(2.0_f32, color);
     
     // Draw X shape
     painter.line_segment([
@@ -1592,7 +1592,7 @@ fn draw_violation_marker(painter: &Painter, center: Pos2, size: f32, color: Colo
 
 /// Draw quadrant axes when quadrant view is enabled
 fn draw_quadrant_axes(painter: &Painter, viewport: &Rect, _view_state: &ViewState, center_screen_pos: Pos2) {
-    let stroke = Stroke::new(2.0, Color32::from_rgba_unmultiplied(100, 100, 100, 150));
+    let stroke = Stroke::new(2.0_f32, Color32::from_rgba_unmultiplied(100, 100, 100, 150));
     
     // Draw vertical axis
     if center_screen_pos.x >= viewport.min.x && center_screen_pos.x <= viewport.max.x {

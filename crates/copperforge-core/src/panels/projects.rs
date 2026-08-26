@@ -1,4 +1,3 @@
-use egui_citizen::{Citizen, CitizenId, CitizenState};
 use super::citizen_panel;
 
 citizen_panel!(ProjectsPanel, "projects",

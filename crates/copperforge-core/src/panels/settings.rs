@@ -1,4 +1,3 @@
-use egui_citizen::{Citizen, CitizenId, CitizenState};
 use super::citizen_panel;
 use crate::event_logger::ReactiveEventLogger;
 use chrono_tz::Tz;

@@ -18,7 +18,6 @@
 
 use clap::{CommandFactory, Parser, Subcommand};
 use egui::RichText;
-use egui_citizen::{Citizen, CitizenId, CitizenState};
 
 use super::citizen_panel;
 use crate::services::SharedServices;

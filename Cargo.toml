@@ -87,7 +87,7 @@ egui_mobius_reactive = { git = "https://github.com/saturn77/egui_mobius", tag = 
 # Citizen panel lifecycle (lives in the same egui_mobius monorepo). egui_mobius
 # v0.4.0 and gerber_viewer 0.6.1 both target egui 0.34, so the whole tree unifies
 # on 0.34 — the prior conflict that deferred citizen/lens integration is resolved.
-egui_citizen = { git = "https://github.com/saturn77/egui_mobius", tag = "v0.4.0" }
+egui_citizen = { path = "../../Egui/egui_mobius/crates/egui_citizen" }
 
 # KiCad file parsing (BOM extraction from .kicad_pcb)
 kiparse = { git = "https://github.com/Atlantix-EDA/atlantix-eda.git", package = "kiparse" }

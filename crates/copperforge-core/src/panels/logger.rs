@@ -4,7 +4,6 @@
 //! saturn-grid-sim style: numbered rows, colored level prefixes, monospace.
 
 use egui::RichText;
-use egui_citizen::{Citizen, CitizenId, CitizenState};
 
 use super::citizen_panel;
 use crate::event_logger::LogType;

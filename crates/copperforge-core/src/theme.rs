@@ -40,33 +40,33 @@ pub fn apply_visuals(ctx: &egui::Context) {
     visuals.faint_bg_color = TokyoNight::BG_HIGHLIGHT;
     visuals.extreme_bg_color = TokyoNight::BG_DARK;
     visuals.selection.bg_fill = TokyoNight::SELECTION;
-    visuals.selection.stroke = egui::Stroke::new(1.0, TokyoNight::BLUE);
+    visuals.selection.stroke = egui::Stroke::new(1.0_f32, TokyoNight::BLUE);
 
     visuals.widgets.noninteractive.bg_fill = TokyoNight::BG;
-    visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, TokyoNight::FG_DIM);
-    visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, TokyoNight::BORDER);
+    visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0_f32, TokyoNight::FG_DIM);
+    visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, TokyoNight::BORDER);
 
     visuals.widgets.inactive.bg_fill = TokyoNight::BG_HIGHLIGHT;
-    visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, TokyoNight::FG);
-    visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, TokyoNight::BORDER);
+    visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0_f32, TokyoNight::FG);
+    visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0_f32, TokyoNight::BORDER);
 
     visuals.widgets.hovered.bg_fill = TokyoNight::SELECTION;
-    visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, TokyoNight::CYAN);
-    visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, TokyoNight::BLUE);
+    visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0_f32, TokyoNight::CYAN);
+    visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0_f32, TokyoNight::BLUE);
 
     visuals.widgets.active.bg_fill = TokyoNight::BLUE;
     // NOTE: egui 0.34 derives `.strong()` text color from `widgets.active`
     // (`strong_text_color()` returns `widgets.active.text_color()`), ignoring
     // `override_text_color`. Keep this light so emphasized labels stay visible
     // on dark panels — a dark value here makes every `.strong()` invisible.
-    visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, TokyoNight::FG);
-    visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, TokyoNight::CYAN);
+    visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0_f32, TokyoNight::FG);
+    visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0_f32, TokyoNight::CYAN);
 
     visuals.override_text_color = Some(TokyoNight::FG);
     visuals.hyperlink_color = TokyoNight::CYAN;
     visuals.warn_fg_color = TokyoNight::ORANGE;
     visuals.error_fg_color = TokyoNight::RED;
-    visuals.window_stroke = egui::Stroke::new(1.0, TokyoNight::BORDER);
+    visuals.window_stroke = egui::Stroke::new(1.0_f32, TokyoNight::BORDER);
 
     ctx.set_visuals(visuals);
 }
