@@ -159,7 +159,7 @@ impl ProjectManagerState {
     }
 
     /// Record a freshly-created release in both the live cache and the DB's
-    /// current_project snapshot. Called from the Release modal registrar.
+    /// current_project snapshot. Called from the Release modal registry.
     pub fn record_release(&mut self, project_id: &str, release: crate::release::Release) {
         self.project_releases
             .entry(project_id.to_string())

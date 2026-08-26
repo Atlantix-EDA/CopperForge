@@ -183,7 +183,7 @@ impl Tab {
 
 pub struct TabViewer<'a> {
     pub app: &'a mut CopperForgeApp,
-    pub registrar: &'a mut egui_citizen::Registrar,
+    pub registry: &'a mut egui_citizen::Registry,
 }
 
 impl<'a> egui_dock::TabViewer for TabViewer<'a> {
@@ -201,7 +201,7 @@ impl<'a> egui_dock::TabViewer for TabViewer<'a> {
     fn on_tab_button(&mut self, tab: &mut Self::Tab, response: &egui::Response) {
         if response.clicked() {
             let id = tab.kind.citizen_id();
-            self.registrar.activate(&id);
+            self.registry.activate(&id);
         }
     }
 

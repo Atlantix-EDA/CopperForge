@@ -164,7 +164,7 @@ pub fn show_projects_panel(
                                     ui.label(egui::RichText::new("Selected release").small().weak());
                                     if ui.button("📂 Open release folder").clicked() {
                                         // Intent carries the full "proj_X:rev:rev_01" id so the
-                                        // registrar can look up the release by tag.
+                                        // registry can look up the release by tag.
                                         set_project_intent(ui.ctx(), "open_release", &sel);
                                         ui.close();
                                     }
@@ -290,7 +290,7 @@ pub fn show_projects_panel(
                 }
                 "update" => {
                     // Open the project-edit modal (rendered in app.rs).
-                    // The registrar up in app.rs/update() picks this up via
+                    // The registry up in app.rs/update() picks this up via
                     // memory key "open_project_edit_modal".
                     manager_state.selected_project_id = Some(project_id.clone());
                     ui.ctx().memory_mut(|mem| {

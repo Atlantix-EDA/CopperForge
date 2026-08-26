@@ -58,7 +58,7 @@ pub struct CopperForgeApp {
     pub services: SharedServices,
 
     // ── Citizen infrastructure ────────────────────────────────
-    pub registrar: egui_citizen::Registrar,
+    pub registry: egui_citizen::Registry,
     pub app_messages: Vec<crate::messages::AppMessage>,
 
     // ── Dock state (eframe owns) ──────────────────────────────
@@ -448,21 +448,21 @@ impl CopperForgeApp {
         };
 
         // ── Stage 5: Register citizens ───────────────────────────
-        let mut registrar = egui_citizen::Registrar::new();
+        let mut registry = egui_citizen::Registry::new();
         use egui_citizen::message::CitizenId;
         for id in [
             "gerber_view", "gerber_view_3d", "view_settings", "drc",
             "settings", "bom",
             "terminal", "logger",
         ] {
-            registrar.register(CitizenId::new(id));
+            registry.add().with_name(id);
         }
         // Projects is a stored citizen — capture its registered CitizenState
         // (NOT ::default(), which severs the reactive link with the
-        // registrar) and hand it to the panel below.
-        let projects_citizen_state = registrar.register(CitizenId::new("projects"));
-        registrar.activate(&CitizenId::new("gerber_view"));
-        let _ = registrar.drain_messages();
+        // registry) and hand it to the panel below.
+        let projects_citizen_state = registry.add().with_name("projects");
+        registry.activate("gerber_view");
+        let _ = registry.drain_messages();
 
         // Restore the working layout, then let a saved default perspective
         // override it on startup (plugin tabs are re-added by `register_panel`,
@@ -481,7 +481,7 @@ impl CopperForgeApp {
 
         let mut app = Self {
             services,
-            registrar,
+            registry,
             app_messages: Vec::new(),
             dock_state,
             last_layout,
@@ -1018,15 +1018,15 @@ impl eframe::App for CopperForgeApp {
         // the 3D view (planned: `F` = flip, `R` = 90° in-plane, `M` = 3D
         // ruler) must not fire simultaneously on both. The active tab is
         // tracked by egui_citizen — on_tab_button calls
-        // `registrar.activate()`, which flips the one-hot active bit on
+        // `registry.activate()`, which flips the one-hot active bit on
         // the matching `CitizenState`. Here we read that bit to gate the
         // 2D handlers so hitting F while the 3D tab is active doesn't
         // silently flip the 2D gerber behind it. When 3D F/R/M handlers
         // land they gate on the inverse of the same check.
         let text_input_active = ctx.memory(|mem| mem.focused().is_some());
         let three_d_active = self
-            .registrar
-            .get(&egui_citizen::message::CitizenId::new("gerber_view_3d"))
+            .registry
+            .get("gerber_view_3d")
             .map(|s| s.active.get())
             .unwrap_or(false);
         let two_d_view_active = !three_d_active;
@@ -1339,11 +1339,11 @@ impl eframe::App for CopperForgeApp {
 
         // Main dock area below the ribbon
         let mut dock_state = self.dock_state.clone();
-        let mut registrar = std::mem::take(&mut self.registrar);
+        let mut registry = std::mem::take(&mut self.registry);
         {
             let mut tab_viewer = TabViewer {
                 app: self,
-                registrar: &mut registrar,
+                registry: &mut registry,
             };
             let mut style = Style::from_egui(ctx.style().as_ref());
             style.dock_area_padding = None;
@@ -1356,10 +1356,10 @@ impl eframe::App for CopperForgeApp {
                 .show_inside(ui, &mut tab_viewer);
         }
 
-        for msg in registrar.drain_messages() {
+        for msg in registry.drain_messages() {
             self.app_messages.push(crate::messages::AppMessage::Citizen(msg));
         }
-        self.registrar = registrar;
+        self.registry = registry;
         self.dock_state = dock_state;
 
         // Persist the perspective the moment panels are rearranged — compared
