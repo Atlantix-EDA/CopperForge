@@ -81,7 +81,8 @@ pub struct ReleaseOutcome {
 }
 
 /// Create a release on disk: `<project_dir>/outputs/<rev_tag>/` containing
-/// - `<project>_<rev>[_<DDMMMYYYY>].zip` (gerbers + drill [+ notes if opted in])
+/// - `<project>_<rev>[_<DDMMMYYYY_HHMMZ>].zip` (gerbers + drill [+ notes if
+///   opted in]); the stamp is UTC so same-day releases never collide
 /// - `RELEASE_NOTES.md` (always written next to the zip)
 ///
 /// Returns the `Release` metadata; the caller is responsible for appending
@@ -146,7 +147,10 @@ pub fn create_release(
 
     let now_utc = Utc::now();
     let now_local = Local::now();
-    let date_stamp = now_local.format("%d%b%Y").to_string();
+    // UTC in the artifact name: two releases the same day must not
+    // collide, and the stamp must not depend on the building machine's
+    // timezone. Local time stays in the human-facing notes.
+    let date_stamp = now_utc.format("%d%b%Y_%H%MZ").to_string();
 
     // 3. Zip filename.
     let zip_name = if req.include_date_in_name {
@@ -196,13 +200,21 @@ pub fn create_release(
         }
     }
 
-    let sch_path = sources.pcb_path.with_extension("kicad_sch");
+    let direct_sch = sources.pcb_path.with_extension("kicad_sch");
+    let sch_path = resolve_release_schematic(&sources.pcb_path);
     if !sch_path.exists() {
         logger.log_warning(&format!(
             "Schematic not found ({}) — BOM not bundled.",
             sch_path.display()
         ));
     } else {
+        if sch_path != direct_sch {
+            logger.log_info(&format!(
+                "No {} — BOM sourced from {} (sibling project schematic).",
+                direct_sch.display(),
+                sch_path.display()
+            ));
+        }
         match crate::bom::schematic::export_sch_bom(
             &sources.kicad_cli_method,
             &sch_path,
@@ -234,6 +246,16 @@ pub fn create_release(
                         fab_files.push(xlsx);
                     }
                     Err(e) => logger.log_warning(&format!("BOM XLSX skipped: {}", e)),
+                }
+                // Cover-less twin for assembly-house uploads: same sheet,
+                // no Cover page in front.
+                let simple = rev_dir.join(format!("{}-bom-simple.xlsx", project_stem));
+                match crate::export::bom::write_release_bom_simple_xlsx(&lines, &simple) {
+                    Ok(()) => {
+                        logger.log_info(&format!("BOM XLSX (simple): {}", simple.display()));
+                        fab_files.push(simple);
+                    }
+                    Err(e) => logger.log_warning(&format!("BOM simple XLSX skipped: {}", e)),
                 }
                 logger.log_info(&format!(
                     "BOM: {} line items (schematic-sourced)",
@@ -647,6 +669,38 @@ fn write_release_zip(
 }
 
 /// Open `dir` in the system file manager. Best-effort — failures are ignored.
+/// The schematic the release BOM is sourced from. Normally the PCB's own
+/// stem (`board.kicad_pcb` → `board.kicad_sch`); when the board was saved
+/// under a variant name (`board-band.kicad_pcb`) with no matching schematic,
+/// fall back to the schematic of a sibling `.kicad_pro` project in the same
+/// directory — but only when exactly one such project schematic exists, so a
+/// multi-project directory never silently picks the wrong one.
+fn resolve_release_schematic(pcb_path: &Path) -> PathBuf {
+    let direct = pcb_path.with_extension("kicad_sch");
+    if direct.exists() {
+        return direct;
+    }
+    let Some(dir) = pcb_path.parent() else {
+        return direct;
+    };
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(rd) = fs::read_dir(dir) {
+        for entry in rd.flatten() {
+            let pro = entry.path();
+            if pro.extension().is_some_and(|e| e == "kicad_pro") {
+                let sch = pro.with_extension("kicad_sch");
+                if sch.exists() && !candidates.contains(&sch) {
+                    candidates.push(sch);
+                }
+            }
+        }
+    }
+    match candidates.as_slice() {
+        [only] => only.clone(),
+        _ => direct, // none or ambiguous — caller warns with the direct path
+    }
+}
+
 fn open_directory(dir: &Path) {
     let opener = if cfg!(target_os = "windows") {
         "explorer"
@@ -747,4 +801,46 @@ pub fn extract_release_gerbers(archive_path: &Path) -> io::Result<PathBuf> {
     }
 
     Ok(target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn touch(p: &Path) {
+        fs::write(p, "").unwrap();
+    }
+
+    #[test]
+    fn release_schematic_falls_back_to_sibling_project() {
+        let dir = std::env::temp_dir().join(format!("cf_sch_resolve_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+
+        // Variant board with no matching schematic; one sibling project.
+        let pcb = dir.join("board-band.kicad_pcb");
+        touch(&pcb);
+        touch(&dir.join("board.kicad_pro"));
+        touch(&dir.join("board.kicad_sch"));
+        // A project without a schematic must not count as a candidate.
+        touch(&dir.join("preview.kicad_pro"));
+        assert_eq!(resolve_release_schematic(&pcb), dir.join("board.kicad_sch"));
+
+        // A schematic matching the PCB stem always wins.
+        touch(&dir.join("board-band.kicad_sch"));
+        assert_eq!(
+            resolve_release_schematic(&pcb),
+            dir.join("board-band.kicad_sch")
+        );
+
+        // Two sibling project schematics → ambiguous → direct path (missing).
+        fs::remove_file(dir.join("board-band.kicad_sch")).unwrap();
+        touch(&dir.join("other.kicad_pro"));
+        touch(&dir.join("other.kicad_sch"));
+        assert_eq!(
+            resolve_release_schematic(&pcb),
+            dir.join("board-band.kicad_sch")
+        );
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
 }

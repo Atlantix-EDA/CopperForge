@@ -27,6 +27,7 @@ gerber_types = { workspace = true }
 gerber_parser = { workspace = true }
 lyon = { workspace = true }
 nalgebra = { workspace = true }
+i_overlay = { workspace = true }
 
 # 3D renderer
 glow = { workspace = true }
@@ -41,6 +42,10 @@ egui_citizen = { workspace = true }
 
 # KiCad file parsing (BOM extraction)
 kiparse = { workspace = true }
+
+# Backend services (autodim, manuf) — called in-process. Pure compute, no
+# server; the optional `serve` feature is NOT enabled here.
+services = { path = "../services" }
 
 # Logging and configuration
 env_logger = { workspace = true }
@@ -95,6 +100,12 @@ reqwest = { workspace = true, features = ["rustls-tls"] }
 # Async runtime for native callers of reqwest. Wasm uses the browser's
 # event loop via wasm-bindgen-futures.
 tokio = { workspace = true }
+# STEP → triangle-mesh pipeline for component bodies in the 3D board view
+# (prototype). Sibling clone under atlantix/EDA/; see the [patch.crates-io]
+# block in the workspace root for its vendored truck pins. Native-only for
+# now — the kernel builds on wasm32 but would bloat the web bundle.
+solidcraft-kernel = { path = "../../../solidcraft/crates/kernel" }
+solidcraft-geom = { path = "../../../solidcraft/crates/geom" }
 
 # WASM-only deps for the browser build (Phase A of develop/wasm-demo-plan.md).
 # `getrandom` with the `js` feature forces transitive uses (egui, etc.) to

@@ -99,7 +99,7 @@ fn show_release_modal(
                     ui.end_row();
 
                     ui.label("Include date in filename:");
-                    ui.checkbox(&mut modal.include_date_in_name, "e.g. _18Apr2026");
+                    ui.checkbox(&mut modal.include_date_in_name, "e.g. _18Apr2026_1430Z (UTC)");
                     ui.end_row();
 
                     ui.label("Include RELEASE_NOTES.md in zip:");

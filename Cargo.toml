@@ -6,6 +6,7 @@ resolver = "2"
 members = [
     "crates/copperforge-core",
     "crates/copperforge-web",
+    "crates/services",
 ]
 
 [package]
@@ -32,14 +33,38 @@ clap.workspace = true
 chrono.workspace = true
 dirs.workspace = true
 egui_mobius_reactive.workspace = true
+# Decodes the embedded window-icon PNG at startup. Same pinned workspace
+# version/features the rest of the tree already compiles — no new crates.
+image.workspace = true
 
 # The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"
 lto = "thin"
 
+# solidcraft-kernel (sibling clone, STEP import prototype) pins locally
+# patched truck crates in its own workspace; patches only apply from the
+# top-level workspace, so the same pins are replicated here. Only the STEP
+# path pulls truck — nothing else in the tree resolves these.
+[patch.crates-io]
+truck-shapeops = { path = "../solidcraft/vendor/truck-shapeops" }
+truck-stepio = { path = "../solidcraft/vendor/truck-stepio" }
+truck-meshalgo = { path = "../solidcraft/vendor/truck-meshalgo" }
+matext4cgmath = { path = "../solidcraft/vendor/matext4cgmath" }
+
 [workspace.package]
-version = "0.7.0"
+# Version ledger — bump on every iteration (MAJOR.feature.fix).
+# 0.8.0 release zips stamped with UTC time (<proj>_<rev>_DDMonYYYY_HHMMZ.zip);
+#       same-day releases no longer collide. Dialog label updated to match.
+# 0.8.1 3D gerber view recolored to match JLCPCB viewer: cooler saturated
+#       mask/FR-4 greens, MASK_ALPHA 0.72→0.85 (kills gold bleed-through)
+# 0.8.2 bottom-side mask/copper/silk now identical to top (debug tint removed)
+# 0.9.0 solid-board 3D: opaque edge walls, inner copper no longer drawn (option
+#       B — true boolean edge sections would need CSG); grazing-angle bleed
+#       fixed by dropping polygon-offset slope factors (units-only bias)
+# 0.9.1 JLC-style axes: full-span heavy lines through the board body (origin-
+#       centered), occluded by the solid slab; labels track the new tips
+version = "0.9.1"
 edition = "2024"
 authors = ["James Bonanno <atlantix-eda@proton.me>"]
 repository = "https://github.com/Atlantix-EDA/CopperForge"
@@ -73,21 +98,26 @@ gerber_types = { package = "gerber-types", version = "0.7.0" }
 gerber_parser = "0.4.0"
 lyon = "1"
 nalgebra = "0.34"
+# 2D polygon booleans (exposed copper = mask openings ∩ copper). Pure Rust,
+# wasm32-clean. lyon only tessellates — it cannot clip.
+i_overlay = { version = "9.1", default-features = false }
 
 # 3D renderer (Phase 1: glow-based axes gizmo; see develop/task3d-plan.md)
 glow = "0.17"
 egui_glow = { version = "0.34", default-features = false }
 bytemuck = "1.23"
 
-# Egui Mobius framework — fetched from the egui_mobius monorepo so a plain
-# `cargo run` pulls it. For local co-development, override with a path via
-# a (gitignored) .cargo/config.toml `paths` entry — see .cargo/config.toml.example.
-egui_mobius_reactive = { git = "https://github.com/saturn77/egui_mobius", tag = "v0.4.0" }
+# Egui Mobius framework — published on crates.io. Must resolve from the SAME
+# source as egui_citizen below (both 0.6.0), or the graph carries two copies
+# of egui_mobius_reactive and reactive types stop unifying across the citizen
+# boundary. Using the registry means a bare clone builds with no sibling
+# egui_mobius checkout.
+egui_mobius_reactive = "0.6.0"
 
-# Citizen panel lifecycle (lives in the same egui_mobius monorepo). egui_mobius
-# v0.4.0 and gerber_viewer 0.6.1 both target egui 0.34, so the whole tree unifies
-# on 0.34 — the prior conflict that deferred citizen/lens integration is resolved.
-egui_citizen = { path = "../../Egui/egui_mobius/crates/egui_citizen" }
+# Citizen panel lifecycle (from the egui_mobius monorepo, published on
+# crates.io at 0.6.0). Targets egui 0.34 like gerber_viewer 0.6.1, so the
+# whole tree unifies on 0.34.
+egui_citizen = "0.6.0"
 
 # KiCad file parsing (BOM extraction from .kicad_pcb)
 kiparse = { git = "https://github.com/Atlantix-EDA/atlantix-eda.git", package = "kiparse" }
