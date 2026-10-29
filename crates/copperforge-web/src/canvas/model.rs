@@ -320,7 +320,10 @@ impl GerberScene {
                 kind,
                 color,
                 visible: kind.default_visible(),
-                gerber: GerberLayer::new(doc.into_commands()),
+                gerber: GerberLayer::new(copperforge_core::gerber_geom::commands_in_mm(
+                    doc.units,
+                    doc.into_commands(),
+                )),
             });
         }
         // Render-order is z_order ascending (top layers last so they

@@ -111,6 +111,13 @@ impl Board3dGeom {
                 None
             };
             if let Some(mut d) = found {
+                // Non-plated (mounting) holes only exist in the filename —
+                // drives the 3D barrel material (copper vs bare FR-4).
+                if l.contains("npth") {
+                    for h in &mut d.holes {
+                        h.plated = false;
+                    }
+                }
                 holes.holes.append(&mut d.holes);
             }
         }

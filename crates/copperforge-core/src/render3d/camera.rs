@@ -29,7 +29,17 @@ impl Camera {
     /// `zoom` — orbit pivots on `target`, not on the world origin.
     pub fn mvp(&self, viewport: egui::Rect) -> Matrix4<f32> {
         let aspect = (viewport.width() / viewport.height().max(1.0)).max(0.01);
-        let proj = Perspective3::new(aspect, 60f32.to_radians(), 0.1, 10_000.0);
+        // Near/far track the orbit distance instead of a fixed 0.1/10 000.
+        // Perspective depth precision at distance d is ~d²/(near·2²⁴) — with
+        // near pinned at 0.1 that's ~6 µm at a 100 mm orbit, coarser than the
+        // 2–35 µm gaps between the board's layer sheets, so the stack
+        // z-fights at normal zoom. Scaling near with zoom (geometry is never
+        // closer than ~zoom minus the board radius) keeps precision ~2 µm or
+        // finer across the whole 0.3–500 zoom range; far stays generous for
+        // the ground grid.
+        let near = (self.zoom * 0.02).clamp(0.05, 10.0);
+        let far = (self.zoom * 20.0).max(2_000.0);
+        let proj = Perspective3::new(aspect, 60f32.to_radians(), near, far);
         let view = Translation3::new(0.0, 0.0, -self.zoom).to_homogeneous()
             * self.rotation.to_homogeneous()
             * Translation3::from(-self.target).to_homogeneous();

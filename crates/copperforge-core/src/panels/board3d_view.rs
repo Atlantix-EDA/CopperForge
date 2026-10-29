@@ -12,24 +12,23 @@ use glow::HasContext as _;
 
 use crate::gerber_geom::{CopperData, DrillData, MaskData, OutlineData};
 use crate::render3d::{
-    axes::axes_vertices, grid::grid_vertices, project, unproject_to_z0, Camera, ColoredMesh,
+    grid::grid_vertices, project, unproject_to_z0, Camera, ColoredMesh,
     UnlitProgram,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use crate::step_model::{load_step_component, StepComponentMesh};
 use nalgebra::Vector3;
 
 /// FR-4 green for the flat board mesh. Matches the conventional soldermask
 /// tone so a board rendered without mask+copper still reads as a PCB.
-const FR4_COLOR: [f32; 3] = [0.18, 0.42, 0.22];
+const FR4_COLOR: [f32; 3] = [0.10, 0.34, 0.19];
 /// ENIG gold (#D8AD4F) for F.Cu. Matches what a HASL/ENIG finished board
 /// reads as under a green mask.
 const COPPER_COLOR_TOP: [f32; 3] = [0.85, 0.68, 0.31];
-/// Slightly-redder copper for B.Cu — same family, but distinct enough to
-/// call out "this is the bottom" at a glance when both happen to be in
-/// view (orbit halfway, edge-on, depth-test sanity check). Until Phase 4b
-/// thickens layers with side walls, this is also our primary visual
-/// confirmation that the depth test is correctly hiding B.Cu behind the
-/// FR-4 from a top view and hiding F.Cu from a bottom view.
-const COPPER_COLOR_BOTTOM: [f32; 3] = [0.72, 0.45, 0.20];
+/// B.Cu matches F.Cu — a fabbed board's two sides are the same finish,
+/// and the side-distinct debug tint read as "wrong color" next to the
+/// JLCPCB viewer (2026-10-29). Orientation cues come from geometry/silk.
+const COPPER_COLOR_BOTTOM: [f32; 3] = [0.85, 0.68, 0.31];
 /// Inner copper planes read as copper too, a touch dimmer than F.Cu so the
 /// buried layers don't visually compete with the outer ones when seen
 /// through the translucent board edge.
@@ -40,9 +39,11 @@ const INNER_COPPER_COLOR: [f32; 3] = [0.78, 0.60, 0.28];
 const BOARD_Z_TOP: f32 = 0.0;
 const BOARD_THICKNESS: f32 = 1.55;
 const BOARD_Z_BOTTOM: f32 = BOARD_Z_TOP - BOARD_THICKNESS;
-/// Caps stay opaque; the side walls render translucent so buried inner
-/// copper reads through the board edge.
-const BOARD_WALL_ALPHA: f32 = 0.45;
+/// The board is a solid: caps AND side walls opaque, so buried copper can
+/// never bleed through a face (the translucent-wall x-ray look read as a
+/// rendering bug next to real-board viewers, 2026-10-29). True edge
+/// cross-sections of inner copper would need CSG against the slab —
+/// out of scope for this decal renderer.
 
 /// Real film thicknesses so layers stack flush on the slab faces instead of
 /// floating: 1 oz Cu ≈ 35 µm, LPI mask ≈ 20 µm, silk ink ≈ 15 µm. Each
@@ -58,43 +59,40 @@ const COPPER_Z_BOTTOM: f32 = BOARD_Z_BOTTOM - COPPER_THICKNESS;
 /// than the bare-FR-4 colour so the mask reads as a distinct layer when
 /// both happen to be visible at the same pixel (viewport alignment, edge
 /// pixels).
-const MASK_COLOR_TOP: [f32; 3] = [0.11, 0.38, 0.18];
-const MASK_COLOR_BOTTOM: [f32; 3] = [0.09, 0.32, 0.15];
+const MASK_COLOR_TOP: [f32; 3] = [0.06, 0.38, 0.21];
+const MASK_COLOR_BOTTOM: [f32; 3] = [0.06, 0.38, 0.21];
 /// Mask outer face = copper outer face + mask film (conforms over copper).
 const MASK_Z_TOP: f32 = COPPER_Z_TOP + MASK_THICKNESS;
 const MASK_Z_BOTTOM: f32 = COPPER_Z_BOTTOM - MASK_THICKNESS;
-/// Mask blend alpha. 0.55 lets copper traces read through as a darker
-/// green tint — matches KiCad's built-in 3D viewer at default settings.
-const MASK_ALPHA: f32 = 0.55;
+/// Mask blend alpha. At 0.55 the copper's yellow bled through and turned
+/// every under-mask region olive ("canned spinach"); 0.72 still read
+/// yellow/washed side-by-side with JLCPCB's viewer (2026-10-29, Interface
+/// rev_03b gerbers). 0.85 + the cooler mask/FR-4 greens above match JLC's
+/// deep saturated tone; under-mask traces stay visible as a ~15% lighter
+/// green.
+const MASK_ALPHA: f32 = 0.85;
 
 /// Off-white silkscreen legend. Top reads a hair brighter than bottom so the
 /// two are distinguishable when both are edge-on in the same view.
 const SILK_COLOR_TOP: [f32; 3] = [0.92, 0.92, 0.89];
-const SILK_COLOR_BOTTOM: [f32; 3] = [0.88, 0.88, 0.85];
+const SILK_COLOR_BOTTOM: [f32; 3] = [0.92, 0.92, 0.89];
 /// Silk ink printed on top of the mask: mask outer face + ink thickness.
 const SILK_Z_TOP: f32 = MASK_Z_TOP + SILK_THICKNESS;
 const SILK_Z_BOTTOM: f32 = MASK_Z_BOTTOM - SILK_THICKNESS;
 
-/// Exposed copper (mask openings / pads) sits a hair above the mask sheet so
-/// each pad reads as solid exposed copper regardless of how its opening
-/// overlaps neighbours. Below `HOLE_Z` so the dark bore caps punch through.
+/// Exposed copper (mask openings ∩ copper, bores punched) sits a hair above
+/// the mask sheet so each pad reads as solid exposed copper regardless of
+/// how its opening overlaps neighbours.
 const EXPOSED_Z_TOP: f32 = MASK_Z_TOP + 0.002;
 const EXPOSED_Z_BOTTOM: f32 = MASK_Z_BOTTOM - 0.002;
 
 const GRID_COLOR: [f32; 3] = [0.28, 0.30, 0.35];
 
-/// Dark hole colour — a drilled hole / barrel reads as near-black against
-/// both copper and soldermask.
-const HOLE_COLOR: [f32; 3] = [0.06, 0.06, 0.07];
-/// Hole-disk Z: a hair above the top mask / below the bottom mask, so the
-/// dark disk sits on top of copper+mask on each face and reads as a hole
-/// punched through the pad from whichever side faces the camera.
-const HOLE_Z_TOP: f32 = MASK_Z_TOP + 0.006;
-const HOLE_Z_BOTTOM: f32 = MASK_Z_BOTTOM - 0.006;
-/// Triangle-fan segment count for a hole disk. Holes are small on screen, so
-/// 16 segments is plenty smooth without ballooning the vertex count on
-/// hole-dense boards.
-const HOLE_SEGMENTS: usize = 16;
+/// Via/pin barrel wall — plated copper, dimmer than the pad gold so the
+/// bore mouth reads as depth rather than as more pad.
+const BARREL_COLOR_PLATED: [f32; 3] = [0.62, 0.45, 0.22];
+/// Non-plated bore wall (mounting holes) — bare drilled FR-4.
+const BARREL_COLOR_NPTH: [f32; 3] = [0.38, 0.34, 0.25];
 
 const MM_PER_MIL: f32 = 0.0254;
 
@@ -184,6 +182,19 @@ pub struct Board3dView {
     measure_start: Option<Vector3<f32>>,
     measure_end: Option<Vector3<f32>>,
     measure_dragging: bool,
+    /// STEP model loading (native prototype): file picker, meshes staged
+    /// between the ribbon (no gl) and the canvas (uploads them), loaded-model
+    /// labels for the ribbon, and the last load error for the ⚠ tooltip.
+    #[cfg(not(target_arch = "wasm32"))]
+    step_dialog: egui_file_dialog::FileDialog,
+    #[cfg(not(target_arch = "wasm32"))]
+    pending_step_meshes: Vec<StepComponentMesh>,
+    #[cfg(not(target_arch = "wasm32"))]
+    loaded_step_models: Vec<(String, usize)>,
+    #[cfg(not(target_arch = "wasm32"))]
+    step_error: Option<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    clear_step_models: bool,
 }
 
 struct GpuResources {
@@ -218,11 +229,16 @@ struct GpuResources {
     top_silk_ready: bool,
     bottom_silk: ColoredMesh,
     bottom_silk_ready: bool,
-    /// Dark hole disks, one mesh per side (same circles, different Z) so the
-    /// holes read from both the top and bottom views.
-    top_holes: ColoredMesh,
-    bottom_holes: ColoredMesh,
-    holes_ready: bool,
+    /// Via / hole barrels: one cylinder wall per drilled hole, spanning the
+    /// copper stack. Replaces the old flat dark disks — the hole mouths are
+    /// now really punched out of the caps/copper/exposed sheets, and the
+    /// barrel is what you see in (and through) the bore.
+    barrels: ColoredMesh,
+    barrels_ready: bool,
+    /// User-loaded STEP component bodies (lambert-baked triangle soup).
+    /// Always present in the struct so the paint callback stays cfg-free;
+    /// only the native build ever pushes into it.
+    components: Vec<ColoredMesh>,
 }
 
 impl Board3dView {
@@ -253,6 +269,16 @@ impl Board3dView {
             measure_start: None,
             measure_end: None,
             measure_dragging: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            step_dialog: egui_file_dialog::FileDialog::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            pending_step_meshes: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            loaded_step_models: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            step_error: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            clear_step_models: false,
         }
     }
 
@@ -418,6 +444,87 @@ impl Board3dView {
                     format_dim(h, units_mils),
                 ));
             }
+
+            // ── STEP component models (native prototype) ───────────
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                ui.add_space(12.0);
+                if ui
+                    .button("+ STEP…")
+                    .on_hover_text(
+                        "Load a STEP component model onto the board (prototype: \
+                         placed at board centre, resting on the top face).",
+                    )
+                    .clicked()
+                {
+                    self.step_dialog.pick_file();
+                }
+                if !self.loaded_step_models.is_empty() {
+                    let total: usize = self.loaded_step_models.iter().map(|(_, t)| t).sum();
+                    let label = format!(
+                        "{} model{} ({total} tris)",
+                        self.loaded_step_models.len(),
+                        if self.loaded_step_models.len() == 1 { "" } else { "s" },
+                    );
+                    ui.label(label).on_hover_ui(|ui| {
+                        for (name, tris) in &self.loaded_step_models {
+                            ui.label(format!("{name} — {tris} tris"));
+                        }
+                    });
+                    if ui.button("Clear").on_hover_text("Remove all loaded STEP models").clicked() {
+                        self.clear_step_models = true;
+                    }
+                }
+                if let Some(err) = self.step_error.clone() {
+                    if ui
+                        .colored_label(egui::Color32::YELLOW, "⚠")
+                        .on_hover_text(&err)
+                        .clicked()
+                    {
+                        self.step_error = None;
+                    }
+                }
+
+                if let Some(path) = self.step_dialog.update(ui.ctx()).picked() {
+                    let path = path.to_path_buf();
+                    let name = path
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "model".into());
+                    match std::fs::read_to_string(&path) {
+                        Ok(text) => match load_step_component(&text, &name) {
+                            Ok(mut mesh) => {
+                                // Predictable prototype placement: bbox XY
+                                // centre → board centre (the board mesh frame
+                                // is origin-centred), bottom face → board
+                                // top. Component STEPs carry arbitrary
+                                // authoring origins, so honouring them here
+                                // would scatter parts off-board.
+                                let cx = (mesh.bbox_min[0] + mesh.bbox_max[0]) * 0.5;
+                                let cy = (mesh.bbox_min[1] + mesh.bbox_max[1]) * 0.5;
+                                let dz = BOARD_Z_TOP - mesh.bbox_min[2];
+                                for v in mesh.verts.chunks_exact_mut(6) {
+                                    v[0] -= cx;
+                                    v[1] -= cy;
+                                    v[2] += dz;
+                                }
+                                self.step_error = if mesh.warnings.is_empty() {
+                                    None
+                                } else {
+                                    Some(format!(
+                                        "{name}: {} reader warning(s):\n{}",
+                                        mesh.warnings.len(),
+                                        mesh.warnings.join("\n"),
+                                    ))
+                                };
+                                self.pending_step_meshes.push(mesh);
+                            }
+                            Err(e) => self.step_error = Some(format!("{name}: {e}")),
+                        },
+                        Err(e) => self.step_error = Some(format!("{}: {e}", path.display())),
+                    }
+                }
+            }
         });
     }
 
@@ -556,7 +663,7 @@ impl Board3dView {
                     let unlit = UnlitProgram::new(gl);
 
                     let mut axes = ColoredMesh::new(gl, glow::LINES);
-                    axes.upload(gl, &axes_vertices(3.0, 0.001));
+                    axes.upload(gl, &board_axes_vertices(3.0));
 
                     let mut grid = ColoredMesh::new(gl, glow::LINES);
                     grid.upload(gl, &grid_vertices(5.0, 1.0, GRID_COLOR));
@@ -571,8 +678,7 @@ impl Board3dView {
                     let bottom_exposed = ColoredMesh::new(gl, glow::TRIANGLES);
                     let top_silk = ColoredMesh::new(gl, glow::TRIANGLES);
                     let bottom_silk = ColoredMesh::new(gl, glow::TRIANGLES);
-                    let top_holes = ColoredMesh::new(gl, glow::TRIANGLES);
-                    let bottom_holes = ColoredMesh::new(gl, glow::TRIANGLES);
+                    let barrels = ColoredMesh::new(gl, glow::TRIANGLES);
 
                     GpuResources {
                         unlit,
@@ -598,9 +704,9 @@ impl Board3dView {
                         top_silk_ready: false,
                         bottom_silk,
                         bottom_silk_ready: false,
-                        top_holes,
-                        bottom_holes,
-                        holes_ready: false,
+                        barrels,
+                        barrels_ready: false,
+                        components: Vec::new(),
                     }
                 };
                 Arc::new(Mutex::new(resources))
@@ -612,45 +718,82 @@ impl Board3dView {
         // board don't linger. Cleared once all layers are processed.
         let force = self.dirty;
 
+        // Drill holes are punched out of the caps / copper / exposed sheets,
+        // so all of those rebuild when the drill layer appears/disappears.
+        // Captured early — the barrels block below overwrites the flag.
+        let drill_changed = drill.is_some() != self.last_had_drill;
+        let drill_holes: &[crate::gerber_geom::Hole] =
+            drill.map(|d| d.holes.as_slice()).unwrap_or(&[]);
+
+        // Exposed copper = (mask ∩ copper) − holes, so it rebuilds when ANY
+        // input appears/disappears. Capture the transitions here — the
+        // copper and mask blocks below overwrite the `last_had_*` flags as
+        // they run.
+        let exposed_top_changed = top_mask.is_some() != self.last_had_top_mask
+            || top_copper.is_some() != self.last_had_top_copper
+            || drill_changed;
+        let exposed_bottom_changed = bottom_mask.is_some() != self.last_had_bottom_mask
+            || bottom_copper.is_some() != self.last_had_bottom_copper
+            || drill_changed;
+
         // ── Board mesh (absent ↔ present transition, or forced) ────
+        // Caps re-upload when the drill changes too (holes are punched out
+        // of them); camera fit / axes / grid only react to the outline
+        // itself, so assigning a drill file later doesn't yank the view.
         let has_outline = board_outline.is_some();
-        if force || has_outline != self.last_had_outline {
+        if force || has_outline != self.last_had_outline || drill_changed {
             if let (Some(outline), Ok(mut g)) = (board_outline, gpu.lock()) {
-                let w = (outline.bbox.max.x - outline.bbox.min.x) as f32;
-                let h = (outline.bbox.max.y - outline.bbox.min.y) as f32;
-                let caps = build_board_cap_vertices(outline, FR4_COLOR, BOARD_Z_TOP, BOARD_Z_BOTTOM);
+                let caps = build_board_cap_vertices(
+                    outline,
+                    drill_holes,
+                    FR4_COLOR,
+                    BOARD_Z_TOP,
+                    BOARD_Z_BOTTOM,
+                );
                 let walls = build_board_wall_vertices(outline, FR4_COLOR, BOARD_Z_TOP, BOARD_Z_BOTTOM);
                 unsafe {
                     g.board.upload(gl, &caps);
                     g.board_walls.upload(gl, &walls);
                 }
                 g.board_ready = true;
-                self.last_board_dim = Some((w, h));
-                self.camera.fit_to_bbox(w, h);
-                // Scale the axes gizmo to ~15 % of the board's largest
-                // dimension so it reads as a meaningful reference instead
-                // of a microscopic stub or a board-swamping monster.
-                self.axes_len = (w.max(h) * 0.15).max(3.0);
-                unsafe {
-                    g.axes.upload(gl, &axes_vertices(self.axes_len, 0.001));
-                }
             } else if let Ok(mut g) = gpu.lock() {
                 g.board_ready = false;
+            }
+        }
+        if force || has_outline != self.last_had_outline {
+            if let Some(outline) = board_outline {
+                let w = (outline.bbox.max.x - outline.bbox.min.x) as f32;
+                let h = (outline.bbox.max.y - outline.bbox.min.y) as f32;
+                self.last_board_dim = Some((w, h));
+                self.camera.fit_to_bbox(w, h);
+                // JLC-viewer style: the axes run THROUGH the board (meshes
+                // are origin-centered), extending symmetrically past the
+                // edges. axes_len is the half-span per direction.
+                self.axes_len = (w.max(h) * 0.75).max(3.0);
+            } else {
                 self.last_board_dim = None;
                 self.axes_len = 3.0;
+            }
+            if let Ok(mut g) = gpu.lock() {
                 unsafe {
-                    g.axes.upload(gl, &axes_vertices(self.axes_len, 0.001));
+                    g.axes.upload(gl, &board_axes_vertices(self.axes_len));
                 }
             }
             self.last_had_outline = has_outline;
             self.last_uploaded_grid_step_mm = None;
         }
 
-        // ── Copper meshes (F.Cu / B.Cu) ───────────────────────────
+        // ── Copper meshes (F.Cu / B.Cu), holes punched out ────────
         let has_top_copper = top_copper.is_some();
-        if force || has_top_copper != self.last_had_top_copper {
+        if force || has_top_copper != self.last_had_top_copper || drill_changed {
             if let (Some(cu), Ok(mut g)) = (top_copper, gpu.lock()) {
-                let verts = build_copper_vertices(cu, COPPER_COLOR_TOP, COPPER_Z_TOP);
+                let verts = build_punched_copper_vertices(
+                    cu,
+                    drill_holes,
+                    board_outline,
+                    COPPER_COLOR_TOP,
+                    COPPER_Z_TOP,
+                );
                 unsafe {
                     g.top_copper.upload(gl, &verts);
                 }
@@ -661,9 +804,15 @@ impl Board3dView {
             self.last_had_top_copper = has_top_copper;
         }
         let has_bottom_copper = bottom_copper.is_some();
-        if force || has_bottom_copper != self.last_had_bottom_copper {
+        if force || has_bottom_copper != self.last_had_bottom_copper || drill_changed {
             if let (Some(cu), Ok(mut g)) = (bottom_copper, gpu.lock()) {
-                let verts = build_copper_vertices(cu, COPPER_COLOR_BOTTOM, COPPER_Z_BOTTOM);
+                let verts = build_punched_copper_vertices(
+                    cu,
+                    drill_holes,
+                    board_outline,
+                    COPPER_COLOR_BOTTOM,
+                    COPPER_Z_BOTTOM,
+                );
                 unsafe {
                     g.bottom_copper.upload(gl, &verts);
                 }
@@ -675,7 +824,7 @@ impl Board3dView {
         }
 
         // ── Inner copper layers (rebuild when the count changes) ───
-        if force || inner_copper.len() != self.last_inner_copper_count {
+        if force || inner_copper.len() != self.last_inner_copper_count || drill_changed {
             if let Ok(mut g) = gpu.lock() {
                 g.inner_copper.clear();
                 // Stack height from the deepest inner index: B.Cu is
@@ -688,7 +837,13 @@ impl Board3dView {
                     .unwrap_or(2);
                 for (n, cu) in inner_copper {
                     let z = inner_layer_z(*n, copper_count);
-                    let verts = build_copper_vertices(cu, INNER_COPPER_COLOR, z);
+                    let verts = build_punched_copper_vertices(
+                        cu,
+                        drill_holes,
+                        board_outline,
+                        INNER_COPPER_COLOR,
+                        z,
+                    );
                     let mut mesh = unsafe { ColoredMesh::new(gl, glow::TRIANGLES) };
                     unsafe {
                         mesh.upload(gl, &verts);
@@ -704,17 +859,12 @@ impl Board3dView {
         if force || has_top_mask != self.last_had_top_mask {
             if let (Some(m), Ok(mut g)) = (top_mask, gpu.lock()) {
                 let verts = build_mask_vertices(m, MASK_COLOR_TOP, MASK_Z_TOP);
-                // Exposed copper pads are derived from the same mask's openings.
-                let exposed = build_exposed_copper_vertices(m, COPPER_COLOR_TOP, EXPOSED_Z_TOP);
                 unsafe {
                     g.top_mask.upload(gl, &verts);
-                    g.top_exposed.upload(gl, &exposed);
                 }
                 g.top_mask_ready = true;
-                g.top_exposed_ready = !exposed.is_empty();
             } else if let Ok(mut g) = gpu.lock() {
                 g.top_mask_ready = false;
-                g.top_exposed_ready = false;
             }
             self.last_had_top_mask = has_top_mask;
         }
@@ -722,18 +872,61 @@ impl Board3dView {
         if force || has_bottom_mask != self.last_had_bottom_mask {
             if let (Some(m), Ok(mut g)) = (bottom_mask, gpu.lock()) {
                 let verts = build_mask_vertices(m, MASK_COLOR_BOTTOM, MASK_Z_BOTTOM);
-                let exposed = build_exposed_copper_vertices(m, COPPER_COLOR_BOTTOM, EXPOSED_Z_BOTTOM);
                 unsafe {
                     g.bottom_mask.upload(gl, &verts);
-                    g.bottom_exposed.upload(gl, &exposed);
                 }
                 g.bottom_mask_ready = true;
-                g.bottom_exposed_ready = !exposed.is_empty();
             } else if let Ok(mut g) = gpu.lock() {
                 g.bottom_mask_ready = false;
-                g.bottom_exposed_ready = false;
             }
             self.last_had_bottom_mask = has_bottom_mask;
+        }
+
+        // ── Exposed copper ((mask openings ∩ copper) − holes) ─────
+        // A real boolean, not the openings verbatim: copper colour appears
+        // exactly where an opening overlaps metal, minus the drilled bores.
+        // Openings over bare laminate (guard-band reliefs, NPTH windows,
+        // mask expansion) stay laminate. Needs the outline for the shared
+        // world frame.
+        if force || exposed_top_changed {
+            if let (Some(m), Some(cu), Some(outline), Ok(mut g)) =
+                (top_mask, top_copper, board_outline, gpu.lock())
+            {
+                let exposed = build_exposed_copper_vertices(
+                    m,
+                    cu,
+                    drill_holes,
+                    outline,
+                    COPPER_COLOR_TOP,
+                    EXPOSED_Z_TOP,
+                );
+                unsafe {
+                    g.top_exposed.upload(gl, &exposed);
+                }
+                g.top_exposed_ready = !exposed.is_empty();
+            } else if let Ok(mut g) = gpu.lock() {
+                g.top_exposed_ready = false;
+            }
+        }
+        if force || exposed_bottom_changed {
+            if let (Some(m), Some(cu), Some(outline), Ok(mut g)) =
+                (bottom_mask, bottom_copper, board_outline, gpu.lock())
+            {
+                let exposed = build_exposed_copper_vertices(
+                    m,
+                    cu,
+                    drill_holes,
+                    outline,
+                    COPPER_COLOR_BOTTOM,
+                    EXPOSED_Z_BOTTOM,
+                );
+                unsafe {
+                    g.bottom_exposed.upload(gl, &exposed);
+                }
+                g.bottom_exposed_ready = !exposed.is_empty();
+            } else if let Ok(mut g) = gpu.lock() {
+                g.bottom_exposed_ready = false;
+            }
         }
 
         // ── Silkscreen meshes (F.SilkS / B.SilkS) ─────────────────
@@ -764,19 +957,22 @@ impl Board3dView {
             self.last_had_bottom_silk = has_bottom_silk;
         }
 
-        // ── Drill holes (top + bottom dark disks) ──────────────────
+        // ── Via / hole barrels ──────────────────────────────────────
+        // One cylinder wall per hole spanning the copper stack. The sheets
+        // above have the hole mouths genuinely punched out, so the barrel IS
+        // the hole's appearance: plated copper for PTH, bare FR-4 for NPTH,
+        // with an azimuthal light bake so the wall reads as curved depth
+        // rather than a flat ring.
         let has_drill = drill.is_some();
-        if force || has_drill != self.last_had_drill {
+        if force || drill_changed {
             if let (Some(d), Ok(mut g)) = (drill, gpu.lock()) {
-                let top = build_holes_vertices(d, HOLE_COLOR, HOLE_Z_TOP);
-                let bottom = build_holes_vertices(d, HOLE_COLOR, HOLE_Z_BOTTOM);
+                let verts = build_barrel_vertices(d);
                 unsafe {
-                    g.top_holes.upload(gl, &top);
-                    g.bottom_holes.upload(gl, &bottom);
+                    g.barrels.upload(gl, &verts);
                 }
-                g.holes_ready = true;
+                g.barrels_ready = true;
             } else if let Ok(mut g) = gpu.lock() {
-                g.holes_ready = false;
+                g.barrels_ready = false;
             }
             self.last_had_drill = has_drill;
         }
@@ -846,6 +1042,42 @@ impl Board3dView {
             self.zoom_box_current = None;
         }
 
+        // ── STEP component meshes (native prototype) ──────────────
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.clear_step_models {
+                if let Ok(mut g) = gpu.lock() {
+                    // NOTE: ColoredMesh has no Drop — the GL buffers leak on
+                    // clear. Acceptable for the prototype; a Drop impl (or
+                    // explicit delete) comes with the wgpu port.
+                    g.components.clear();
+                }
+                self.loaded_step_models.clear();
+                self.clear_step_models = false;
+            }
+            if !self.pending_step_meshes.is_empty() {
+                if let Ok(mut g) = gpu.lock() {
+                    for staged in self.pending_step_meshes.drain(..) {
+                        let mut mesh = unsafe { ColoredMesh::new(gl, glow::TRIANGLES) };
+                        unsafe {
+                            mesh.upload(gl, &staged.verts);
+                        }
+                        g.components.push(mesh);
+                        self.loaded_step_models
+                            .push((staged.name.clone(), staged.triangle_count()));
+                    }
+                }
+            }
+        }
+
+        // Which side of the board plane the eye is on — drives back-to-front
+        // ordering of the translucent pass (masks + board edge walls). The
+        // eye sits `zoom` along camera -Z from `target`, so map that offset
+        // back into world space.
+        let eye_world =
+            self.camera.target + self.camera.rotation.inverse() * Vector3::new(0.0, 0.0, self.camera.zoom);
+        let from_top = eye_world.z >= 0.0;
+
         let show_grid = self.show_grid;
         let callback = egui_glow::CallbackFn::new(move |_info, painter| {
             let gl = painter.gl();
@@ -856,47 +1088,78 @@ impl Board3dView {
                 gl.depth_mask(true);
                 gl.clear(glow::DEPTH_BUFFER_BIT);
                 g.unlit.bind(gl, &mvp);
+                // The layer sheets sit 2–35 µm apart — real film thicknesses,
+                // far below what the depth buffer resolves at normal orbit
+                // distances. Polygon offset pulls each successive decal a
+                // fixed number of depth-resolution steps toward the viewer,
+                // making the stack order deterministic regardless of zoom:
+                // board 0 → copper 2 → mask 4 → exposed 6 → silk 10 (units).
+                gl.enable(glow::POLYGON_OFFSET_FILL);
                 // Opaque pass first (depth-write on): B.Cu, board (FR-4),
                 // F.Cu. Deepest-to-shallowest so the depth buffer settles
                 // correctly before the blended pass reads from it.
+                //
+                // Polygon offsets are units-only (factor 0): a slope factor
+                // scales with the polygon's screen-space depth gradient and
+                // explodes at grazing angles, pulling buried geometry
+                // through the opaque caps (the "inner layer bleeds through
+                // the top view" bug). Constant units keep the stack order
+                // deterministic at every orbit angle.
+                g.unlit.set_alpha(gl, 1.0);
+                gl.polygon_offset(0.0, -2.0);
                 if g.bottom_copper_ready {
                     g.bottom_copper.draw(gl);
                 }
-                // Inner copper planes, buried at their stack depth. Opaque —
-                // the FR-4 caps occlude them straight-on, but they read
-                // through the translucent edge walls (the multilayer stackup).
-                for m in &g.inner_copper {
-                    m.draw(gl);
-                }
+                // Inner copper is not drawn: the board renders as a solid —
+                // opaque caps and walls — so buried sheets are never
+                // visible. (Meshes are still baked; a future x-ray/section
+                // mode can draw them.)
+                gl.polygon_offset(0.0, 0.0);
                 if g.board_ready {
                     g.board.draw(gl);
+                    // Opaque edge walls, depth-written like the caps, so
+                    // the slab occludes everything inside it.
+                    g.board_walls.draw(gl);
                 }
+                gl.polygon_offset(0.0, -2.0);
                 if g.top_copper_ready {
                     g.top_copper.draw(gl);
                 }
+                gl.polygon_offset(0.0, 0.0);
+                // Via / hole barrels: real cylinders through the stack,
+                // visible in the punched hole mouths and through the
+                // translucent board edge. Plain depth-tested geometry.
+                if g.barrels_ready {
+                    g.barrels.draw(gl);
+                }
+                // STEP component bodies: opaque, real thickness, sitting on
+                // the board top — plain depth-tested geometry, no offset.
+                for m in &g.components {
+                    m.draw(gl);
+                }
                 // Translucent pass for the solder-mask sheets. Alpha-blend
-                // against whatever the opaque pass wrote; depth-write off
-                // so the masks don't occlude each other when both are in
-                // view (halfway-tilted camera). Back-to-front draw order:
-                // B.Mask sits beneath the board and only shows from the
-                // bottom side; F.Mask sits above F.Cu and dominates the
-                // top-down view.
+                // against the settled opaque pass; depth-write off so the
+                // sheets don't occlude each other. Far-side mask first,
+                // near-side last (walls are opaque now and already drawn).
                 gl.enable(glow::BLEND);
                 gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
                 gl.depth_mask(false);
-                // Translucent FR-4 side walls first, so the board edge blends
-                // over whatever the opaque pass wrote (inner copper, once it
-                // lands) and the multilayer stackup reads through the edge.
-                if g.board_ready {
-                    g.unlit.set_alpha(gl, BOARD_WALL_ALPHA);
-                    g.board_walls.draw(gl);
-                }
+                gl.polygon_offset(0.0, -4.0);
                 g.unlit.set_alpha(gl, MASK_ALPHA);
-                if g.bottom_mask_ready {
-                    g.bottom_mask.draw(gl);
-                }
-                if g.top_mask_ready {
-                    g.top_mask.draw(gl);
+                if from_top {
+                    if g.bottom_mask_ready {
+                        g.bottom_mask.draw(gl);
+                    }
+                    if g.top_mask_ready {
+                        g.top_mask.draw(gl);
+                    }
+                } else {
+                    if g.top_mask_ready {
+                        g.top_mask.draw(gl);
+                    }
+                    if g.bottom_mask_ready {
+                        g.bottom_mask.draw(gl);
+                    }
                 }
                 g.unlit.set_alpha(gl, 1.0);
                 gl.depth_mask(true);
@@ -905,28 +1168,25 @@ impl Board3dView {
                 // opaque on top of the mask sheet, so each pad reads as fully
                 // exposed even where openings overlap. Drawn before the drill
                 // holes so the dark bore caps punch back through.
+                gl.polygon_offset(0.0, -6.0);
                 if g.bottom_exposed_ready {
                     g.bottom_exposed.draw(gl);
                 }
                 if g.top_exposed_ready {
                     g.top_exposed.draw(gl);
                 }
-                // Drill holes: opaque dark disks on each face, drawn after the
-                // mask so they read as crisp holes punched through the pads
-                // (depth-write back on, no blend).
-                if g.holes_ready {
-                    g.top_holes.draw(gl);
-                    g.bottom_holes.draw(gl);
-                }
                 // Silkscreen legend: opaque off-white, drawn last among the
                 // board layers (depth-write still on) at a Z just above the
                 // mask so it reads as printed on top of the soldermask.
+                gl.polygon_offset(0.0, -10.0);
                 if g.top_silk_ready {
                     g.top_silk.draw(gl);
                 }
                 if g.bottom_silk_ready {
                     g.bottom_silk.draw(gl);
                 }
+                gl.polygon_offset(0.0, 0.0);
+                gl.disable(glow::POLYGON_OFFSET_FILL);
                 if show_grid {
                     gl.line_width(1.0);
                     g.grid.draw(gl);
@@ -948,11 +1208,12 @@ impl Board3dView {
         // origin→tip direction so the letter never sits on top of the
         // coloured line it's labelling.
         let l = self.axes_len;
+        let z_mid = (BOARD_Z_TOP + BOARD_Z_BOTTOM) * 0.5;
         let label_offset_px = 14.0_f32;
         let axes = [
-            (Vector3::new(l, 0.0, 0.0), "X", egui::Color32::from_rgb(255, 90, 90)),
-            (Vector3::new(0.0, l, 0.0), "Y", egui::Color32::from_rgb(90, 220, 90)),
-            (Vector3::new(0.0, 0.0, l), "Z", egui::Color32::from_rgb(110, 150, 255)),
+            (Vector3::new(l, 0.0, z_mid), "X", egui::Color32::from_rgb(255, 90, 90)),
+            (Vector3::new(0.0, l, z_mid), "Y", egui::Color32::from_rgb(90, 220, 90)),
+            (Vector3::new(0.0, 0.0, z_mid + l * 0.6), "Z", egui::Color32::from_rgb(110, 150, 255)),
         ];
         let font = egui::FontId::monospace(13.0);
         let origin_screen = project(&mvp, rect, Vector3::zeros());
@@ -1088,18 +1349,59 @@ impl Default for Board3dView {
 // Mesh helpers
 // ────────────────────────────────────────────────────────────────────────
 
-/// FR-4 slab caps: the top face (+Z) and bottom face (−Z), reusing the
-/// outline's centered triangle soup at each Z. No backface culling, so the
-/// shared winding is fine for both faces.
-fn build_board_cap_vertices(outline: &OutlineData, rgb: [f32; 3], z_top: f32, z_bottom: f32) -> Vec<f32> {
+/// FR-4 slab caps: the top face (+Z) and bottom face (−Z), tessellated from
+/// the outline contours with every drill hole punched out — the bores are
+/// real voids, and the barrel walls are what you see inside them. Falls back
+/// to the outline's pre-tessellated soup when there are no holes to punch.
+/// No backface culling, so the shared winding is fine for both faces.
+/// Full-span XYZ axes through the board body, JLC-viewer style: thin lines
+/// centered on the (origin-centered) board, running symmetrically ±half in
+/// each direction. X/Y lie in the slab's mid-plane so the solid board
+/// occludes the buried segment and the lines emerge at the edges; Z pierces
+/// the board vertically through its center.
+fn board_axes_vertices(half: f32) -> Vec<f32> {
+    let h = half;
+    let z_mid = (BOARD_Z_TOP + BOARD_Z_BOTTOM) * 0.5;
+    let z_half = h * 0.6;
+    vec![
+        // X axis: red
+        -h, 0.0, z_mid, 1.0, 0.25, 0.25,
+        h, 0.0, z_mid, 1.0, 0.25, 0.25,
+        // Y axis: green
+        0.0, -h, z_mid, 0.25, 0.85, 0.25,
+        0.0, h, z_mid, 0.25, 0.85, 0.25,
+        // Z axis: blue
+        0.0, 0.0, z_mid - z_half, 0.35, 0.5, 1.0,
+        0.0, 0.0, z_mid + z_half, 0.35, 0.5, 1.0,
+    ]
+}
+
+fn build_board_cap_vertices(
+    outline: &OutlineData,
+    holes: &[crate::gerber_geom::Hole],
+    rgb: [f32; 3],
+    z_top: f32,
+    z_bottom: f32,
+) -> Vec<f32> {
     let [r, g, b] = rgb;
-    let mut out = Vec::with_capacity(outline.mesh_indices.len() * 2 * 6);
-    for &idx in &outline.mesh_indices {
-        let v = outline.mesh_vertices_2d[idx as usize];
+    let (punched_v, punched_i);
+    let (verts_2d, indices): (&[[f32; 2]], &[u32]) = if holes.is_empty() {
+        (&outline.mesh_vertices_2d, &outline.mesh_indices)
+    } else {
+        (punched_v, punched_i) = crate::gerber_geom::punched_outline_mesh(
+            &outline.contours,
+            holes,
+            &outline.bbox,
+        );
+        (&punched_v, &punched_i)
+    };
+    let mut out = Vec::with_capacity(indices.len() * 2 * 6);
+    for &idx in indices {
+        let v = verts_2d[idx as usize];
         out.extend_from_slice(&[v[0], v[1], z_top, r, g, b]);
     }
-    for &idx in &outline.mesh_indices {
-        let v = outline.mesh_vertices_2d[idx as usize];
+    for &idx in indices {
+        let v = verts_2d[idx as usize];
         out.extend_from_slice(&[v[0], v[1], z_bottom, r, g, b]);
     }
     out
@@ -1148,6 +1450,37 @@ fn build_copper_vertices(cu: &CopperData, rgb: [f32; 3], z: f32) -> Vec<f32> {
     out
 }
 
+/// Copper sheet with the drill holes punched out (a pad flash is a FULL
+/// disc in the gerber — the bore only exists in the drill files). Without
+/// holes, or without the outline needed for the shared punch frame, falls
+/// back to the plain pre-tessellated copper mesh.
+fn build_punched_copper_vertices(
+    cu: &CopperData,
+    holes: &[crate::gerber_geom::Hole],
+    outline: Option<&OutlineData>,
+    rgb: [f32; 3],
+    z: f32,
+) -> Vec<f32> {
+    let Some(outline) = outline else {
+        return build_copper_vertices(cu, rgb, z);
+    };
+    if holes.is_empty() {
+        return build_copper_vertices(cu, rgb, z);
+    }
+    let (verts_2d, indices) =
+        crate::gerber_geom::punched_copper_mesh(&cu.contours, holes, &outline.bbox);
+    if indices.is_empty() {
+        return build_copper_vertices(cu, rgb, z);
+    }
+    let [r, g, b] = rgb;
+    let mut out = Vec::with_capacity(indices.len() * 6);
+    for &idx in &indices {
+        let v = verts_2d[idx as usize];
+        out.extend_from_slice(&[v[0], v[1], z, r, g, b]);
+    }
+    out
+}
+
 /// Depth of an inner copper layer, interpolated evenly between the F.Cu and
 /// B.Cu outer faces by its 1-based stack index. `Copper(1)` = top,
 /// `Copper(copper_count)` = bottom; inner layers land at the fractions
@@ -1161,13 +1494,27 @@ fn inner_layer_z(stack_index: u8, copper_count: u8) -> f32 {
     COPPER_Z_TOP + (COPPER_Z_BOTTOM - COPPER_Z_TOP) * t
 }
 
-/// Exposed-copper pads from the mask's opening tessellation (the solid pad
-/// shapes), as a flat sheet at `z`. Empty when the mask has no openings.
-fn build_exposed_copper_vertices(m: &MaskData, rgb: [f32; 3], z: f32) -> Vec<f32> {
+/// Exposed-copper sheet from the (mask openings ∩ copper) − holes boolean
+/// (`gerber_geom::exposed_copper_mesh`), lifted to a flat sheet at `z`.
+/// Empty when no opening overlaps copper.
+fn build_exposed_copper_vertices(
+    m: &MaskData,
+    cu: &CopperData,
+    holes: &[crate::gerber_geom::Hole],
+    outline: &OutlineData,
+    rgb: [f32; 3],
+    z: f32,
+) -> Vec<f32> {
+    let (verts_2d, indices) = crate::gerber_geom::exposed_copper_mesh(
+        &m.opening_contours,
+        &cu.contours,
+        holes,
+        &outline.bbox,
+    );
     let [r, g, b] = rgb;
-    let mut out = Vec::with_capacity(m.opening_indices.len() * 6);
-    for &idx in &m.opening_indices {
-        let v = m.opening_vertices_2d[idx as usize];
+    let mut out = Vec::with_capacity(indices.len() * 6);
+    for &idx in &indices {
+        let v = verts_2d[idx as usize];
         out.extend_from_slice(&[v[0], v[1], z, r, g, b]);
     }
     out
@@ -1183,23 +1530,53 @@ fn build_mask_vertices(m: &MaskData, rgb: [f32; 3], z: f32) -> Vec<f32> {
     out
 }
 
-/// Triangle-fan disks for each drilled hole, at a fixed Z. Each hole becomes
-/// `HOLE_SEGMENTS` triangles (center + ring), `xyz rgb` per vertex — the same
-/// stride every other mesh here uses.
-fn build_holes_vertices(drill: &DrillData, rgb: [f32; 3], z: f32) -> Vec<f32> {
-    let [r, g, b] = rgb;
-    let seg = HOLE_SEGMENTS;
-    let mut out = Vec::with_capacity(drill.holes.len() * seg * 3 * 6);
+/// Via / hole barrels: a cylinder wall per hole, spanning the copper stack
+/// (F.Cu outer face → B.Cu outer face). Segment count is chord-error
+/// adaptive per hole and shared with the punch discs
+/// (`gerber_geom::exposed::hole_segments`), so the wall meets the punched
+/// sheet rims vertex-for-vertex and bores stay round at pad-level zoom.
+///
+/// The renderer is unlit, so an azimuthal light term is baked into the
+/// vertex colours (same key direction as the STEP-model bake): the wall
+/// facing the key light reads bright, the far side dark. With no backface
+/// culling, looking into a bore shows the inner far wall — the gradient is
+/// what makes it read as a cylindrical hole instead of a flat ring.
+fn build_barrel_vertices(drill: &DrillData) -> Vec<f32> {
+    // Key light azimuth (matches step_model's KEY_LIGHT xy, normalized).
+    let (kx, ky) = {
+        let (x, y) = (-0.35_f32, 0.25_f32);
+        let len = (x * x + y * y).sqrt();
+        (x / len, y / len)
+    };
+    let mut out = Vec::with_capacity(drill.holes.len() * 32 * 6 * 6);
     for hole in &drill.holes {
+        let seg = crate::gerber_geom::exposed::hole_segments(hole.radius);
+        // Ring geometry + per-ring-point shade, shared by both Z rims.
+        let ring: Vec<(f32, f32, f32)> = (0..seg)
+            .map(|i| {
+                let a = (i as f32 / seg as f32) * std::f32::consts::TAU;
+                let (nx, ny) = (a.cos(), a.sin());
+                let k = (0.45 + 0.45 * (nx * kx + ny * ky).max(0.0)).min(1.0);
+                (nx, ny, k)
+            })
+            .collect();
+        let base = if hole.plated { BARREL_COLOR_PLATED } else { BARREL_COLOR_NPTH };
         let [cx, cy] = hole.center;
         let rad = hole.radius;
         for i in 0..seg {
-            let a0 = (i as f32 / seg as f32) * std::f32::consts::TAU;
-            let a1 = ((i + 1) as f32 / seg as f32) * std::f32::consts::TAU;
-            // center, then two ring points → one triangle of the fan.
-            out.extend_from_slice(&[cx, cy, z, r, g, b]);
-            out.extend_from_slice(&[cx + rad * a0.cos(), cy + rad * a0.sin(), z, r, g, b]);
-            out.extend_from_slice(&[cx + rad * a1.cos(), cy + rad * a1.sin(), z, r, g, b]);
+            let (n0x, n0y, k0) = ring[i];
+            let (n1x, n1y, k1) = ring[(i + 1) % seg];
+            let (x0, y0) = (cx + rad * n0x, cy + rad * n0y);
+            let (x1, y1) = (cx + rad * n1x, cy + rad * n1y);
+            let c0 = [base[0] * k0, base[1] * k0, base[2] * k0];
+            let c1 = [base[0] * k1, base[1] * k1, base[2] * k1];
+            // Two triangles per wall quad, vertex colour per ring point.
+            out.extend_from_slice(&[x0, y0, COPPER_Z_TOP, c0[0], c0[1], c0[2]]);
+            out.extend_from_slice(&[x1, y1, COPPER_Z_TOP, c1[0], c1[1], c1[2]]);
+            out.extend_from_slice(&[x1, y1, COPPER_Z_BOTTOM, c1[0], c1[1], c1[2]]);
+            out.extend_from_slice(&[x0, y0, COPPER_Z_TOP, c0[0], c0[1], c0[2]]);
+            out.extend_from_slice(&[x1, y1, COPPER_Z_BOTTOM, c1[0], c1[1], c1[2]]);
+            out.extend_from_slice(&[x0, y0, COPPER_Z_BOTTOM, c0[0], c0[1], c0[2]]);
         }
     }
     out
