@@ -44,6 +44,10 @@ impl GerberViewPanel {
         
         // Set up viewport and handle interactions
         let (viewport, response) = setup_viewport(ui, app);
+        // Auto-dimension runs first: if a left-press grabs a dimension it
+        // sets `autodim.dragging`, which suppresses the rubber-band zoom /
+        // left-pan below — otherwise both fire and a selection box appears.
+        handle_autodim(ui, app, &response);
         handle_viewport_interactions(ui, app, &viewport, &response);
         
         // Render the gerber layers and overlays
@@ -113,9 +117,18 @@ fn render_pcb_workflow_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
 
     let has_pcb = app.services.project_state.get().pcb_path().is_some();
     let has_gerber_dir = app.services.project_state.get().gerber_dir().is_some();
+    // Gerber-only projects store the gerber DIRECTORY in pcb_path (there is
+    // no PCB file) — kicad-cli generation doesn't apply to them.
+    let is_kicad_pcb = app
+        .services
+        .project_state
+        .get()
+        .pcb_path()
+        .map(|p| p.extension().and_then(|s| s.to_str()) == Some("kicad_pcb"))
+        .unwrap_or(false);
 
-    // Generate: explicit. Disabled if no PCB is selected.
-    if ui.add_enabled(has_pcb, egui::Button::new("⚙ Generate Gerbers")).clicked() {
+    // Generate: explicit. Disabled if no KiCad PCB is selected.
+    if ui.add_enabled(has_pcb && is_kicad_pcb, egui::Button::new("⚙ Generate Gerbers")).clicked() {
         if let Some(pcb_path) = app.services.project_state.get().pcb_path().map(|p| p.to_path_buf()) {
             let Some(method) = app.services.kicad_cli_method.clone() else {
                 logger.log_error("kicad-cli not found (checked PATH, Flatpak, and Snap at startup)");
@@ -143,7 +156,15 @@ fn render_pcb_workflow_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
             app.services.project_state.get().gerber_dir().map(|p| p.to_path_buf()),
         ) {
             app.services.project_state.set(ProjectState::LoadingGerbers { pcb_path: pcb_path.clone(), gerber_dir: gerber_dir.clone() });
-            gerber_ops::load_gerbers_into_viewer(app, &pcb_path, &gerber_dir, &logger);
+            if pcb_path == gerber_dir {
+                // Gerber-only convention (pcb_path == gerber_dir): no
+                // .kicad_pcb to read stack/layer names from — use the
+                // generic loader (filename pre-scan for copper count).
+                gerber_ops::load_gerbers_generic(&mut app.services, &gerber_dir, &logger);
+                app.gerber_view_3d_panel.mark_dirty();
+            } else {
+                gerber_ops::load_gerbers_into_viewer(app, &pcb_path, &gerber_dir, &logger);
+            }
             let last_modified = std::fs::metadata(&pcb_path)
                 .and_then(|m| m.modified())
                 .unwrap_or(std::time::SystemTime::now());
@@ -459,7 +480,10 @@ fn render_layer_controls(ui: &mut egui::Ui, app: &mut CopperForgeApp) {
                 | LayerType::ViaPlugging(Side::Bottom) => {
                     !app.services.display_manager.showing_top
                 }
-                LayerType::MechanicalOutline | LayerType::Drill | LayerType::UserLayer(_) => {
+                LayerType::MechanicalOutline
+                | LayerType::Drill
+                | LayerType::UserLayer(_)
+                | LayerType::UserComments => {
                     app.services.layer_store.get_visibility(layer_type)
                 }
             };
@@ -731,8 +755,12 @@ fn handle_viewport_interactions(ui: &mut egui::Ui, app: &mut CopperForgeApp, vie
     // Handle mouse wheel zoom
     handle_mouse_wheel_zoom(ui, app, viewport, response);
 
-    // Update UI state if not dragging zoom window
-    if !app.services.gerber_view.zoom_window_dragging {
+    // Update UI state if not dragging zoom window (or a dimension callout /
+    // placing a manual dimension).
+    if !app.services.gerber_view.zoom_window_dragging
+        && app.services.autodim.dragging.is_none()
+        && !app.services.autodim.placing
+    {
         // Local right-button pan (KiCad convention). Done before
         // ui_state.update so the updated translation is what the rest of
         // the frame sees. Upstream gerber_viewer's left-pan handler still
@@ -845,6 +873,486 @@ fn handle_viewport_interactions(ui: &mut egui::Ui, app: &mut CopperForgeApp, vie
     }
 }
 
+/// Auto-dimension: right-click toggle, recompute-on-board-change, and
+/// left-drag to reposition individual dimension callouts. Core-owned — no
+/// plugin/DockPanel involvement; state lives in `services.autodim`.
+fn handle_autodim(ui: &mut egui::Ui, app: &mut CopperForgeApp, response: &egui::Response) {
+    // Right-click menu (not while the ruler / origin tools own right-drag).
+    if !app.services.gerber_view.ruler_active && !app.services.gerber_view.setting_origin_mode {
+        response.context_menu(|ui| {
+            ui.checkbox(&mut app.services.autodim.show, "Auto-dimension");
+            if ui.button("Add manual dimension").clicked() {
+                app.services.autodim.placing = true;
+                app.services.autodim.pending = None;
+                app.services.autodim.show = true;
+                ui.close();
+            }
+            if !app.services.autodim.manual.is_empty()
+                && ui.button("Clear manual dimensions").clicked()
+            {
+                app.services.autodim.manual.clear();
+                app.services.autodim.manual_offsets.clear();
+                ui.close();
+            }
+        });
+    }
+
+    // Recompute auto dimensions when shown + a board is loaded + it changed.
+    if app.services.autodim.show {
+        let generation = app.services.board_geometry_gen;
+        if app.services.geometry.board_outline.is_none() {
+            app.services.autodim.result = None;
+            app.services.autodim.computed_gen = None;
+        } else if app.services.autodim.computed_gen != Some(generation) {
+            let contours: Vec<Vec<[f64; 2]>> = app
+                .services
+                .geometry
+                .board_outline
+                .as_ref()
+                .map(|o| {
+                    o.contours
+                        .iter()
+                        .map(|c| c.iter().map(|p| [p.x as f64, p.y as f64]).collect())
+                        .collect()
+                })
+                .unwrap_or_default();
+            // Drill holes are stored bbox-centred (see gerber_geom::drill);
+            // the outline contours are raw gerber space. Shift hole centers
+            // back by the bbox center so both share the gerber frame the 2D
+            // view draws in.
+            let (cx, cy) = app
+                .services
+                .geometry
+                .board_outline
+                .as_ref()
+                .map(|o| {
+                    (
+                        (o.bbox.min.x + o.bbox.max.x) as f64 * 0.5,
+                        (o.bbox.min.y + o.bbox.max.y) as f64 * 0.5,
+                    )
+                })
+                .unwrap_or((0.0, 0.0));
+            let holes: Vec<::services::autodim::HoleInput> = app
+                .services
+                .geometry
+                .drill
+                .as_ref()
+                .map(|d| {
+                    d.holes
+                        .iter()
+                        .map(|h| ::services::autodim::HoleInput {
+                            center: [h.center[0] as f64 + cx, h.center[1] as f64 + cy],
+                            diameter_mm: (h.radius * 2.0) as f64,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let result = ::services::autodim::autodimension(&contours, &holes, &Default::default());
+            app.services.autodim.offsets = vec![[0.0, 0.0]; result.dimensions.len()];
+            app.services.autodim.result = Some(result);
+            app.services.autodim.computed_gen = Some(generation);
+            app.services.autodim.hidden.clear();
+        }
+    }
+
+    // Nothing interactive unless dimensions are shown, some manual ones exist,
+    // or we're mid-placement.
+    if !app.services.autodim.show
+        && app.services.autodim.manual.is_empty()
+        && !app.services.autodim.placing
+    {
+        return;
+    }
+
+    // Owned copy of the view transform so the borrow doesn't block the
+    // `&mut app.services.autodim` mutations below.
+    let vs = app.services.gerber_view.view_state.clone();
+    let primary = egui::PointerButton::Primary;
+
+    // ── Manual placement: two clicks (start point, then end point) ──────
+    if app.services.autodim.placing {
+        if response.clicked() {
+            if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
+                let g = vs.screen_to_gerber_coords(pos);
+                // Snap to the nearest drill-hole center within a small screen
+                // radius (KiCad-style feature snapping).
+                let pt = snap_to_hole(app, &vs, pos).unwrap_or([g.x, g.y]);
+                match app.services.autodim.pending {
+                    None => app.services.autodim.pending = Some(pt),
+                    Some(start) => {
+                        let d = ::services::autodim::aligned_dimension(start, pt, 4.0);
+                        app.services.autodim.manual.push(d);
+                        app.services.autodim.manual_offsets.push([0.0, 0.0]);
+                        app.services.autodim.pending = None;
+                        app.services.autodim.placing = false;
+                    }
+                }
+            }
+        }
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            app.services.autodim.placing = false;
+            app.services.autodim.pending = None;
+        }
+        return; // no grab / zoom while placing
+    }
+
+    // ── Grab the nearest dimension (auto then manual, combined index) ───
+    let auto_n = app
+        .services
+        .autodim
+        .result
+        .as_ref()
+        .map(|r| r.dimensions.len())
+        .unwrap_or(0);
+    // Hover highlight (when not mid-drag).
+    if app.services.autodim.dragging.is_none() {
+        let h = ui
+            .input(|i| i.pointer.hover_pos())
+            .and_then(|p| nearest_dim(app, &vs, p));
+        app.services.autodim.hovered = h;
+    }
+    // Grab on left press (crossbar or a leader line).
+    if response.contains_pointer() && ui.input(|i| i.pointer.button_pressed(primary)) {
+        if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
+            app.services.autodim.dragging = nearest_dim(app, &vs, pos);
+        }
+    }
+
+    // Delete the hovered/grabbed dimension (Delete or Backspace). Manual
+    // dimensions are removed outright; auto ones are hidden until recompute.
+    let del = ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace));
+    if del {
+        if let Some(idx) = app.services.autodim.dragging.or(app.services.autodim.hovered) {
+            if idx < auto_n {
+                app.services.autodim.hidden.insert(idx);
+            } else {
+                let m = idx - auto_n;
+                if m < app.services.autodim.manual.len() {
+                    app.services.autodim.manual.remove(m);
+                    if m < app.services.autodim.manual_offsets.len() {
+                        app.services.autodim.manual_offsets.remove(m);
+                    }
+                }
+            }
+            app.services.autodim.dragging = None;
+            app.services.autodim.hovered = None;
+        }
+    }
+
+    // ── Perpendicular drag of the grabbed dimension ─────────────────────
+    if let Some(idx) = app.services.autodim.dragging {
+        if response.dragged_by(primary) {
+            let delta = response.drag_delta();
+            if delta != Vec2::ZERO {
+                if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
+                    let a = vs.screen_to_gerber_coords(pos);
+                    let b = vs.screen_to_gerber_coords(pos - delta);
+                    let wd = (a.x - b.x, a.y - b.y);
+                    // Normal of the grabbed dimension (auto or manual).
+                    let n = if idx < auto_n {
+                        app.services
+                            .autodim
+                            .result
+                            .as_ref()
+                            .and_then(|r| r.dimensions.get(idx))
+                            .map(dim_normal)
+                    } else {
+                        app.services.autodim.manual.get(idx - auto_n).map(dim_normal)
+                    };
+                    if let Some(n) = n {
+                        let proj = wd.0 * n.0 + wd.1 * n.1;
+                        let d = [n.0 * proj, n.1 * proj];
+                        let off = if idx < auto_n {
+                            app.services.autodim.offsets.get_mut(idx)
+                        } else {
+                            app.services.autodim.manual_offsets.get_mut(idx - auto_n)
+                        };
+                        if let Some(off) = off {
+                            off[0] += d[0];
+                            off[1] += d[1];
+                        }
+                    }
+                }
+            }
+        }
+        if ui.input(|i| i.pointer.button_released(primary)) {
+            app.services.autodim.dragging = None;
+        }
+    }
+}
+
+/// Combined index (auto then manual) of the dimension nearest `pos`, if
+/// within the hit radius. Tests the crossbar and both leader lines, so a
+/// dimension can be grabbed by its leaders too.
+fn nearest_dim(app: &CopperForgeApp, vs: &gerber_viewer::ViewState, pos: Pos2) -> Option<usize> {
+    const HIT_PX: f32 = 8.0;
+    let scr = |g: [f64; 2]| vs.gerber_to_screen_coords(nalgebra::Point2::new(g[0], g[1]));
+    let auto_n = app
+        .services
+        .autodim
+        .result
+        .as_ref()
+        .map(|r| r.dimensions.len())
+        .unwrap_or(0);
+    let mut best: Option<(usize, f32)> = None;
+    let mut test = |combined: usize, d: &::services::autodim::DimensionLine, off: [f64; 2]| {
+        let mv = |p: [f64; 2]| [p[0] + off[0], p[1] + off[1]];
+        let dcross = dist_point_segment(pos, scr(mv(d.line[0])), scr(mv(d.line[1])));
+        let dext1 = dist_point_segment(pos, scr(d.ext1[0]), scr(mv(d.ext1[1])));
+        let dext2 = dist_point_segment(pos, scr(d.ext2[0]), scr(mv(d.ext2[1])));
+        let dist = dcross.min(dext1).min(dext2);
+        if dist < HIT_PX && best.map_or(true, |(_, bd)| dist < bd) {
+            best = Some((combined, dist));
+        }
+    };
+    if let Some(res) = app.services.autodim.result.as_ref() {
+        for (i, d) in res.dimensions.iter().enumerate() {
+            if app.services.autodim.hidden.contains(&i) {
+                continue;
+            }
+            let off = app.services.autodim.offsets.get(i).copied().unwrap_or([0.0, 0.0]);
+            test(i, d, off);
+        }
+    }
+    for (i, d) in app.services.autodim.manual.iter().enumerate() {
+        let off = app.services.autodim.manual_offsets.get(i).copied().unwrap_or([0.0, 0.0]);
+        test(auto_n + i, d, off);
+    }
+    best.map(|(i, _)| i)
+}
+
+/// Nearest drill-hole center (in gerber mm) to the screen point `pos`, if one
+/// is within a small screen radius — for snap-to-center while dimensioning.
+/// Holes are stored bbox-centred, so shift them into the gerber frame first.
+fn snap_to_hole(
+    app: &CopperForgeApp,
+    vs: &gerber_viewer::ViewState,
+    pos: Pos2,
+) -> Option<[f64; 2]> {
+    const SNAP_PX: f32 = 12.0;
+    let drill = app.services.geometry.drill.as_ref()?;
+    let (cx, cy) = app.services.geometry.board_outline.as_ref().map(|o| {
+        (
+            (o.bbox.min.x + o.bbox.max.x) as f64 * 0.5,
+            (o.bbox.min.y + o.bbox.max.y) as f64 * 0.5,
+        )
+    })?;
+    let mut best: Option<([f64; 2], f32)> = None;
+    for h in &drill.holes {
+        let g = [h.center[0] as f64 + cx, h.center[1] as f64 + cy];
+        let scr = vs.gerber_to_screen_coords(nalgebra::Point2::new(g[0], g[1]));
+        let dist = (scr - pos).length();
+        if dist < SNAP_PX && best.map_or(true, |(_, bd)| dist < bd) {
+            best = Some((g, dist));
+        }
+    }
+    best.map(|(g, _)| g)
+}
+
+/// Unit normal of a dimension (the direction its extension lines run — i.e.
+/// perpendicular to the measured edge), from the compute-supplied geometry.
+fn dim_normal(d: &::services::autodim::DimensionLine) -> (f64, f64) {
+    let dx = d.ext1[1][0] - d.ext1[0][0];
+    let dy = d.ext1[1][1] - d.ext1[0][1];
+    let l = (dx * dx + dy * dy).sqrt();
+    if l < 1e-9 { (0.0, 1.0) } else { (dx / l, dy / l) }
+}
+
+/// Perpendicular distance from screen point `p` to segment `a`–`b`.
+fn dist_point_segment(p: Pos2, a: Pos2, b: Pos2) -> f32 {
+    let ab = b - a;
+    let len2 = ab.length_sq();
+    if len2 <= f32::EPSILON {
+        return (p - a).length();
+    }
+    let t = ((p - a).dot(ab) / len2).clamp(0.0, 1.0);
+    let proj = a + ab * t;
+    (p - proj).length()
+}
+
+/// Draw the auto-dimension overlay: extension lines, dimension line with
+/// arrowheads, and the value label — each callout shifted by its drag offset.
+fn draw_autodim(app: &CopperForgeApp, painter: &Painter) {
+    let ad = &app.services.autodim;
+    if !ad.show && ad.manual.is_empty() && !ad.placing {
+        return;
+    }
+    let vs = &app.services.gerber_view.view_state;
+    let ink = Color32::from_rgb(120, 180, 235);
+    let hi_ink = Color32::from_rgb(240, 220, 80); // yellow — hovered / selected
+    let text_col = Color32::from_rgb(200, 220, 245);
+    let font = egui::FontId::proportional(12.0);
+    let highlit = |idx: usize| ad.dragging == Some(idx) || ad.hovered == Some(idx);
+
+    // Board bbox (gerber mm) decides extension-line style: a segment running
+    // over the board body is dotted, one in open space is solid.
+    let board_bbox = app.services.geometry.board_outline.as_ref().map(|o| {
+        (
+            [o.bbox.min.x as f64, o.bbox.min.y as f64],
+            [o.bbox.max.x as f64, o.bbox.max.y as f64],
+        )
+    });
+
+    // Light-red crosses at every drill-hole center — the snap targets for
+    // manual dimensioning. Drawn whenever dimensioning is active.
+    let cross_col = Color32::from_rgb(255, 130, 130);
+    if let (Some(drill), Some((cx, cy))) = (
+        app.services.geometry.drill.as_ref(),
+        app.services.geometry.board_outline.as_ref().map(|o| {
+            (
+                (o.bbox.min.x + o.bbox.max.x) as f64 * 0.5,
+                (o.bbox.min.y + o.bbox.max.y) as f64 * 0.5,
+            )
+        }),
+    ) {
+        for h in &drill.holes {
+            let s = vs.gerber_to_screen_coords(nalgebra::Point2::new(
+                h.center[0] as f64 + cx,
+                h.center[1] as f64 + cy,
+            ));
+            let r = 4.0_f32;
+            painter.line_segment([s - Vec2::new(r, 0.0), s + Vec2::new(r, 0.0)], Stroke::new(1.0_f32, cross_col));
+            painter.line_segment([s - Vec2::new(0.0, r), s + Vec2::new(0.0, r)], Stroke::new(1.0_f32, cross_col));
+        }
+    }
+
+    // Auto dimensions (only when shown; skip user-deleted ones).
+    if ad.show {
+        if let Some(res) = ad.result.as_ref() {
+            for (i, d) in res.dimensions.iter().enumerate() {
+                if ad.hidden.contains(&i) {
+                    continue;
+                }
+                let off = ad.offsets.get(i).copied().unwrap_or([0.0, 0.0]);
+                let col = if highlit(i) { hi_ink } else { ink };
+                draw_one_dim(painter, vs, d, off, board_bbox, col, text_col, &font);
+            }
+        }
+    }
+    // Manual dimensions (persist independently of the auto toggle).
+    let auto_n = ad.result.as_ref().map(|r| r.dimensions.len()).unwrap_or(0);
+    for (i, d) in ad.manual.iter().enumerate() {
+        let off = ad.manual_offsets.get(i).copied().unwrap_or([0.0, 0.0]);
+        let col = if highlit(auto_n + i) { hi_ink } else { ink };
+        draw_one_dim(painter, vs, d, off, board_bbox, col, text_col, &font);
+    }
+    // Placement preview: snap indicator + start→cursor rubber line.
+    if ad.placing {
+        if let Some(cursor) = painter.ctx().pointer_hover_pos() {
+            // Snap the cursor end to a hole center if near one, ringing it.
+            let end = match snap_to_hole(app, vs, cursor) {
+                Some(g) => {
+                    let s = vs.gerber_to_screen_coords(nalgebra::Point2::new(g[0], g[1]));
+                    painter.circle_stroke(s, 6.0, Stroke::new(1.5_f32, Color32::from_rgb(240, 220, 80)));
+                    s
+                }
+                None => cursor,
+            };
+            if let Some(start) = ad.pending {
+                let a = vs.gerber_to_screen_coords(nalgebra::Point2::new(start[0], start[1]));
+                painter.extend(egui::Shape::dashed_line(
+                    &[a, end],
+                    Stroke::new(1.0_f32, Color32::from_rgb(160, 200, 240)),
+                    5.0,
+                    4.0,
+                ));
+            }
+        }
+    }
+}
+
+/// Draw one dimension callout: dashed extension (leader) lines from the
+/// pinned measured points, the movable crossbar with the value broken into
+/// it, and inward arrowheads.
+fn draw_one_dim(
+    painter: &Painter,
+    vs: &gerber_viewer::ViewState,
+    d: &::services::autodim::DimensionLine,
+    off: [f64; 2],
+    board_bbox: Option<([f64; 2], [f64; 2])>,
+    ink: Color32,
+    text_col: Color32,
+    font: &egui::FontId,
+) {
+    const EXT_GAP_PX: f32 = 3.0;
+    let fixed = |p: [f64; 2]| vs.gerber_to_screen_coords(nalgebra::Point2::new(p[0], p[1]));
+    let moved =
+        |p: [f64; 2]| vs.gerber_to_screen_coords(nalgebra::Point2::new(p[0] + off[0], p[1] + off[1]));
+    // A segment whose gerber-space midpoint lies inside the board runs over
+    // the part → dotted; otherwise it's in open space → solid.
+    let over_board = |m: [f64; 2], o: [f64; 2]| {
+        let Some((min, max)) = board_bbox else { return false };
+        let mid = [(m[0] + o[0] + off[0]) / 2.0, (m[1] + o[1] + off[1]) / 2.0];
+        const INSET: f64 = 0.5;
+        mid[0] > min[0] + INSET
+            && mid[0] < max[0] - INSET
+            && mid[1] > min[1] + INSET
+            && mid[1] < max[1] - INSET
+    };
+
+    for (m, o) in [(d.ext1[0], d.ext1[1]), (d.ext2[0], d.ext2[1])] {
+        let start = fixed(m);
+        let end = moved(o);
+        let dir = end - start;
+        let len = dir.length();
+        let gapped = if len > EXT_GAP_PX { start + dir / len * EXT_GAP_PX } else { start };
+        if over_board(m, o) {
+            painter.extend(egui::Shape::dashed_line(
+                &[gapped, end],
+                Stroke::new(1.2_f32, ink),
+                4.0,
+                3.0,
+            ));
+        } else {
+            painter.line_segment([gapped, end], Stroke::new(1.2_f32, ink));
+        }
+    }
+
+    let a = moved(d.line[0]);
+    let b = moved(d.line[1]);
+    let prefix = match d.kind {
+        ::services::autodim::DimensionKind::Diameter
+        | ::services::autodim::DimensionKind::HoleDiameter => "\u{2300}",
+        _ => "",
+    };
+    let label = format!("{prefix}{:.2} mm", d.value_mm);
+    let galley = painter.layout_no_wrap(label, font.clone(), text_col);
+    let mid = a + (b - a) * 0.5;
+    let seg = b - a;
+    let seg_len = seg.length();
+    let half_gap = galley.rect.width() / 2.0 + 3.0;
+
+    if seg_len > half_gap * 2.0 + 4.0 {
+        let u = seg / seg_len;
+        painter.line_segment([a, mid - u * half_gap], Stroke::new(1.2_f32, ink));
+        painter.line_segment([mid + u * half_gap, b], Stroke::new(1.2_f32, ink));
+        painter.galley(mid - galley.size() / 2.0, galley, text_col);
+    } else {
+        painter.line_segment([a, b], Stroke::new(1.2_f32, ink));
+        let n = dim_normal(d);
+        let n_scr = Vec2::new(n.0 as f32, -(n.1 as f32));
+        painter.galley(mid + n_scr * 8.0 - galley.size() / 2.0, galley, text_col);
+    }
+    draw_arrowhead(painter, a, b, ink);
+    draw_arrowhead(painter, b, a, ink);
+}
+
+/// Draw an arrowhead at `tip`, its barbs opening back toward `from`.
+fn draw_arrowhead(painter: &Painter, tip: Pos2, from: Pos2, color: Color32) {
+    let dir = tip - from;
+    let len = dir.length();
+    if len <= f32::EPSILON {
+        return;
+    }
+    let u = dir / len;
+    let n = Vec2::new(-u.y, u.x);
+    const SIZE: f32 = 7.0;
+    let base = tip - u * SIZE;
+    let w = SIZE * 0.4;
+    painter.line_segment([tip, base + n * w], Stroke::new(1.2_f32, color));
+    painter.line_segment([tip, base - n * w], Stroke::new(1.2_f32, color));
+}
+
 /// Pan the gerber view by right-mouse drag (KiCad convention).
 ///
 /// Upstream `gerber_viewer::UiState::handle_panning` is hard-bound to the
@@ -865,6 +1373,10 @@ fn handle_right_pan(ui: &mut egui::Ui, app: &mut CopperForgeApp, response: &egui
 }
 
 fn handle_zoom_window(ui: &mut egui::Ui, app: &mut CopperForgeApp, viewport: &Rect, mouse_pos_screen: Option<Pos2>, response: &egui::Response) {
+    // A dimension drag / placement owns the left button — no rubber-band.
+    if app.services.autodim.dragging.is_some() || app.services.autodim.placing {
+        return;
+    }
     // KiCad: left-drag = rubber-band zoom-to-area. (Was Secondary before
     // the right-drag-pans switch — see handle_viewport_interactions.)
     let zoom_button = egui::PointerButton::Primary;
@@ -996,6 +1508,9 @@ fn render_gerber_content(ui: &mut egui::Ui, app: &mut CopperForgeApp, viewport: 
 
     // Generic producer-supplied overlay (e.g. a dock panel's analysis shapes)
     render_view_overlay(app, &painter);
+
+    // Auto-dimension overlay (core-drawn: dimension lines, arrows, labels).
+    draw_autodim(app, &painter);
 
     // Render cursor info
     render_cursor_info(ui, app, &painter, viewport);

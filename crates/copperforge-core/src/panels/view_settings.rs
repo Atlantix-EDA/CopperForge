@@ -69,7 +69,9 @@ fn show_layers_panel<'a>(    ui: &mut egui::Ui,
                     LayerType::MechanicalOutline => true,
                     LayerType::Drill => true,
                     // User-layer visibility left unchanged on side presets.
-                    LayerType::UserLayer(_) => app.services.layer_store.get_visibility(layer_type),
+                    LayerType::UserLayer(_) | LayerType::UserComments => {
+                        app.services.layer_store.get_visibility(layer_type)
+                    }
                 };
                 app.services.layer_store.set_visibility(layer_type, visible);
             }
@@ -91,7 +93,9 @@ fn show_layers_panel<'a>(    ui: &mut egui::Ui,
                     | LayerType::ViaPlugging(Side::Bottom) => true,
                     LayerType::MechanicalOutline => true,
                     LayerType::Drill => true,
-                    LayerType::UserLayer(_) => app.services.layer_store.get_visibility(layer_type),
+                    LayerType::UserLayer(_) | LayerType::UserComments => {
+                        app.services.layer_store.get_visibility(layer_type)
+                    }
                 };
                 app.services.layer_store.set_visibility(layer_type, visible);
             }

@@ -71,6 +71,10 @@ pub fn generate_gerbers_from_pcb(
     // Include all 45 KiCad user-layer slots (User.1..User.45). kicad-cli
     // silently skips slots that aren't defined in the board — boards that
     // use M1/M2/M10/M11/M12 etc. get those exported; others aren't affected.
+    // Cmts.User (User.Comments) + Dwgs.User (User.Drawings) are SEPARATE from
+    // the numbered User.1..45 range — that's where KiCad draws board
+    // dimensions, so they must be listed explicitly or dimensions never
+    // export. kicad-cli silently skips any layer the board doesn't define.
     let user_layers: String = (1..=45)
         .map(|n| format!("User.{}", n))
         .collect::<Vec<_>>()
@@ -78,7 +82,7 @@ pub fn generate_gerbers_from_pcb(
     let copper_layers = copper_layers_from_pcb(pcb_path);
     logger.log_info(&format!("Copper stack from .kicad_pcb: {}", copper_layers));
     let layers_arg = format!(
-        "{},F.SilkS,B.SilkS,F.Mask,B.Mask,Edge.Cuts,F.Paste,B.Paste,{}",
+        "{},F.SilkS,B.SilkS,F.Mask,B.Mask,Edge.Cuts,F.Paste,B.Paste,Cmts.User,Dwgs.User,{}",
         copper_layers, user_layers
     );
 
@@ -211,6 +215,26 @@ pub fn load_gerbers(
         }
     }
 
+    // Canonical-layer renames ("Edge.Cuts" → "Multi-Layer", "F.Mask" →
+    // "Top Solder Mask Layer" — typical of EasyEDA-Pro imports). kicad-cli
+    // names exported gerbers after the USER name, so without this map the
+    // renamed layers strand in "unassigned" and the 3D view has no outline
+    // to build from.
+    match crate::project_manager::kicad_metadata::read_canonical_layer_renames(pcb_path) {
+        Ok(renames) => {
+            if !renames.is_empty() {
+                logger.log_info(&format!(
+                    "Parsed {} canonical-layer rename(s) from .kicad_pcb",
+                    renames.len()
+                ));
+            }
+            services.layer_store.canonical_renames = renames;
+        }
+        Err(e) => {
+            logger.log_warning(&format!("Could not parse layer renames from PCB: {}", e));
+        }
+    }
+
     match services.layer_store.load_from_directory(gerber_dir) {
         Ok((loaded_count, unassigned_count)) => {
             if loaded_count > 0 {
@@ -227,11 +251,59 @@ pub fn load_gerbers(
         }
     }
 
-    // 3D pipeline geometry: extract the board outline from the mechanical-
-    // outline gerber. Reads the file a second time via `gerber_parser` — the
-    // legacy `gerber_viewer` path has already read it once for the 2D canvas.
-    // This duplication is documented in the FDD's "Legacy 2D Rendering Path"
-    // section and goes away when Phase 7 retires gerber_viewer.
+    refresh_board_geometry(services, logger);
+}
+
+/// Load a directory of GENERIC gerbers — no `.kicad_pcb` required. Covers
+/// third-party fab packages (Altium/Protel extensions, `Gerber/` +
+/// `NC Drill/` subdirectory splits, Excellon `.TXT` drills). The copper
+/// stack height comes from a filename pre-scan instead of the KiCad layer
+/// table; everything downstream (2D canvas, 3D view, exposed/mask booleans,
+/// barrels) is identical to the KiCad path.
+pub fn load_gerbers_generic(
+    services: &mut SharedServices,
+    gerber_dir: &Path,
+    logger: &ReactiveEventLogger,
+) {
+    logger.log_info("Clearing existing gerber layers...");
+    services.layer_store.clear_all();
+
+    // Stack height must be known BEFORE loading: assignment remaps bottom
+    // copper to Copper(copper_count).
+    let cc = services.layer_store.detect_copper_count_in_directory(gerber_dir);
+    services.layer_store.set_copper_count(cc);
+    logger.log_info(&format!("Generic import: {} copper layer(s) detected from filenames", cc));
+
+    match services.layer_store.load_from_directory(gerber_dir) {
+        Ok((loaded_count, unassigned_count)) => {
+            if loaded_count > 0 {
+                logger.log_info(&format!("Successfully loaded {} gerber/drill files", loaded_count));
+                services.gerber_view.needs_initial_view = true;
+            }
+            if unassigned_count > 0 {
+                logger.log_warning(&format!("{} gerber files could not be automatically assigned", unassigned_count));
+            }
+            if loaded_count == 0 && unassigned_count == 0 {
+                logger.log_error("No gerber files were found");
+            }
+        }
+        Err(e) => {
+            logger.log_error(&format!("Failed to load gerbers: {}", e));
+        }
+    }
+
+    refresh_board_geometry(services, logger);
+}
+
+/// Rebuild the 3D pipeline geometry (`services.geometry`) from whatever the
+/// layer store currently holds, and bump the geometry generation so the 3D
+/// panel re-uploads. Shared tail of the KiCad and generic load paths.
+fn refresh_board_geometry(services: &mut SharedServices, logger: &ReactiveEventLogger) {
+    // Extract the board outline from the mechanical-outline gerber. Reads the
+    // file a second time via `gerber_parser` — the legacy `gerber_viewer`
+    // path has already read it once for the 2D canvas. This duplication is
+    // documented in the FDD's "Legacy 2D Rendering Path" section and goes
+    // away when Phase 7 retires gerber_viewer.
     services.geometry.board_outline = extract_outline_from_layer_store(&services.layer_store, logger);
 
     // Copper layers (Phase 4a). Require an outline bbox so the copper mesh
@@ -395,21 +467,80 @@ fn extract_drill_side(
     outline_bbox: &gerber_viewer::BoundingBox,
     logger: &ReactiveEventLogger,
 ) -> Option<crate::gerber_geom::DrillData> {
-    let layer = store.find(crate::layer_store::LayerType::Drill)?;
-    let path = layer.file_path.as_ref()?;
-    logger.log_info(&format!(
-        "drill: reading {}",
-        path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default(),
-    ));
-    match crate::gerber_geom::extract_drill_gerber(path, outline_bbox) {
-        Some(d) => {
-            logger.log_info(&format!("drill: {} hole(s)", d.holes.len()));
-            Some(d)
+    // Drill data arrives in TWO files — plated (PTH) and non-plated (NPTH,
+    // where mounting holes usually live) — but the store has a single `Drill`
+    // slot. Merge holes from EVERY file that looks like a drill file, wherever
+    // it landed (this also survives a drill file being mis-assigned by
+    // auto-detect). Otherwise NPTH mounting holes silently vanish.
+    let is_drill_name = |n: &str| {
+        let n = n.to_lowercase();
+        n.contains("drl") || n.contains("drill")
+    };
+    // Plated vs non-plated only exists in KiCad's file naming: `*-NPTH-drl*`
+    // holds the non-plated (mounting) holes. Drives the 3D barrel material.
+    let is_npth_name = |n: &str| n.to_lowercase().contains("npth");
+    let mut holes = Vec::new();
+    let mut files = 0usize;
+    for layer in &store.layers {
+        let Some(path) = layer.file_path.as_ref() else { continue };
+        let name = path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+        if !is_drill_name(&name) {
+            continue;
         }
-        None => {
-            logger.log_warning("drill: no holes extracted");
-            None
+        if let Some(mut d) = crate::gerber_geom::extract_drill_gerber(path, outline_bbox) {
+            files += 1;
+            if is_npth_name(&name) {
+                for h in &mut d.holes {
+                    h.plated = false;
+                }
+            }
+            holes.extend(d.holes);
         }
+    }
+    // The single-slot invariant leaves the SECOND drill file stranded in
+    // `unassigned` (slot already taken → `assign_gerber` refuses). Sweep
+    // those too — `UnassignedGerber` keeps the raw text, so parse from
+    // bytes. This is how the PTH bores show up when NPTH claimed the slot.
+    for ug in &store.unassigned {
+        if !is_drill_name(&ug.filename) {
+            continue;
+        }
+        if let Some(mut d) = crate::gerber_geom::extract_drill_gerber_from_bytes(
+            ug.content.as_bytes(),
+            outline_bbox,
+        ) {
+            files += 1;
+            if is_npth_name(&ug.filename) {
+                for h in &mut d.holes {
+                    h.plated = false;
+                }
+            }
+            holes.extend(d.holes);
+        }
+    }
+    // Excellon drill files (Altium *-RoundHoles.TXT, KiCad .drl) collected
+    // during directory load — not gerber, parsed by the Excellon reader.
+    for src in &store.drill_sources {
+        if let Some(mut d) =
+            crate::gerber_geom::extract_drill_excellon_from_bytes(&src.bytes, outline_bbox)
+        {
+            files += 1;
+            if is_npth_name(&src.filename) {
+                for h in &mut d.holes {
+                    h.plated = false;
+                }
+            }
+            holes.extend(d.holes);
+        } else {
+            logger.log_warning(&format!("drill: no holes recovered from {}", src.filename));
+        }
+    }
+    if holes.is_empty() {
+        logger.log_warning("drill: no holes extracted");
+        None
+    } else {
+        logger.log_info(&format!("drill: {} hole(s) from {} file(s)", holes.len(), files));
+        Some(crate::gerber_geom::DrillData { holes })
     }
 }
 

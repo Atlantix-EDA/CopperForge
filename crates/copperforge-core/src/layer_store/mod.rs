@@ -33,12 +33,24 @@ pub struct PcbLayer {
     pub z_order: i32,
 }
 
+/// An Excellon drill file picked up during directory load. Excellon isn't
+/// gerber — it can't live in `layers`/`unassigned` (both hold parsed gerber
+/// layers) — so the raw bytes are kept for the drill extractor to consume
+/// by format. Covers Altium's `*-RoundHoles.TXT` / `*-SlotHoles.TXT` and
+/// KiCad's `.drl`.
+pub struct DrillSource {
+    pub filename: String,
+    pub bytes: Vec<u8>,
+}
+
 /// The store. Holds all layers plus supporting state.
 pub struct LayerStore {
     pub layers: Vec<PcbLayer>,
     pub active_layer: LayerType,
     pub assignments: HashMap<String, LayerType>,
     pub unassigned: Vec<UnassignedGerber>,
+    /// Excellon drill files found during directory load (see [`DrillSource`]).
+    pub drill_sources: Vec<DrillSource>,
     pub detector: LayerDetector,
     pub coordinates_dirty: bool,
     pub zoom: ZoomState,
@@ -48,6 +60,13 @@ pub struct LayerStore {
     /// 20 → "Top 3D Body"). These are KiCad's defined convention, not names
     /// the engineer typed in. Populated when a project loads.
     pub user_layer_names: HashMap<u8, String>,
+    /// User renames of CANONICAL layers (canonical name → user name, e.g.
+    /// "Edge.Cuts" → "Multi-Layer"), parsed from the `(layers ...)` block.
+    /// EasyEDA-Pro imports rename most canonical layers and kicad-cli names
+    /// exported gerbers after the USER name — without this map those files
+    /// never auto-assign (and the 3D view stays empty for want of an
+    /// outline). Populated when a KiCad project loads.
+    pub canonical_renames: HashMap<String, String>,
     /// Number of copper layers in the loaded board. Used to translate
     /// detector output (which uses 2-layer-first numbering: B.Cu=Copper(2),
     /// In1.Cu=Copper(3)) into stack-position numbering (B.Cu=Copper(N),
@@ -116,11 +135,13 @@ impl Default for LayerStore {
             active_layer: LayerType::Copper(1),
             assignments: HashMap::new(),
             unassigned: Vec::new(),
+            drill_sources: Vec::new(),
             detector: LayerDetector::new(),
             coordinates_dirty: false,
             zoom: ZoomState::default(),
             units: UnitsState::default(),
             user_layer_names: HashMap::new(),
+            canonical_renames: HashMap::new(),
             copper_count: 2,
         }
     }
@@ -242,8 +263,10 @@ impl LayerStore {
     pub fn clear_all(&mut self) {
         self.layers.clear();
         self.unassigned.clear();
+        self.drill_sources.clear();
         self.assignments.clear();
         self.user_layer_names.clear();
+        self.canonical_renames.clear();
     }
 }
 
@@ -261,7 +284,7 @@ impl LayerStore {
     }
 
     pub fn detect_layer_type(&self, filename: &str) -> Option<LayerType> {
-        self.detector.detect_layer_type_with_names(filename, &self.user_layer_names)
+        self.detector.detect_layer_type_with_names(filename, &self.user_layer_names, &self.canonical_renames)
     }
 
     /// Assign an unassigned gerber to a layer type.
@@ -285,7 +308,7 @@ impl LayerStore {
         let cc = self.copper_count;
         let candidates: Vec<(String, LayerType)> = self.unassigned.iter()
             .filter_map(|ug| {
-                let detected = self.detector.detect_layer_type_with_names(&ug.filename, &self.user_layer_names)?;
+                let detected = self.detector.detect_layer_type_with_names(&ug.filename, &self.user_layer_names, &self.canonical_renames)?;
                 let remapped = remap_copper_for_stack(detected, cc);
                 if self.find(remapped).is_none() { Some((ug.filename.clone(), remapped)) } else { None }
             })
@@ -299,27 +322,76 @@ impl LayerStore {
         assigned
     }
 
-    /// Load all .gbr files from a directory, auto-detect where possible.
+    /// Load gerber files from a directory tree (one subdirectory level deep,
+    /// covering the Altium `Gerber/` + `NC Drill/` split), auto-detecting
+    /// layer types. Accepts KiCad `.gbr` naming AND bare Protel extensions
+    /// (`.GTL`, `.GBS`, `.GM1`, …) — anything the filename detector
+    /// recognizes is parsed as a gerber; unrecognized non-`.gbr` files
+    /// (`.apr`, `.REP`, `.RUL`, report files…) are skipped. Excellon drill
+    /// files (`.TXT`/`.drl` starting with an `M48` header) can't parse as
+    /// gerber — they're stashed in [`Self::drill_sources`] for the drill
+    /// extractor to consume by format.
     pub fn load_from_directory(&mut self, dir: &Path) -> Result<(usize, usize), String> {
         use std::io::BufReader;
         use gerber_viewer::gerber_parser::parse;
 
-        let entries = std::fs::read_dir(dir)
-            .map_err(|e| format!("Failed to read directory: {}", e))?;
+        let mut files = Vec::new();
+        collect_files(dir, 1, &mut files);
+        if files.is_empty() {
+            return Err(format!("No files found under {}", dir.display()));
+        }
+        // Deterministic assignment order regardless of filesystem order.
+        files.sort();
 
         let mut loaded = 0usize;
         let mut unassigned_count = 0usize;
 
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) != Some("gbr") { continue; }
-
+        for path in files {
             let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
-            let content = match std::fs::read_to_string(&path) { Ok(c) => c, Err(_) => continue };
-            let doc = match parse(BufReader::new(content.as_bytes())) { Ok(d) => d, Err(_) => continue };
-            let gerber_layer = GerberLayer::new(doc.into_commands());
+            let ext = path
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_lowercase())
+                .unwrap_or_default();
+            let detected = self.detector.detect_layer_type_with_names(&filename, &self.user_layer_names, &self.canonical_renames);
 
-            if let Some(detected) = self.detector.detect_layer_type_with_names(&filename, &self.user_layer_names) {
+            let lower = filename.to_lowercase();
+            let drillish = matches!(detected, Some(LayerType::Drill))
+                || ((lower.contains("drl") || lower.contains("drill") || lower.contains("holes"))
+                    && matches!(ext.as_str(), "txt" | "drl" | "xln" | "gbr"));
+
+            if !drillish && detected.is_none() && ext != "gbr" {
+                // Not a recognizable layer name and not a bare gerber:
+                // aperture reports, DRC rule exports, etc.
+                continue;
+            }
+
+            let content = match std::fs::read_to_string(&path) { Ok(c) => c, Err(_) => continue };
+
+            if drillish {
+                // Excellon or drill-as-gerber? Sniff the header: Excellon
+                // starts with (or quickly reaches) `M48`; gerbers never
+                // contain it outside comments.
+                let head = &content[..content.len().min(512)];
+                if head.contains("M48") {
+                    self.drill_sources.push(DrillSource {
+                        filename,
+                        bytes: content.into_bytes(),
+                    });
+                    loaded += 1;
+                    continue;
+                }
+                // Drill-as-gerber falls through to the normal parse path —
+                // the drill extractor sweeps layers/unassigned by name.
+            }
+
+            let doc = match parse(BufReader::new(content.as_bytes())) { Ok(d) => d, Err(_) => continue };
+            // Normalize MOIN files to mm — gerber_viewer renders raw file
+            // units, and everything downstream reads its bbox as mm.
+            let units = doc.units;
+            let gerber_layer = GerberLayer::new(crate::gerber_geom::commands_in_mm(units, doc.into_commands()));
+
+            if let Some(detected) = detected {
                 let remapped = remap_copper_for_stack(detected, self.copper_count);
                 if self.find(remapped).is_none() && !self.assignments.values().any(|t| *t == remapped) {
                     self.add_layer(remapped, gerber_layer, Some(path.clone()), true);
@@ -334,6 +406,43 @@ impl LayerStore {
         }
 
         Ok((loaded, unassigned_count))
+    }
+
+    /// Pre-scan a directory's filenames for the copper stack height: 2 outer
+    /// layers + every distinct inner-copper file the detector recognizes.
+    /// Used by the generic (no-`.kicad_pcb`) import, where the stack count
+    /// must be known BEFORE loading — layer assignment remaps bottom copper
+    /// to `Copper(copper_count)`.
+    pub fn detect_copper_count_in_directory(&self, dir: &Path) -> u8 {
+        let mut files = Vec::new();
+        collect_files(dir, 1, &mut files);
+        let mut inners = std::collections::HashSet::new();
+        for path in &files {
+            let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if let Some(LayerType::Copper(n)) =
+                self.detector.detect_layer_type_with_names(filename, &self.user_layer_names, &self.canonical_renames)
+            {
+                if n >= 3 {
+                    inners.insert(n);
+                }
+            }
+        }
+        (2 + inners.len()) as u8
+    }
+}
+
+/// Recursively collect files up to `depth` subdirectory levels below `dir`.
+fn collect_files(dir: &Path, depth: usize, out: &mut Vec<std::path::PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if depth > 0 {
+                collect_files(&path, depth - 1, out);
+            }
+        } else {
+            out.push(path);
+        }
     }
 }
 
@@ -432,6 +541,8 @@ fn z_order_for(layer_type: LayerType) -> i32 {
         // User layers as documentation overlay — below silk, above mask.
         // Higher-index user layers drawn on top of lower so M12 > M1.
         LayerType::UserLayer(n) => 5 + (n as i32),
+        // User.Comments (dimensions) — draw above the other user layers.
+        LayerType::UserComments => 55,
     }
 }
 
@@ -446,7 +557,7 @@ fn quadrant_offset_for(layer_type: LayerType, spacing: f64) -> VectorOffset {
         LayerType::Drill => 0.0,
         LayerType::ViaPlugging(_) => -9999.0,
         // User layers park off-screen in quadrant view (annotations, not board-visual).
-        LayerType::UserLayer(_) => -9999.0,
+        LayerType::UserLayer(_) | LayerType::UserComments => -9999.0,
     };
     VectorOffset { x, y: 0.0 }
 }

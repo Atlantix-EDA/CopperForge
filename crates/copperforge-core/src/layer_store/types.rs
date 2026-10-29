@@ -20,6 +20,9 @@ pub enum LayerType {
     /// `M1 Board Outline`, `M10 Fab Notes`, `M12 Stackup`, etc. — the `u8`
     /// is the canonical KiCad user-layer index. Side-agnostic.
     UserLayer(u8),
+    /// KiCad `User.Comments` (Cmts.User) layer — where KiCad's board
+    /// dimensions live. Rendered as an annotation overlay. Side-agnostic.
+    UserComments,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -85,6 +88,7 @@ impl LayerType {
             Self::Drill,
             Self::ViaPlugging(Side::Top), Self::ViaPlugging(Side::Bottom),
         ]);
+        v.push(Self::UserComments);
         v.extend((1..=45).map(Self::UserLayer));
         v
     }
@@ -105,6 +109,7 @@ impl LayerType {
             Self::ViaPlugging(Side::Top) => "Top Via Plugging".into(),
             Self::ViaPlugging(Side::Bottom) => "Bottom Via Plugging".into(),
             Self::UserLayer(n) => format!("User.{} (M{})", n, n),
+            Self::UserComments => "User.Comments".into(),
         }
     }
 
@@ -149,6 +154,8 @@ impl LayerType {
                     180,
                 )
             }
+            // Steel-blue, matching the dimension ink KiCad draws there.
+            Self::UserComments => Color32::from_rgba_premultiplied(120, 180, 235, 220),
         }
     }
 
@@ -164,7 +171,7 @@ impl LayerType {
             Self::ViaPlugging(Side::Top) => showing_top,
             Self::ViaPlugging(Side::Bottom) => !showing_top,
             // User layers are typically annotation/documentation — show on both sides.
-            Self::UserLayer(_) => true,
+            Self::UserLayer(_) | Self::UserComments => true,
         }
     }
 

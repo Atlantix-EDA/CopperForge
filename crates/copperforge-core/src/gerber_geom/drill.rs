@@ -34,6 +34,12 @@ use super::copper::walk_copper;
 pub struct Hole {
     pub center: [f32; 2],
     pub radius: f32,
+    /// Plated through-hole (via / component pin) vs non-plated (mounting
+    /// hole). Extraction defaults to plated; the caller re-tags per source
+    /// file (KiCad splits PTH and NPTH into separate exports and the
+    /// distinction only exists in the filename). Drives the 3D barrel
+    /// material: copper wall vs bare-FR-4 bore.
+    pub plated: bool,
 }
 
 /// All holes recovered from one drill source.
@@ -122,6 +128,7 @@ fn finalize(raw: Vec<(f64, f64, f64)>, outline_bbox: &BoundingBox) -> Option<Dri
         .map(|(x, y, dia)| Hole {
             center: [(x - cx) as f32, (y - cy) as f32],
             radius: (dia * 0.5) as f32,
+            plated: true,
         })
         .collect();
     if holes.is_empty() {

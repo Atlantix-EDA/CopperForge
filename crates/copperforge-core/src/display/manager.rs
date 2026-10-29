@@ -202,7 +202,7 @@ impl DisplayManager {
             LayerType::ViaPlugging(_) => -9999.0,
 
             // User layers — annotations/notes, not part of the board-visual stackup.
-            LayerType::UserLayer(_) => -9999.0,
+            LayerType::UserLayer(_) | LayerType::UserComments => -9999.0,
         };
         
         VectorOffset {

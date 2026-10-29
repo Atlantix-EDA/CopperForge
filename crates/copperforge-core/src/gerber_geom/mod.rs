@@ -22,8 +22,12 @@
 
 pub mod copper;
 pub mod drill;
+pub mod exposed;
 pub mod mask;
+pub mod normalize;
+pub use normalize::commands_in_mm;
 pub use copper::{extract_copper, extract_copper_from_bytes, CopperCounts, CopperData};
+pub use exposed::{exposed_copper_mesh, punched_copper_mesh, punched_outline_mesh};
 pub use drill::{
     extract_drill_excellon_from_bytes, extract_drill_gerber, extract_drill_gerber_from_bytes,
     DrillData, Hole,
@@ -109,7 +113,24 @@ fn extract_outline_from_reader<R: Read>(reader: BufReader<R>) -> Option<(Outline
 
     let (segments, closed_regions, counts) = walk_commands(&doc, unit_scale);
     let mut contours = stitch_segments(&segments);
+    log::debug!(
+        "outline walk: {} segment(s) → {} stitched contour(s), {} region(s)",
+        segments.len(),
+        contours.len(),
+        closed_regions.len(),
+    );
     contours.extend(closed_regions);
+
+    // Normalize through an even-odd boolean before tessellation. Third-party
+    // outline layers aren't clean like KiCad's Edge.Cuts: Altium mechanical
+    // layers draw annotation boxes ON the outline layer, sometimes twice —
+    // and exactly-coincident contours are degenerate input that makes lyon's
+    // sweep error out (the whole outline then "fails to extract"). The
+    // boolean collapses duplicates (even-odd parity), resolves overlaps, and
+    // emits clean outer/hole rings, which also keeps spurious rings out of
+    // the wall / cap / mask builders downstream.
+    let contours = normalize_contours_evenodd(contours);
+    log::debug!("outline normalize: {} ring(s)", contours.len());
 
     if contours.is_empty() {
         return None;
@@ -404,6 +425,44 @@ fn quant(x: f32) -> i64 {
 
 fn quant_point(p: Point2<f32>) -> (i64, i64) {
     (quant(p.x), quant(p.y))
+}
+
+/// Resolve raw stitched contours into clean disjoint rings under the
+/// even-odd rule (the same semantics the tessellator applies): coincident
+/// duplicate rings cancel pairwise, overlaps resolve, output is outer-CCW /
+/// hole-CW. See the call site in `extract_outline_from_reader` for why.
+fn normalize_contours_evenodd(contours: Vec<Vec<Point2<f32>>>) -> Vec<Vec<Point2<f32>>> {
+    use i_overlay::core::fill_rule::FillRule;
+    use i_overlay::float::simplify::SimplifyShape;
+
+    // Dedupe exactly-coincident rings FIRST (quantized point-set signature).
+    // Altium mechanical layers draw loops twice — including the board
+    // outline itself — and under pure even-odd parity a double-drawn board
+    // cancels to nothing. Draw semantics are idempotent (ink twice is still
+    // ink); parity only applies to NESTING, which the simplify below keeps
+    // (a single loop inside the outline is still a cutout).
+    let mut seen = std::collections::HashSet::new();
+    let mut subj: Vec<Vec<[f32; 2]>> = Vec::new();
+    for c in contours.iter().filter(|c| c.len() >= 3) {
+        let ring: Vec<[f32; 2]> = c.iter().map(|p| [p.x, p.y]).collect();
+        let mut sig: Vec<(i64, i64)> = ring
+            .iter()
+            .map(|p| ((p[0] as f64 * 1_000.0).round() as i64, (p[1] as f64 * 1_000.0).round() as i64))
+            .collect();
+        sig.sort_unstable();
+        if seen.insert(sig) {
+            subj.push(ring);
+        }
+    }
+    if subj.is_empty() {
+        return Vec::new();
+    }
+    let shapes = subj.simplify_shape(FillRule::EvenOdd);
+    shapes
+        .into_iter()
+        .flatten()
+        .map(|ring| ring.into_iter().map(|p| Point2::new(p[0], p[1])).collect())
+        .collect()
 }
 
 fn stitch_segments(segments: &[Segment]) -> Vec<Vec<Point2<f32>>> {

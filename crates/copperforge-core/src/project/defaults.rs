@@ -75,7 +75,8 @@ pub fn load_demo_gerber() -> GerberLayer {
     let reader = BufReader::new(demo_str);
     
     let doc = parse(reader).unwrap();
-    
-    let commands = doc.into_commands();
+
+    let units = doc.units;
+    let commands = crate::gerber_geom::commands_in_mm(units, doc.into_commands());
     GerberLayer::new(commands)
 }

@@ -27,11 +27,6 @@ use std::path::Path;
 use gerber_parser::parse;
 use gerber_types::Unit;
 use gerber_viewer::BoundingBox;
-use lyon::math::Point as LyonPoint;
-use lyon::path::Path as LyonPath;
-use lyon::tessellation::{
-    BuffersBuilder, FillOptions, FillRule, FillTessellator, VertexBuffers,
-};
 use nalgebra::Point2;
 
 use super::copper::{walk_copper, CopperCounts};
@@ -43,13 +38,13 @@ use super::copper::{walk_copper, CopperCounts};
 pub struct MaskData {
     pub mesh_vertices_2d: Vec<[f32; 2]>,
     pub mesh_indices: Vec<u32>,
-    /// The mask *openings* (pad / via apertures) tessellated on their own
-    /// under `FillRule::NonZero`, so overlapping pads union instead of
-    /// cancelling. The 3D view draws this as solid exposed copper just above
-    /// the mask sheet, so each pad reads as fully exposed. Empty when the
-    /// mask has no openings.
-    pub opening_vertices_2d: Vec<[f32; 2]>,
-    pub opening_indices: Vec<u32>,
+    /// The mask *openings* (pad / via apertures) as raw closed contours
+    /// (mm, gerber coord space, uncentered — the `walk_copper` output).
+    /// The 3D view intersects these against the copper layer's contours
+    /// (`gerber_geom::exposed`) to build the exposed-copper sheet: copper
+    /// colour exactly where an opening overlaps metal, and nowhere else.
+    /// Empty when the mask has no openings (fully tented).
+    pub opening_contours: Vec<Vec<Point2<f32>>>,
 }
 
 /// Primitive counts from the mask gerber walk. Same breakdown as
@@ -112,25 +107,29 @@ fn extract_mask_from_reader<R: Read>(
     let (mesh_vertices_2d, mesh_indices) =
         tessellate_with_holes(outline_contours, &opening_contours, outline_bbox)?;
 
-    // The same openings, tessellated solo (NonZero) for the exposed-copper
-    // pads. Empty when there are no openings — a fully-tented mask.
-    let (opening_vertices_2d, opening_indices) =
-        tessellate_openings(&opening_contours, outline_bbox);
-
     Some((
         MaskData {
             mesh_vertices_2d,
             mesh_indices,
-            opening_vertices_2d,
-            opening_indices,
+            opening_contours,
         },
         counts,
     ))
 }
 
-/// Lyon tessellation with `FillRule::EvenOdd`. Outline contours are pushed
-/// first, then opening contours — winding order is irrelevant under
-/// even-odd, so we don't need to force outer-CCW / hole-CW.
+/// The green sheet = board outline MINUS the union of the openings — a real
+/// boolean (`i_overlay`), not the old "outline + openings under even-odd"
+/// lyon trick. Even-odd counts containment *parity*, so wherever two
+/// openings overlapped (a mounting-hole pad opening intersecting the
+/// guard-band zone opening, overlapping connector pads…) the parity flipped
+/// back to "filled" and the mask repainted itself over what the fab would
+/// leave bare. The boolean unions the openings first, so N overlapping
+/// openings subtract exactly once.
+///
+/// Winding is normalized explicitly: outline loop 0 (the outer boundary,
+/// largest first per the stitcher's contract) CCW, remaining outline loops
+/// (board cutouts) CW so NonZero reads them as holes, and every opening CCW
+/// so overlapping openings union instead of cancelling.
 ///
 /// World transform matches `extract_copper`: shift by outline-bbox center,
 /// no Y-flip (gerber is Y-up per §4.2.3). This locks the mask mesh into
@@ -140,87 +139,123 @@ fn tessellate_with_holes(
     openings: &[Vec<Point2<f32>>],
     outline_bbox: &BoundingBox,
 ) -> Option<(Vec<[f32; 2]>, Vec<u32>)> {
-    let mut builder = LyonPath::builder();
-    for c in outline.iter().chain(openings.iter()) {
+    use i_overlay::core::fill_rule::FillRule as OverlayFillRule;
+    use i_overlay::core::overlay_rule::OverlayRule;
+    use i_overlay::float::single::SingleFloatOverlay;
+
+    let mut subj: Vec<Vec<[f32; 2]>> = Vec::new();
+    for (i, c) in outline.iter().enumerate() {
         if c.len() < 3 {
             continue;
         }
-        builder.begin(LyonPoint::new(c[0].x, c[0].y));
-        for p in &c[1..] {
-            builder.line_to(LyonPoint::new(p.x, p.y));
+        let mut ring: Vec<[f32; 2]> = c.iter().map(|p| [p.x, p.y]).collect();
+        let ccw = super::exposed::signed_area(&ring) >= 0.0;
+        // Outer boundary CCW; cutout loops CW (NonZero holes).
+        if (i == 0) != ccw {
+            ring.reverse();
         }
-        builder.close();
+        subj.push(ring);
     }
-    let path = builder.build();
-
-    let mut geometry: VertexBuffers<[f32; 2], u32> = VertexBuffers::new();
-    let mut tess = FillTessellator::new();
-    tess.tessellate_path(
-        &path,
-        &FillOptions::default().with_fill_rule(FillRule::EvenOdd),
-        &mut BuffersBuilder::new(&mut geometry, |v: lyon::tessellation::FillVertex| {
-            [v.position().x, v.position().y]
-        }),
-    )
-    .ok()?;
-    if geometry.indices.is_empty() {
+    if subj.is_empty() {
         return None;
     }
 
-    let cx = ((outline_bbox.min.x + outline_bbox.max.x) * 0.5) as f32;
-    let cy = ((outline_bbox.min.y + outline_bbox.max.y) * 0.5) as f32;
-    for v in &mut geometry.vertices {
-        v[0] -= cx;
-        v[1] -= cy;
-    }
-
-    Some((geometry.vertices, geometry.indices))
-}
-
-/// Tessellate the mask openings on their own (the exposed-copper pads), under
-/// `FillRule::NonZero` so overlapping pad apertures union into solid copper
-/// rather than cancelling under even-odd. Centered by the outline bbox to
-/// match the mask / copper / board meshes. Returns empty buffers when the
-/// mask has no openings (a fully-tented mask) — the caller treats that as
-/// "no exposed copper."
-fn tessellate_openings(
-    openings: &[Vec<Point2<f32>>],
-    outline_bbox: &BoundingBox,
-) -> (Vec<[f32; 2]>, Vec<u32>) {
-    let mut builder = LyonPath::builder();
+    let mut clip: Vec<Vec<[f32; 2]>> = Vec::new();
     for c in openings {
         if c.len() < 3 {
             continue;
         }
-        builder.begin(LyonPoint::new(c[0].x, c[0].y));
-        for p in &c[1..] {
-            builder.line_to(LyonPoint::new(p.x, p.y));
+        let mut ring: Vec<[f32; 2]> = c.iter().map(|p| [p.x, p.y]).collect();
+        if super::exposed::signed_area(&ring) < 0.0 {
+            ring.reverse();
         }
-        builder.close();
-    }
-    let path = builder.build();
-
-    let mut geometry: VertexBuffers<[f32; 2], u32> = VertexBuffers::new();
-    let mut tess = FillTessellator::new();
-    if tess
-        .tessellate_path(
-            &path,
-            &FillOptions::default().with_fill_rule(FillRule::NonZero),
-            &mut BuffersBuilder::new(&mut geometry, |v: lyon::tessellation::FillVertex| {
-                [v.position().x, v.position().y]
-            }),
-        )
-        .is_err()
-    {
-        return (Vec::new(), Vec::new());
+        clip.push(ring);
     }
 
-    let cx = ((outline_bbox.min.x + outline_bbox.max.x) * 0.5) as f32;
-    let cy = ((outline_bbox.min.y + outline_bbox.max.y) * 0.5) as f32;
-    for v in &mut geometry.vertices {
-        v[0] -= cx;
-        v[1] -= cy;
-    }
+    let shapes = if clip.is_empty() {
+        // Fully-tented mask: the sheet is just the (normalized) outline.
+        vec![subj]
+    } else {
+        subj.overlay(&clip, OverlayRule::Difference, OverlayFillRule::NonZero)
+    };
 
-    (geometry.vertices, geometry.indices)
+    let (vertices, indices) = super::exposed::tessellate_shapes(&shapes, outline_bbox);
+    if indices.is_empty() {
+        return None;
+    }
+    Some((vertices, indices))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn square(cx: f32, cy: f32, half: f32) -> Vec<Point2<f32>> {
+        vec![
+            Point2::new(cx - half, cy - half),
+            Point2::new(cx + half, cy - half),
+            Point2::new(cx + half, cy + half),
+            Point2::new(cx - half, cy + half),
+        ]
+    }
+
+    fn bbox(half: f64) -> BoundingBox {
+        BoundingBox {
+            min: nalgebra::Point2::new(-half, -half),
+            max: nalgebra::Point2::new(half, half),
+        }
+    }
+
+    fn mesh_area(verts: &[[f32; 2]], indices: &[u32]) -> f32 {
+        indices
+            .chunks_exact(3)
+            .map(|t| {
+                let a = verts[t[0] as usize];
+                let b = verts[t[1] as usize];
+                let c = verts[t[2] as usize];
+                ((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])).abs() * 0.5
+            })
+            .sum()
+    }
+
+    /// The mounting-hole / guard-band case: two OVERLAPPING openings. The
+    /// old even-odd parity trick repainted mask over the overlap; the
+    /// boolean must subtract the union exactly once.
+    #[test]
+    fn overlapping_openings_subtract_once() {
+        let outline = vec![square(0.0, 0.0, 10.0)]; // area 400
+        // Two 4×4 openings overlapping by 2×4=8 → union 24 → mask 376.
+        let openings = vec![square(0.0, 0.0, 2.0), square(2.0, 0.0, 2.0)];
+        let (v, i) = tessellate_with_holes(&outline, &openings, &bbox(10.0)).unwrap();
+        assert!((mesh_area(&v, &i) - 376.0).abs() < 1e-2);
+    }
+
+    /// Same, with the second opening wound CW (zone-region style): the
+    /// normalization must make winding irrelevant.
+    #[test]
+    fn overlapping_openings_mixed_winding() {
+        let outline = vec![square(0.0, 0.0, 10.0)];
+        let mut zone = square(2.0, 0.0, 2.0);
+        zone.reverse();
+        let openings = vec![square(0.0, 0.0, 2.0), zone];
+        let (v, i) = tessellate_with_holes(&outline, &openings, &bbox(10.0)).unwrap();
+        assert!((mesh_area(&v, &i) - 376.0).abs() < 1e-2);
+    }
+
+    /// Fully-tented mask (no openings) stays a full slab.
+    #[test]
+    fn tented_mask_is_full_slab() {
+        let outline = vec![square(0.0, 0.0, 10.0)];
+        let (v, i) = tessellate_with_holes(&outline, &[], &bbox(10.0)).unwrap();
+        assert!((mesh_area(&v, &i) - 400.0).abs() < 1e-2);
+    }
+
+    /// Board cutout (second outline loop) still punches through the sheet.
+    #[test]
+    fn outline_cutout_respected() {
+        let outline = vec![square(0.0, 0.0, 10.0), square(5.0, 5.0, 1.0)]; // 400 − 4
+        let (v, i) = tessellate_with_holes(&outline, &[], &bbox(10.0)).unwrap();
+        assert!((mesh_area(&v, &i) - 396.0).abs() < 1e-2);
+    }
+}
+

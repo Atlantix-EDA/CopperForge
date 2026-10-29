@@ -48,6 +48,10 @@ use nalgebra::Point2;
 pub struct CopperData {
     pub mesh_vertices_2d: Vec<[f32; 2]>,
     pub mesh_indices: Vec<u32>,
+    /// The raw closed contours the mesh was tessellated from (mm, gerber
+    /// coord space, uncentered). Kept for boolean consumers — the exposed
+    /// copper sheet intersects the mask openings against these.
+    pub contours: Vec<Vec<Point2<f32>>>,
 }
 
 /// Per-layer counts for logging. Broken out by primitive so we can spot
@@ -97,6 +101,30 @@ pub fn extract_copper_from_bytes(
     extract_copper_from_reader(BufReader::new(Cursor::new(bytes)), outline_bbox)
 }
 
+/// Raw closed contours (mm, gerber coord space, Y-down), one per flash /
+/// stroke / region — the pre-tessellation geometry, largest feature count
+/// wins. For consumers doing their own boolean / solid processing on layer
+/// geometry (CSG experiments, future stackup work) instead of taking the
+/// lyon triangle soup.
+pub fn extract_copper_contours_from_bytes(
+    bytes: &[u8],
+) -> Option<(Vec<Vec<Point2<f32>>>, CopperCounts)> {
+    let doc = match parse(BufReader::new(Cursor::new(bytes))) {
+        Ok(d) => d,
+        Err((d, _)) => d,
+    };
+    let unit_scale = match doc.units {
+        Some(Unit::Millimeters) => 1.0_f64,
+        Some(Unit::Inches) => 25.4_f64,
+        None => 1.0_f64,
+    };
+    let (contours, counts) = walk_copper(&doc, unit_scale);
+    if contours.is_empty() {
+        return None;
+    }
+    Some((contours, counts))
+}
+
 /// Shared core: parse from any buffered reader, walk copper, tessellate
 /// against the outline bbox.
 fn extract_copper_from_reader<R: Read>(
@@ -122,6 +150,7 @@ fn extract_copper_from_reader<R: Read>(
         CopperData {
             mesh_vertices_2d,
             mesh_indices,
+            contours,
         },
         counts,
     ))
@@ -360,9 +389,12 @@ fn emit_aperture_flash(
 
 /// Adaptive step count: ~5 µm chord error, clamped so tiny pads stay round
 /// and mounting-hole-sized flashes don't balloon the triangle count.
+/// Chord length for sagitta error `tol` is ≈ √(8·r·tol), so steps =
+/// circumference / chord — the radius belongs INSIDE the sqrt.
 fn circle_steps(radius: f32) -> usize {
-    let tol = 0.005_f32;
-    ((std::f32::consts::TAU * radius / (8.0 * tol).sqrt()).ceil() as usize).clamp(32, 128)
+    let tol = 0.0025_f32;
+    let chord = (8.0 * radius.max(tol) * tol).sqrt();
+    ((std::f32::consts::TAU * radius / chord).ceil() as usize).clamp(40, 160)
 }
 
 fn circle_contour(center: Point2<f32>, radius: f32) -> Vec<Point2<f32>> {
@@ -392,7 +424,7 @@ fn obround_contour(center: Point2<f32>, w: f32, h: f32) -> Vec<Point2<f32>> {
         return circle_contour(center, w * 0.5);
     }
     let short = w.min(h) * 0.5;
-    let end_steps = (circle_steps(short) / 2).max(12);
+    let end_steps = (circle_steps(short) / 2).max(16);
     let mut pts = Vec::with_capacity(end_steps * 2 + 4);
     if w > h {
         let r = h * 0.5;
@@ -545,7 +577,7 @@ fn stadium_contour(start: Point2<f32>, end: Point2<f32>, width: f32) -> Vec<Poin
             start.y + lx * sin + ly * cos,
         )
     };
-    let end_steps = (circle_steps(r) / 2).max(12);
+    let end_steps = (circle_steps(r) / 2).max(16);
     let mut pts = Vec::with_capacity(end_steps * 2 + 4);
     // End cap at the far end of the segment (local (len, 0)).
     for i in 0..=end_steps {
