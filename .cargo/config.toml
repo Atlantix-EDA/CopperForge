@@ -2,9 +2,8 @@
 # `cargo build` (native) and `trunk build` / `cargo build --target
 # wasm32-unknown-unknown` (browser) must work with NO manual setup.
 #
-# egui_citizen / egui_mobius_reactive resolve from their pinned git tag
-# (see Cargo.toml) — no local checkout of the egui_mobius monorepo is
-# required to build.
+# egui_citizen / egui_mobius_reactive resolve from crates.io (0.6.0) — no
+# sibling egui_mobius checkout is needed to build.
 
 # WASM browser build (Phase A of develop/wasm-demo-plan.md).
 # getrandom 0.3 refuses to compile for wasm32-unknown-unknown without

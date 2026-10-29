@@ -20,7 +20,7 @@ use crate::ui;
 use crate::project_manager;
 use crate::services::{SharedServices, GerberViewState, BoardGeometry};
 
-use crate::ui::{Tab, TabKind, TabViewer, initialize_and_show_banner, show_system_info};
+use crate::ui::{Tab, TabKind, TabViewer, show_banner, show_system_details, show_system_info};
 
 use crate::project::{load_demo_gerber, ProjectState, manager::ProjectConfig};
 use crate::display::GridSettings;
@@ -71,9 +71,19 @@ pub struct CopperForgeApp {
     perspectives: crate::perspectives::PerspectiveStore,
     /// "Save current as…" name buffer for the Perspectives menu.
     perspective_save_buf: String,
+    /// Whether the "Save perspective" modal is open. A modal — NOT an inline
+    /// text field in the menu popup, which egui closes on the first click
+    /// (the "hold the mouse for 3 seconds to type" bug).
+    show_save_perspective_modal: bool,
 
     // ── File dialogs (I/O handles) ────────────────────────────
     pub pcb_file_dialog: egui_file_dialog::FileDialog,
+    /// Generic gerber import: pick a folder of third-party fab gerbers
+    /// (Altium/Protel naming, Excellon drills) with no `.kicad_pcb` behind it.
+    pub gerber_dir_dialog: egui_file_dialog::FileDialog,
+    /// Last directory imported via the generic flow — re-pick guard, same
+    /// pattern as `last_picked_pcb_file`.
+    pub last_picked_gerber_dir: Option<PathBuf>,
     pub last_picked_pcb_file: Option<PathBuf>,
     pub projects_directory_dialog: egui_file_dialog::FileDialog,
     pub last_picked_projects_directory: Option<PathBuf>,
@@ -84,6 +94,7 @@ pub struct CopperForgeApp {
     /// ViewSettings, Project, Projects, Settings) are still created fresh
     /// per frame in tabs.rs since they have nothing to carry.
     pub bom_panel: crate::panels::BomPanel,
+    pub board_stats_panel: crate::panels::BoardStatsPanel,
     pub terminal_panel: crate::panels::TerminalPanel,
     pub logger_panel: crate::panels::LoggerPanel,
     pub gerber_view_3d_panel: crate::panels::GerberView3dPanel,
@@ -104,6 +115,11 @@ pub struct CopperForgeApp {
     /// [`CopperForgeApp::register_panel`]. Dispatched through the
     /// `DockPanel` trait — core never names them. Empty by default.
     pub plugin_panels: Vec<Box<dyn crate::dock_panel::DockPanel>>,
+
+    /// Startup lifecycle FSM (control plane). Runs Init → ClearData →
+    /// SystemInfo → ConnectCheck → Run, one transition per frame, before
+    /// normal rendering. See [`crate::fsm`].
+    pub startup: crate::fsm::StartupPhase,
 
     // ── App-shell modal flags ─────────────────────────────────
     // Which app-level modal is open. These are shell concerns — not citizen
@@ -434,6 +450,7 @@ impl CopperForgeApp {
             gerber_view: GerberViewState::default(),
             board_geometry_gen: 0,
             geometry: BoardGeometry::default(),
+            autodim: crate::services::AutodimState::default(),
             display_manager: DisplayManager::new(),
             drc_manager: DrcManager::new(),
             grid_settings: GridSettings::default(),
@@ -449,10 +466,9 @@ impl CopperForgeApp {
 
         // ── Stage 5: Register citizens ───────────────────────────
         let mut registry = egui_citizen::Registry::new();
-        use egui_citizen::message::CitizenId;
         for id in [
             "gerber_view", "gerber_view_3d", "view_settings", "drc",
-            "settings", "bom",
+            "settings", "bom", "board_stats",
             "terminal", "logger",
         ] {
             registry.add().with_name(id);
@@ -464,17 +480,13 @@ impl CopperForgeApp {
         registry.activate("gerber_view");
         let _ = registry.drain_messages();
 
-        // Restore the working layout, then let a saved default perspective
-        // override it on startup (plugin tabs are re-added by `register_panel`,
-        // so strip any persisted ones first).
+        // Restore the working layout. The saved *default perspective* is NOT
+        // applied here — it's applied by the FSM's LoadPerspective phase,
+        // which runs after `register_panel` so plugin tabs are re-added
+        // correctly. (Applying it here, before panels register, was why
+        // perspectives didn't take on startup.)
         let perspectives = crate::perspectives::PerspectiveStore::load();
-        let mut dock_state = Self::create_default_dock_state();
-        if let Some(json) = perspectives.default_json() {
-            if let Ok(mut ds) = serde_json::from_str::<DockState<Tab>>(json) {
-                ds.retain_tabs(|tab| !matches!(&tab.kind, TabKind::Plugin(_)));
-                dock_state = ds;
-            }
-        }
+        let dock_state = Self::create_default_dock_state();
         // Seed the change-detector with the restored/default layout so we only
         // write once the user actually rearranges something.
         let last_layout = serde_json::to_string(&dock_state).ok();
@@ -487,29 +499,174 @@ impl CopperForgeApp {
             last_layout,
             perspectives,
             perspective_save_buf: String::new(),
+            show_save_perspective_modal: false,
             pcb_file_dialog: egui_file_dialog::FileDialog::new(),
             last_picked_pcb_file: None,
+            gerber_dir_dialog: egui_file_dialog::FileDialog::new(),
+            last_picked_gerber_dir: None,
             projects_directory_dialog: egui_file_dialog::FileDialog::new(),
             last_picked_projects_directory: None,
             bom_panel: crate::panels::BomPanel::new(egui_citizen::CitizenState::default()),
+            board_stats_panel: crate::panels::BoardStatsPanel::new(egui_citizen::CitizenState::default()),
             terminal_panel: crate::panels::TerminalPanel::new(egui_citizen::CitizenState::default()),
             logger_panel: crate::panels::LoggerPanel::new(egui_citizen::CitizenState::default()),
             gerber_view_3d_panel: crate::panels::GerberView3dPanel::new(egui_citizen::CitizenState::default()),
             gl_context: None,
             projects_panel: crate::panels::ProjectsPanel::new(projects_citizen_state),
             plugin_panels: Vec::new(),
+            startup: crate::fsm::StartupPhase::Init,
             show_about_modal: false,
             show_kicad_version_modal: false,
             show_cuforge_services_modal: false,
         };
 
-        let logger = ReactiveEventLogger::with_colors(&app.services.logger_state, &app.services.log_colors);
-        initialize_and_show_banner(&logger);
+        // Banner + system info are emitted by the startup FSM's SystemInfo
+        // phase (see `advance_startup`), not here — so they land in the
+        // defined lifecycle order after the ClearData reset.
         app.prune_stale_project_state();
 
         app.reset_view(dummy_viewport);
 
         app
+    }
+
+    /// Drive the startup lifecycle FSM one transition per frame:
+    /// Init → ClearData → SystemInfo → ConnectCheck → Run. See [`crate::fsm`].
+    fn advance_startup(&mut self, ctx: &egui::Context) {
+        use crate::fsm::StartupPhase as P;
+        if self.startup.is_running() {
+            return;
+        }
+        // Keep frames coming so the FSM advances without user input. Bounded:
+        // stops as soon as we reach Run (the early return above).
+        ctx.request_repaint();
+
+        // Each arm creates its logger locally so it never holds an immutable
+        // borrow of `self` across the `&mut self` transition work.
+        self.startup = match self.startup.clone() {
+            P::Init => {
+                self.log_startup(false, "Startup: init");
+                P::LoadSettings
+            }
+            P::LoadSettings => {
+                self.load_settings();
+                self.log_startup(false, "Startup: settings loaded (time format, timezone)");
+                P::LoadPerspective
+            }
+            P::LoadPerspective => {
+                // Applied here — after register_panel — so the perspective's
+                // plugin tabs are re-added via apply_perspective. (Applying it
+                // in new(), before panels registered, was the startup bug.)
+                let json = self.perspectives.default_json().cloned();
+                let name = self
+                    .perspectives
+                    .default_name()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| "?".into());
+                if let Some(json) = json {
+                    match self.apply_perspective(&json) {
+                        Ok(()) => self.log_startup(
+                            false,
+                            &format!("Startup: applied default perspective '{name}'"),
+                        ),
+                        Err(e) => self.log_startup(
+                            true,
+                            &format!("Startup: default perspective '{name}' NOT applied — {e}"),
+                        ),
+                    }
+                }
+                P::ClearData
+            }
+            P::ClearData => {
+                self.clear_recursive_data();
+                self.log_startup(false, "Startup: cleared derived data + displays");
+                P::Banner
+            }
+            P::Banner => {
+                let logger = ReactiveEventLogger::with_colors(
+                    &self.services.logger_state,
+                    &self.services.log_colors,
+                );
+                show_banner(&logger);
+                P::SystemInfo
+            }
+            P::SystemInfo => {
+                {
+                    let logger = ReactiveEventLogger::with_colors(
+                        &self.services.logger_state,
+                        &self.services.log_colors,
+                    );
+                    show_system_details(&logger);
+                }
+                // Begin the backend health poll (connect attempt).
+                crate::cuforge_client::spawn_health_poller(
+                    crate::cuforge_client::base_url(),
+                    self.services.cuforge_status.clone(),
+                    ctx.clone(),
+                );
+                P::ConnectCheck {
+                    since: std::time::Instant::now(),
+                }
+            }
+            P::ConnectCheck { since } => {
+                use crate::cuforge_client::CuforgeStatus as S;
+                match self.services.cuforge_status.get() {
+                    S::Connected { version, .. } => {
+                        self.log_startup(
+                            false,
+                            &format!("Backend connected (cuforge-services v{version})"),
+                        );
+                        P::Run
+                    }
+                    S::Disconnected { reason } => {
+                        self.log_startup(
+                            true,
+                            &format!("Backend not connected: {reason} — continuing"),
+                        );
+                        P::Run
+                    }
+                    // Still Unknown/Checking — wait, but never wedge startup.
+                    _ if since.elapsed().as_secs_f32() > crate::fsm::CONNECT_DEADLINE_SECS => {
+                        self.log_startup(true, "Backend connection timed out — continuing");
+                        P::Run
+                    }
+                    _ => P::ConnectCheck { since },
+                }
+            }
+            P::Run => P::Run,
+        };
+    }
+
+    /// Emit one startup-lifecycle log line with a short-lived logger, so
+    /// callers don't hold a `self.services` borrow across FSM mutations.
+    fn log_startup(&self, warn: bool, msg: &str) {
+        let logger =
+            ReactiveEventLogger::with_colors(&self.services.logger_state, &self.services.log_colors);
+        if warn {
+            logger.log_warning(msg);
+        } else {
+            logger.log_info(msg);
+        }
+    }
+
+    /// Re-read the config and apply user settings to the shared services —
+    /// the FSM's LoadSettings phase. `new()` bootstraps these to construct the
+    /// app; this re-applies them in the defined lifecycle order.
+    fn load_settings(&mut self) {
+        if let Ok(config) = ProjectConfig::load_from_file(&self.services.config_path) {
+            self.services.user_timezone = config.user_timezone.clone();
+            self.services.use_24_hour_clock = config.use_24_hour_clock;
+        }
+    }
+
+    /// Reset all derived / "recursive" data + displays to a known-empty
+    /// state — the FSM's ClearData phase. Mirrors the project-switch clear so
+    /// nothing stale from a prior run lingers in the 2D/3D views or overlays.
+    fn clear_recursive_data(&mut self) {
+        self.services.layer_store.clear_all();
+        self.services.geometry = crate::services::BoardGeometry::default();
+        self.services.board_geometry_gen = self.services.board_geometry_gen.wrapping_add(1);
+        self.services.gerber_view.needs_initial_view = true;
     }
 
     /// Prune project_state if its on-disk artifacts no longer exist.
@@ -912,10 +1069,12 @@ impl CopperForgeApp {
     /// Apply a saved perspective: replace the dock layout with the
     /// perspective's, then re-add the registered plugin tabs (their positions
     /// aren't persisted — indices aren't stable across runs).
-    fn apply_perspective(&mut self, json: &str) {
-        let Ok(mut ds) = serde_json::from_str::<DockState<Tab>>(json) else {
-            return;
-        };
+    fn apply_perspective(&mut self, json: &str) -> Result<(), String> {
+        // Surface the deserialize error instead of swallowing it — a schema
+        // drift (Tab/TabKind changed since the perspective was saved) is the
+        // usual reason a "restore" silently does nothing.
+        let mut ds = serde_json::from_str::<DockState<Tab>>(json)
+            .map_err(|e| format!("perspective layout failed to parse: {e}"))?;
         ds.retain_tabs(|tab| !matches!(&tab.kind, TabKind::Plugin(_)));
         self.dock_state = ds;
         for idx in 0..self.plugin_panels.len() {
@@ -925,6 +1084,7 @@ impl CopperForgeApp {
         // Sync the change-detector so applying doesn't immediately rewrite the
         // working-layout file with the just-applied state.
         self.last_layout = serde_json::to_string(&self.dock_state).ok();
+        Ok(())
     }
 
     pub fn register_panel(&mut self, panel: Box<dyn crate::dock_panel::DockPanel>) {
@@ -950,6 +1110,7 @@ impl CopperForgeApp {
         let logger_tab = Tab::new(TabKind::Logger, SurfaceIndex::main(), NodeIndex(5));
         let terminal_tab = Tab::new(TabKind::Terminal, SurfaceIndex::main(), NodeIndex(6));
         let bom_tab = Tab::new(TabKind::BOM, SurfaceIndex::main(), NodeIndex(7));
+        let board_tab = Tab::new(TabKind::Board, SurfaceIndex::main(), NodeIndex(8));
 
         // Gerber 2D + 3D share the main pane as sibling tabs.
         let mut dock_state = DockState::new(vec![gerber_tab, gerber_3d_tab]);
@@ -965,7 +1126,7 @@ impl CopperForgeApp {
 
         let _ = left; // no bottom split; Projects already uses the full left.
         surface.split_below(right, 0.5, vec![logger_tab, terminal_tab, bom_tab]);
-        surface.split_right(right, 0.5, vec![drc_tab, view_settings_tab]);
+        surface.split_right(right, 0.5, vec![drc_tab, view_settings_tab, board_tab]);
         dock_state
     }
 }
@@ -976,18 +1137,11 @@ impl eframe::App for CopperForgeApp {
     // clone, owned so it doesn't borrow `ui` (frees it for `show_inside` below).
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        // First-frame: spawn the cuforge-services health poller. Single
-        // background thread; updates self.services.cuforge_status and
-        // calls ctx.request_repaint() on every status change.
-        use std::sync::OnceLock;
-        static CUFORGE_POLLER: OnceLock<()> = OnceLock::new();
-        CUFORGE_POLLER.get_or_init(|| {
-            crate::cuforge_client::spawn_health_poller(
-                crate::cuforge_client::base_url(),
-                self.services.cuforge_status.clone(),
-                ctx.clone(),
-            );
-        });
+        // Startup lifecycle FSM: one transition per frame until Run. Handles
+        // clearing derived data, emitting the banner + system info, and
+        // spawning/awaiting the backend health poller. UI keeps rendering
+        // throughout so the window is responsive during bring-up.
+        self.advance_startup(&ctx);
 
         // Cache the glow context once — it lives for the app's lifetime, so
         // subsequent frames skip this. Panels reach it via `app.gl_context`.
@@ -1055,7 +1209,8 @@ impl eframe::App for CopperForgeApp {
                             }
                             LayerType::MechanicalOutline
                             | LayerType::Drill
-                            | LayerType::UserLayer(_) => {
+                            | LayerType::UserLayer(_)
+                            | LayerType::UserComments => {
                                 self.services.layer_store.get_visibility(layer_type)
                             }
                         };
@@ -1169,11 +1324,10 @@ impl eframe::App for CopperForgeApp {
         // Perspective-menu intents, applied after the ribbon closure so we
         // don't borrow `self` mutably while the menu reads `self.perspectives`.
         let mut persp_apply: Option<String> = None;
-        let mut persp_save: Option<String> = None;
         let mut persp_delete: Option<String> = None;
         let mut persp_set_default: Option<Option<String>> = None;
 
-        egui::TopBottomPanel::top("project_ribbon").show_inside(ui, |ui| {
+        egui::Panel::top("project_ribbon").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 10.0;
 
@@ -1206,6 +1360,85 @@ impl eframe::App for CopperForgeApp {
                         if let Some(path_buf) = self.update_pcb_file_dialog(ui.ctx()) {
                             let logger = ReactiveEventLogger::with_colors(&self.services.logger_state, &self.services.log_colors);
                             logger.log_info(&format!("Selected PCB file: {}", path_buf.display()));
+                        }
+                    });
+                });
+
+                // Generic (no-KiCad) import: a bare folder of fab gerbers —
+                // Altium/Protel extensions, `Gerber/` + `NC Drill/` splits,
+                // Excellon drills. View-only: doesn't touch project state.
+                ui.group(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("🗀 Gerbers:");
+                        if ui
+                            .button("Import Folder...")
+                            .on_hover_text(
+                                "Load a folder of generic gerbers (Altium/Protel/KiCad \
+                                 naming, Excellon drills) without a KiCad project.",
+                            )
+                            .clicked()
+                        {
+                            self.gerber_dir_dialog.pick_directory();
+                        }
+                        if let Some(dir) = self
+                            .gerber_dir_dialog
+                            .update(ui.ctx())
+                            .picked()
+                            .map(|p| p.to_path_buf())
+                        {
+                            if self.last_picked_gerber_dir.as_ref() != Some(&dir) {
+                                self.last_picked_gerber_dir = Some(dir.clone());
+                                // Clone the Arc-backed logger handles so the
+                                // logger doesn't hold a borrow of `services`
+                                // across the &mut load call.
+                                let logger_state = self.services.logger_state.clone();
+                                let log_colors = self.services.log_colors.clone();
+                                let logger =
+                                    ReactiveEventLogger::with_colors(&logger_state, &log_colors);
+                                logger.log_info(&format!("Importing gerber folder: {}", dir.display()));
+                                crate::project::gerber_ops::load_gerbers_generic(
+                                    &mut self.services,
+                                    &dir,
+                                    &logger,
+                                );
+                                self.gerber_view_3d_panel.mark_dirty();
+
+                                // Register a gerber-only project so the import
+                                // persists: shows in the Projects panel, reloads
+                                // on click, and survives restarts. Idempotent on
+                                // re-import of the same folder. The panel inits
+                                // the manager lazily — mirror that here since
+                                // the import can run before the panel is shown.
+                                if self.projects_panel.panel_state.project_manager_state.is_none() {
+                                    let mut state = crate::project_manager::ProjectManagerState::with_config(&self.services.config);
+                                    if let Err(e) = state.initialize_database(&self.services.project_db) {
+                                        logger.log_error(&format!("Failed to initialize project database: {}", e));
+                                    }
+                                    self.projects_panel.panel_state.project_manager_state = Some(state);
+                                }
+                                if let Some(pm) = self.projects_panel.panel_state.project_manager_state.as_mut() {
+                                    let name = dir
+                                        .file_name()
+                                        .map(|n| n.to_string_lossy().into_owned())
+                                        .unwrap_or_else(|| dir.display().to_string());
+                                    match pm.create_or_open_gerber_project(name, dir.clone()) {
+                                        Ok(id) => logger.log_info(&format!("Gerber project registered (ID: {id})")),
+                                        Err(e) => logger.log_error(&format!("Could not register gerber project: {e}")),
+                                    }
+                                }
+                                // Mark the session Ready: pcb_path == gerber_dir
+                                // is the gerber-only convention (there is no PCB).
+                                let last_modified = std::fs::metadata(&dir)
+                                    .and_then(|m| m.modified())
+                                    .unwrap_or(std::time::SystemTime::now());
+                                self.services.project_state.set(
+                                    crate::project::ProjectState::Ready {
+                                        pcb_path: dir.clone(),
+                                        gerber_dir: dir.clone(),
+                                        last_modified,
+                                    },
+                                );
+                            }
                         }
                     });
                 });
@@ -1243,15 +1476,12 @@ impl eframe::App for CopperForgeApp {
                         }
 
                         ui.separator();
-                        ui.label("Save current layout as:");
-                        ui.horizontal(|ui| {
-                            ui.text_edit_singleline(&mut self.perspective_save_buf);
-                            let can = !self.perspective_save_buf.trim().is_empty();
-                            if ui.add_enabled(can, egui::Button::new("💾 Save")).clicked() {
-                                persp_save = Some(self.perspective_save_buf.trim().to_string());
-                                ui.close();
-                            }
-                        });
+                        // Opens a modal — a text field inside this menu popup
+                        // would close the menu on the first click.
+                        if ui.button("💾 Save current layout as…").clicked() {
+                            self.show_save_perspective_modal = true;
+                            ui.close();
+                        }
 
                         if !names.is_empty() {
                             ui.separator();
@@ -1322,19 +1552,59 @@ impl eframe::App for CopperForgeApp {
 
         // Apply Perspectives-menu intents (deferred out of the closure).
         if let Some(json) = persp_apply {
-            self.apply_perspective(&json);
-        }
-        if let Some(name) = persp_save {
-            if let Ok(json) = serde_json::to_string(&self.dock_state) {
-                self.perspectives.save(name, json);
+            if let Err(e) = self.apply_perspective(&json) {
+                let logger = ReactiveEventLogger::with_colors(
+                    &self.services.logger_state,
+                    &self.services.log_colors,
+                );
+                logger.log_warning(&format!("Perspective not applied — {e}"));
             }
-            self.perspective_save_buf.clear();
         }
         if let Some(name) = persp_delete {
             self.perspectives.delete(&name);
         }
         if let Some(d) = persp_set_default {
             self.perspectives.set_default(d);
+        }
+
+        // Save-perspective modal — text input in a proper window, not the
+        // menu popup (which closes on the first click).
+        if self.show_save_perspective_modal {
+            let mut close = false;
+            let mut do_save = false;
+            egui::Window::new("Save perspective")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .show(&ctx, |ui| {
+                    ui.label("Perspective name:");
+                    let resp = ui.text_edit_singleline(&mut self.perspective_save_buf);
+                    resp.request_focus();
+                    let can = !self.perspective_save_buf.trim().is_empty();
+                    let enter = can && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        if ui.add_enabled(can, egui::Button::new("💾 Save")).clicked() || enter {
+                            do_save = true;
+                        }
+                        if ui.button("Cancel").clicked()
+                            || ui.input(|i| i.key_pressed(egui::Key::Escape))
+                        {
+                            close = true;
+                        }
+                    });
+                });
+            if do_save {
+                let name = self.perspective_save_buf.trim().to_string();
+                if let Ok(json) = serde_json::to_string(&self.dock_state) {
+                    self.perspectives.save(name, json);
+                }
+                close = true;
+            }
+            if close {
+                self.perspective_save_buf.clear();
+                self.show_save_perspective_modal = false;
+            }
         }
 
         // Main dock area below the ribbon
@@ -1345,7 +1615,7 @@ impl eframe::App for CopperForgeApp {
                 app: self,
                 registry: &mut registry,
             };
-            let mut style = Style::from_egui(ctx.style().as_ref());
+            let mut style = Style::from_egui(ctx.global_style().as_ref());
             style.dock_area_padding = None;
             style.tab_bar.fill_tab_bar = true;
 

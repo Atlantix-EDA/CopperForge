@@ -5,7 +5,7 @@ pub mod kicad_global_libs;
 pub mod kicad_metadata;
 pub mod kicad_hierarchy;
 
-use database::{ProjectDatabase, ProjectData, ProjectMetadata, generate_project_id, ProjectDatabaseError};
+use database::{ProjectDatabase, ProjectData, ProjectKind, ProjectMetadata, generate_project_id, ProjectDatabaseError};
 use bom::BomComponent;
 use std::path::PathBuf;
 use chrono::Utc;
@@ -218,6 +218,7 @@ impl ProjectManagerState {
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 tags,
                 parent_id: self.new_project_parent_id.clone(),
+                kind: ProjectKind::KiCad,
             };
             
             let project_data = ProjectData {
@@ -239,6 +240,56 @@ impl ProjectManagerState {
         } else {
             Err(ProjectDatabaseError::DatabaseRead("Database not initialized".to_string()))
         }
+    }
+
+    /// Create — or return the existing — gerber-only project backed by an
+    /// imported fab folder. Unlike [`Self::create_project`], re-importing the
+    /// same directory is NOT an error: the record is found by its path and
+    /// returned (touch semantics), so the "Import Folder…" button is
+    /// idempotent. `gerber_dir` lands in `pcb_file_path` per the
+    /// [`ProjectKind::GerberOnly`] convention.
+    pub fn create_or_open_gerber_project(
+        &mut self,
+        name: String,
+        gerber_dir: PathBuf,
+    ) -> Result<String, ProjectDatabaseError> {
+        let Some(ref database) = self.database else {
+            return Err(ProjectDatabaseError::DatabaseRead(
+                "Database not initialized".to_string(),
+            ));
+        };
+        if let Some(existing) = database.find_project_by_pcb_path(&gerber_dir)? {
+            let id = existing.metadata.id.clone();
+            self.current_project = Some(existing);
+            return Ok(id);
+        }
+
+        let project_id = generate_project_id();
+        let now = Utc::now();
+        let metadata = ProjectMetadata {
+            id: project_id.clone(),
+            name,
+            description: "Imported gerber folder (no source project)".to_string(),
+            pcb_file_path: gerber_dir,
+            created_at: now,
+            last_modified: now,
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            tags: vec!["gerber-import".to_string()],
+            parent_id: None,
+            kind: ProjectKind::GerberOnly,
+        };
+        let project_data = ProjectData {
+            metadata,
+            bom_components: Vec::new(),
+            notes: String::new(),
+            releases: Vec::new(),
+            hierarchy: None,
+        };
+        database.save_project(&project_data)?;
+        self.project_list = database.list_projects()?;
+        self.current_project = Some(project_data);
+        self.update_recent_project_names();
+        Ok(project_id)
     }
 
     /// Load a project

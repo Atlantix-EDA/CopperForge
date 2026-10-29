@@ -435,13 +435,13 @@ impl WebApp {
         }
 
         // ── Wheel zoom anchored at the cursor ───────────────────────
-        // Mirrors copperforge-core's handle_mouse_wheel_zoom: read
-        // raw_scroll_delta, multiply scale by 1.1 per notch, then shift
+        // Mirrors copperforge-core's handle_mouse_wheel_zoom: read the
+        // scroll delta, multiply scale by 1.1 per notch, then shift
         // translation so the gerber point under the cursor stays under
-        // the cursor. smooth_scroll_delta was wrong — it's zero unless
-        // there's already an animation in flight.
+        // the cursor. egui 0.34 removed raw_scroll_delta; the native
+        // views read smooth_scroll_delta now — same here.
         if response.hovered() {
-            let scroll = ui.input(|i| i.raw_scroll_delta.y);
+            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll != 0.0 {
                 if let Some(mouse_pos) = response.hover_pos() {
                     let zoom_factor = if scroll > 0.0 { 1.1 } else { 1.0 / 1.1 };
@@ -1399,7 +1399,11 @@ impl WebApp {
 }
 
 impl eframe::App for WebApp {
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+    // eframe 0.34: `update` is deprecated in favour of `ui` (the runner hands
+    // us a root Ui). Everything here drives ctx-level panels, so derive the
+    // Context — a cheap Arc clone (same migration as the native app).
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let ctx = &ui.ctx().clone();
         self.drain_pending();
 
         // Stash the WebGL2 context for the 3D tab. `render_*_tab` only
@@ -1408,7 +1412,7 @@ impl eframe::App for WebApp {
         self.gl = frame.gl().cloned();
 
         // ── Top bar ─────────────────────────────────────────────────
-        egui::TopBottomPanel::top("top_bar")
+        egui::Panel::top("top_bar")
             .exact_height(36.0)
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
@@ -1663,7 +1667,7 @@ impl eframe::App for WebApp {
 
         // ── Bottom status bar: cursor coordinates ──────────────────
         if self.scene.is_some() {
-            egui::TopBottomPanel::bottom("status_bar")
+            egui::Panel::bottom("status_bar")
                 .exact_height(22.0)
                 .show(ctx, |ui| {
                     ui.horizontal_centered(|ui| {
@@ -1752,7 +1756,7 @@ impl eframe::App for WebApp {
             let copper_soft = egui::Color32::from_rgb(170, 140, 110);
             let body = egui::Color32::from_rgb(210, 205, 195);
             let muted = egui::Color32::from_rgb(150, 145, 135);
-            let frame = egui::Frame::window(&ctx.style())
+            let frame = egui::Frame::window(&ctx.global_style())
                 .fill(bg)
                 .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(70, 60, 50)))
                 .corner_radius(8.0)
@@ -1852,7 +1856,7 @@ impl eframe::App for WebApp {
             // drags/splits persist across frames.
             let mut dock_state = self.dock_state.clone();
             {
-                let style = egui_dock::Style::from_egui(ctx.style().as_ref());
+                let style = egui_dock::Style::from_egui(ctx.global_style().as_ref());
                 let mut viewer = TabViewer { app: self };
                 DockArea::new(&mut dock_state)
                     .style(style)

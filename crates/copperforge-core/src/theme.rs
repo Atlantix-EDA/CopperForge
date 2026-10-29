@@ -83,11 +83,11 @@ const BASE_FONT_SIZES: &[(egui::TextStyle, f32)] = &[
 /// Apply a font scale percentage (100 = default egui sizes).
 pub fn apply_font_scale(ctx: &egui::Context, scale_pct: u32) {
     let factor = scale_pct as f32 / 100.0;
-    let mut style = (*ctx.style()).clone();
+    let mut style = (*ctx.global_style()).clone();
     for (text_style, base_size) in BASE_FONT_SIZES {
         if let Some(font_id) = style.text_styles.get_mut(text_style) {
             font_id.size = base_size * factor;
         }
     }
-    ctx.set_style(style);
+    ctx.set_global_style(style);
 }

@@ -123,6 +123,36 @@ pub struct BoardGeometry {
     pub drill: Option<crate::gerber_geom::DrillData>,
 }
 
+/// Auto-dimension overlay state: control flag, cached result, the geometry
+/// generation it was computed for, and per-dimension drag offsets (mm,
+/// index-aligned with `result.dimensions`).
+#[derive(Default)]
+pub struct AutodimState {
+    pub show: bool,
+    pub result: Option<::services::autodim::AutodimResponse>,
+    pub computed_gen: Option<u64>,
+    pub offsets: Vec<[f64; 2]>,
+    /// Index of the dimension the user is currently dragging, if any. Indexes
+    /// the combined [auto dimensions .. manual dimensions] space.
+    pub dragging: Option<usize>,
+    /// Dimension currently under the cursor (same combined index space) —
+    /// highlighted yellow.
+    pub hovered: Option<usize>,
+    /// Auto-dimension indices the user has deleted (hidden). Cleared when the
+    /// auto result is recomputed. Manual dimensions are deleted outright.
+    pub hidden: std::collections::HashSet<usize>,
+
+    // ── Manual dimensions (placed by the user, persist across reloads) ──
+    /// User-placed dimensions.
+    pub manual: Vec<::services::autodim::DimensionLine>,
+    /// Drag offsets for `manual`, index-aligned.
+    pub manual_offsets: Vec<[f64; 2]>,
+    /// Manual-dimension placement mode (two clicks: start, then end).
+    pub placing: bool,
+    /// First clicked point (mm) while placing, before the second click.
+    pub pending: Option<[f64; 2]>,
+}
+
 /// Every cross-panel fact lives here. Populated once at init.
 pub struct SharedServices {
     // ── Reactive (observable across panels) ───────────────────
@@ -163,6 +193,11 @@ pub struct SharedServices {
     // ── 3D pipeline geometry (FDD Stage 3-6 output) ───────────
     /// Extracted board geometry IR (outline / copper / mask / drill), grouped.
     pub geometry: BoardGeometry,
+
+    /// Auto-dimension overlay: toggled from the gerber view's right-click
+    /// menu, computed in-process (`services::autodim`), drawn by the gerber
+    /// view. Control + cached result (data plane).
+    pub autodim: AutodimState,
 
     // ── Display / DRC / grid ──────────────────────────────────
     pub display_manager: DisplayManager,

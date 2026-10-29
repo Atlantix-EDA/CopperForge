@@ -50,12 +50,54 @@ struct OldProjectData {
     pub notes: String,
 }
 
+/// Mid-generation metadata format: has `parent_id`, predates `kind`.
+/// Needed because the store is bincode — NOT self-describing — so
+/// `#[serde(default)]` does nothing on read: every schema generation
+/// needs an explicit struct + migration branch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MidProjectMetadata {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub pcb_file_path: PathBuf,
+    pub created_at: DateTime<Utc>,
+    pub last_modified: DateTime<Utc>,
+    pub version: String,
+    pub tags: Vec<String>,
+    pub parent_id: Option<String>,
+}
+
+/// Mid-generation record: parent_id + releases era, before `kind`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MidProjectData {
+    pub metadata: MidProjectMetadata,
+    pub bom_components: Vec<BomComponent>,
+    pub notes: String,
+    #[serde(default)]
+    pub releases: Vec<crate::release::Release>,
+}
+
 /// Project metadata stored in the database
+/// What backs a project record. KiCad projects carry a `.kicad_pcb` and can
+/// regenerate gerbers via kicad-cli; gerber-only projects wrap an imported
+/// fab folder (Altium/third-party drops with no source) — for those,
+/// `pcb_file_path` holds the GERBER DIRECTORY and consumers must not expect
+/// a PCB file behind it. `#[serde(default)]` keeps pre-existing DB records
+/// readable (they're all KiCad).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ProjectKind {
+    #[default]
+    KiCad,
+    GerberOnly,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectMetadata {
     pub id: String,
     pub name: String,
     pub description: String,
+    /// The `.kicad_pcb` path for KiCad projects; the imported gerber
+    /// DIRECTORY for `ProjectKind::GerberOnly` (see [`ProjectKind`]).
     pub pcb_file_path: PathBuf,
     pub created_at: DateTime<Utc>,
     pub last_modified: DateTime<Utc>,
@@ -65,6 +107,8 @@ pub struct ProjectMetadata {
     /// None means this is a root-level project.
     #[serde(default)]
     pub parent_id: Option<String>,
+    #[serde(default)]
+    pub kind: ProjectKind,
 }
 
 /// Complete project data including BOM
@@ -154,6 +198,30 @@ impl ProjectDatabase {
         match bincode::deserialize::<ProjectData>(&bytes) {
             Ok(project) => Ok(Some(project)),
             Err(_) => {
+                // Try the pre-`kind` format (has parent_id + releases) and
+                // migrate. All pre-existing records are KiCad projects.
+                if let Ok(mid) = bincode::deserialize::<MidProjectData>(&bytes) {
+                    let migrated = ProjectData {
+                        metadata: ProjectMetadata {
+                            id: mid.metadata.id,
+                            name: mid.metadata.name,
+                            description: mid.metadata.description,
+                            pcb_file_path: mid.metadata.pcb_file_path,
+                            created_at: mid.metadata.created_at,
+                            last_modified: mid.metadata.last_modified,
+                            version: mid.metadata.version,
+                            tags: mid.metadata.tags,
+                            parent_id: mid.metadata.parent_id,
+                            kind: ProjectKind::KiCad,
+                        },
+                        bom_components: mid.bom_components,
+                        notes: mid.notes,
+                        releases: mid.releases,
+                        hierarchy: None,
+                    };
+                    self.save_project(&migrated)?;
+                    return Ok(Some(migrated));
+                }
                 // Try the pre-parent_id format and migrate.
                 match bincode::deserialize::<OldProjectData>(&bytes) {
                     Ok(old) => {
@@ -168,6 +236,7 @@ impl ProjectDatabase {
                                 version: old.metadata.version,
                                 tags: old.metadata.tags,
                                 parent_id: None,
+                                kind: ProjectKind::KiCad,
                             },
                             bom_components: old.bom_components,
                             notes: old.notes,
@@ -349,5 +418,58 @@ impl ProjectData {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pre-`kind` records must MIGRATE, not error. The store is bincode —
+    /// not self-describing — so adding a metadata field makes old bytes
+    /// unreadable by the new struct; without the Mid fallback the entire
+    /// existing project list would brick on first load after an upgrade.
+    #[test]
+    fn migrates_pre_kind_records() {
+        let dir = std::env::temp_dir().join(format!("cuforge-dbtest-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("test.redb");
+        let db = ProjectDatabase::new(&db_path).unwrap();
+
+        let mid = MidProjectData {
+            metadata: MidProjectMetadata {
+                id: "mid1".into(),
+                name: "Legacy".into(),
+                description: String::new(),
+                pcb_file_path: PathBuf::from("/tmp/x.kicad_pcb"),
+                created_at: Utc::now(),
+                last_modified: Utc::now(),
+                version: "0.6.0".into(),
+                tags: Vec::new(),
+                parent_id: None,
+            },
+            bom_components: Vec::new(),
+            notes: String::new(),
+            releases: Vec::new(),
+        };
+        let bytes = bincode::serialize(&mid).unwrap();
+        // Insert raw mid-format bytes + index entry, bypassing save_project.
+        let txn = db.db.begin_write().unwrap();
+        {
+            let mut t = txn.open_table(PROJECTS_TABLE).unwrap();
+            t.insert("project:mid1", bytes.as_slice()).unwrap();
+        }
+        txn.commit().unwrap();
+        db.write_index(&vec!["mid1".to_string()]).unwrap();
+
+        let loaded = db.load_project("mid1").unwrap().expect("mid record must migrate");
+        assert_eq!(loaded.metadata.kind, ProjectKind::KiCad);
+        assert_eq!(loaded.metadata.name, "Legacy");
+        // Second load reads the re-saved NEW-format bytes.
+        let again = db.load_project("mid1").unwrap().unwrap();
+        assert_eq!(again.metadata.kind, ProjectKind::KiCad);
+
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

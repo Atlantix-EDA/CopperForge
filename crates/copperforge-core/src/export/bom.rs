@@ -256,20 +256,24 @@ use crate::bom::schematic::SchBomLine;
 /// Atlantix-EDA cover logo, bundled with the app (no runtime path needed).
 const LOGO_PNG: &[u8] = include_bytes!("../../assets/atlantix-logo.png");
 
-/// Canonical release-BOM columns, matching the kiverse Python output.
-const RELEASE_COLUMNS: [&str; 12] = [
-    "Item", "Reference", "Qty", "Description",
-    "Manufacturer", "Manufacturer P/N", "LCSC #",
+/// Canonical release-BOM columns. Designator / Comment / Footprint /
+/// "JLCPCB Part #" are the exact header names JLCPCB's assembly upload
+/// parses (per their sample BOM) — do not rename without re-validating an
+/// upload. The rest matches the kiverse Python output.
+const RELEASE_COLUMNS: [&str; 13] = [
+    "Item", "Designator", "Qty", "Comment", "Footprint",
+    "Manufacturer", "Manufacturer P/N", "JLCPCB Part #",
     "Vendor 1", "Vendor 1 P/N", "Vendor 2", "Vendor 2 P/N", "DNP",
 ];
 
 /// Each release column's value for `line`, in `RELEASE_COLUMNS` order.
-fn release_cells(line: &SchBomLine) -> [String; 12] {
+fn release_cells(line: &SchBomLine) -> [String; 13] {
     [
         line.item.to_string(),
         line.reference.clone(),
         line.qty.clone(),
         line.description.clone(),
+        crate::export::footprint_name(&line.footprint).to_string(),
         line.manufacturer.clone(),
         line.mpn.clone(),
         line.lcsc.clone(),
@@ -311,6 +315,22 @@ pub fn write_release_bom_xlsx(
     cov.set_name("Cover").map_err(xlsx_err)?;
     write_release_cover_sheet(cov, cover)?;
 
+    let bom = workbook.add_worksheet();
+    bom.set_name("BOM").map_err(xlsx_err)?;
+    write_release_bom_sheet(bom, lines)?;
+
+    workbook
+        .save(path)
+        .map_err(|e| format!("Failed to write BOM XLSX {}: {}", path.display(), e))
+}
+
+/// Write the cover-less release workbook (`<name>-bom-simple.xlsx`): the
+/// same BOM sheet as [`write_release_bom_xlsx`] with no Cover page —
+/// assembly-house uploads (JLCPCB et al.) want the table on sheet 1.
+pub fn write_release_bom_simple_xlsx(lines: &[SchBomLine], path: &Path) -> Result<(), String> {
+    use rust_xlsxwriter::Workbook;
+
+    let mut workbook = Workbook::new();
     let bom = workbook.add_worksheet();
     bom.set_name("BOM").map_err(xlsx_err)?;
     write_release_bom_sheet(bom, lines)?;
@@ -473,7 +493,7 @@ fn write_release_bom_sheet(
         for (ci, col_name) in RELEASE_COLUMNS.iter().enumerate() {
             let fmt = match *col_name {
                 "Item" | "Qty" | "DNP" => &center,
-                "Reference" | "Description" => &wrap,
+                "Designator" | "Comment" => &wrap,
                 _ => &left,
             };
             // Item is numeric; everything else is text.
@@ -489,7 +509,7 @@ fn write_release_bom_sheet(
         }
     }
 
-    let widths = [6.0, 34.0, 6.0, 46.0, 18.0, 24.0, 14.0, 11.0, 18.0, 11.0, 18.0, 6.0];
+    let widths = [6.0, 34.0, 6.0, 46.0, 24.0, 18.0, 24.0, 14.0, 11.0, 18.0, 11.0, 18.0, 6.0];
     for (i, w) in widths.iter().enumerate() {
         sheet.set_column_width(i as u16, *w).map_err(xlsx_err)?;
     }

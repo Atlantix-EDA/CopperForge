@@ -25,6 +25,11 @@ fn side(layer: &str) -> &'static str {
 pub fn write_cpl_csv(entries: &[BomEntry], path: &Path) -> Result<(), String> {
     let mut out = String::from("Designator,Mid X,Mid Y,Layer,Rotation\n");
     for e in entries {
+        // Nothing is picked-and-placed at a mounting hole. Fiducials stay —
+        // they're the fab's vision-alignment targets.
+        if crate::export::is_mounting_hole(&e.footprint) {
+            continue;
+        }
         out.push_str(&format!(
             "{},{:.4},{:.4},{},{:.4}\n",
             csv_field(&e.reference),

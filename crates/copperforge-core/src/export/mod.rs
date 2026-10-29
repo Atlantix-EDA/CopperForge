@@ -39,11 +39,28 @@ pub(crate) fn package_from_footprint(footprint: &str) -> String {
     name.to_string()
 }
 
+/// Footprint name lowercased with `_`, `-` and spaces stripped — libraries
+/// spell the same thing `MountingHole`, `Mounting_Hole`, `Mounting-Hole`,
+/// `Mounting Hole`, so matching happens on this normalized form.
+fn normalized_footprint(footprint: &str) -> String {
+    footprint
+        .to_lowercase()
+        .chars()
+        .filter(|c| !matches!(c, '_' | '-' | ' '))
+        .collect()
+}
+
+/// True for mounting-hole footprints. Nothing is placed there, so besides
+/// the BOM they don't belong in placement (centroid) files either.
+pub(crate) fn is_mounting_hole(footprint: &str) -> bool {
+    normalized_footprint(footprint).contains("mountinghole")
+}
+
 /// True for footprints that are mechanical / fabrication aids rather than
 /// assembled parts (mounting holes, fiducials) and so do not belong in a BOM.
+/// Fiducials DO stay in centroid files — fabs use them for vision alignment.
 pub(crate) fn is_bom_excluded(footprint: &str) -> bool {
-    let f = footprint.to_lowercase();
-    f.contains("mountinghole") || f.contains("fiducial")
+    is_mounting_hole(footprint) || normalized_footprint(footprint).contains("fiducial")
 }
 
 /// Quote a string as a CSV field if it contains a comma, double-quote, CR or LF.
@@ -309,8 +326,8 @@ impl PngExporter {
                 // Via plugging is KiCad-specific manufacturing data; not
                 // rendered in the PNG quadrant export.
             }
-            LayerType::UserLayer(_) => {
-                // User layers (M1/M2/M10/M11/M12, etc.) are documentation —
+            LayerType::UserLayer(_) | LayerType::UserComments => {
+                // User layers (M1/M2/…, User.Comments) are documentation —
                 // not part of the quadrant-stack PNG export.
             }
         }

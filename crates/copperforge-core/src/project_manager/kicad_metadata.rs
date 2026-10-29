@@ -143,3 +143,31 @@ pub fn read_user_layer_names(
     }
     Ok(map)
 }
+
+/// Read user-defined renames of CANONICAL layers from the `(layers ...)`
+/// block: canonical name → user name, e.g. "Edge.Cuts" → "Multi-Layer",
+/// "F.Mask" → "Top Solder Mask Layer". Boards imported from other EDA tools
+/// (EasyEDA Pro keeps its own layer names) rename most canonical layers,
+/// and `kicad-cli` then names each exported gerber after the USER name —
+/// so these renames are the only way to bind `<project>-Multi-Layer.gbr`
+/// back to Edge.Cuts. `User.N` rows are excluded (see
+/// [`read_user_layer_names`]); rows without a rename are skipped.
+pub fn read_canonical_layer_renames(
+    pcb_path: &Path,
+) -> Result<std::collections::HashMap<String, String>, Box<dyn std::error::Error>> {
+    use regex::Regex;
+    let content = std::fs::read_to_string(pcb_path)?;
+    let re = Regex::new(
+        r#"\(\s*\d+\s+"([^"]+)"\s+(?:signal|user|power|mixed)\s+"([^"]+)"\s*\)"#,
+    )?;
+    let user_n = Regex::new(r"^User\.\d+$")?;
+    let mut map = std::collections::HashMap::new();
+    for caps in re.captures_iter(&content) {
+        let canonical = caps[1].to_string();
+        if user_n.is_match(&canonical) {
+            continue;
+        }
+        map.insert(canonical, caps[2].to_string());
+    }
+    Ok(map)
+}

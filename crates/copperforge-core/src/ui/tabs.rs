@@ -21,6 +21,8 @@ pub enum TabKind {
     Projects,  // Project database + tree + Import modal (replaced old Project tab)
     Settings,
     BOM,
+    /// Board statistics + manufacturability score (Citizen: "board_stats").
+    Board,
     /// A panel contributed by an external crate, indexed into
     /// `CopperForgeApp::plugin_panels`. Core dispatches to it through the
     /// `DockPanel` trait without knowing what it is.
@@ -40,6 +42,7 @@ impl TabKind {
             TabKind::Projects => CitizenId::new("projects"),
             TabKind::Settings => CitizenId::new("settings"),
             TabKind::BOM => CitizenId::new("bom"),
+            TabKind::Board => CitizenId::new("board_stats"),
             TabKind::Plugin(_) => CitizenId::new("plugin"),
         }
     }
@@ -86,6 +89,7 @@ impl Tab {
             TabKind::Projects => "Projects".to_string(),
             TabKind::Settings => "Settings".to_string(),
             TabKind::BOM => "BOM".to_string(),
+            TabKind::Board => "Board".to_string(),
             // Real title comes from the registered panel via
             // TabViewer::title (which has app access); fallback only.
             TabKind::Plugin(_) => "Plugin".to_string(),
@@ -175,6 +179,9 @@ impl Tab {
             }
             TabKind::BOM => {
                 params.app.bom_panel.show(ui, &mut params.app.services);
+            }
+            TabKind::Board => {
+                params.app.board_stats_panel.show(ui, &mut params.app.services);
             }
             TabKind::Plugin(_) => unreachable!("handled before the match"),
         }

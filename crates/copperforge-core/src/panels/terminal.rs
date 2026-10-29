@@ -83,7 +83,7 @@ impl TerminalPanel {
                             ui.memory_mut(|m| m.request_focus(text_id));
                         }
 
-                        if !response.has_focus() && !ui.ctx().wants_keyboard_input() {
+                        if !response.has_focus() && !ui.ctx().egui_wants_keyboard_input() {
                             ui.memory_mut(|m| m.request_focus(text_id));
                         }
                     });
@@ -498,6 +498,7 @@ fn new_project(
         version: env!("CARGO_PKG_VERSION").to_string(),
         tags: Vec::new(),
         parent_id: None,
+        kind: crate::project_manager::database::ProjectKind::KiCad,
     };
     let data = ProjectData {
         metadata,

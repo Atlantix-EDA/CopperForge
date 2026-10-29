@@ -1,0 +1,28 @@
+[package]
+name        = "services"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "CopperForge backend services (autodim, manuf, …) — one layer, callable in-process or served over HTTP"
+
+# The single backend-services layer for the open app. Each service is a
+# module here (autodim, manuf, and whatever comes next) — not a crate each.
+# Pure compute by default (no HTTP, no tokio), so `copperforge-core` calls it
+# in-process and it compiles on wasm32. The optional `serve` feature adds an
+# axum server exposing the same functions over HTTP (local self-host or
+# remote); off by default so bare/wasm builds never pull the server runtime.
+
+[features]
+default = []
+# Native-only HTTP server (axum). Enable to run the backend locally or
+# remotely; the in-process API is unchanged and always available.
+serve = ["dep:axum", "dep:tokio"]
+
+[dependencies]
+serde = { workspace = true }
+
+# Server layer — optional, native only.
+axum  = { version = "0.7", optional = true }
+tokio = { workspace = true, optional = true }

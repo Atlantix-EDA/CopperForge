@@ -426,15 +426,10 @@ pub fn show_projects_panel(
             } else {
                 // Successfully loaded project data, now restore the project state
                 if let Some(ref project) = manager_state.current_project {
-                    // 1. Set the PCB file path in the project manager
-                    services.project_state.set(crate::project::ProjectState::PcbSelected {
-                        pcb_path: project.metadata.pcb_file_path.clone(),
-                    });
-
-                    // 1b. Clear gerber-derived state so the previous project's
-                    // geometry doesn't linger in 2D or 3D until the new project's
-                    // gerbers are loaded (via Generate, Load, or right-click a
-                    // release → Load Release Gerbers).
+                    // 1b (first). Clear gerber-derived state so the previous
+                    // project's geometry doesn't linger in 2D or 3D until the
+                    // new project's gerbers are loaded (via Generate, Load, or
+                    // right-click a release → Load Release Gerbers).
                     services.layer_store.clear_all();
                     services.geometry.board_outline = None;
                     services.geometry.top_copper = None;
@@ -442,6 +437,31 @@ pub fn show_projects_panel(
                     services.geometry.top_mask = None;
                     services.geometry.bottom_mask = None;
                     services.gerber_view.needs_initial_view = true;
+
+                    // 1. Restore project state — by project kind.
+                    match project.metadata.kind {
+                        crate::project_manager::database::ProjectKind::KiCad => {
+                            services.project_state.set(crate::project::ProjectState::PcbSelected {
+                                pcb_path: project.metadata.pcb_file_path.clone(),
+                            });
+                        }
+                        crate::project_manager::database::ProjectKind::GerberOnly => {
+                            // No PCB to select and nothing to generate —
+                            // the stored path IS the gerber directory. Load
+                            // it immediately and land in Ready (pcb_path ==
+                            // gerber_dir is the gerber-only convention).
+                            let dir = project.metadata.pcb_file_path.clone();
+                            crate::project::gerber_ops::load_gerbers_generic(services, &dir, &logger);
+                            let last_modified = std::fs::metadata(&dir)
+                                .and_then(|m| m.modified())
+                                .unwrap_or(std::time::SystemTime::now());
+                            services.project_state.set(crate::project::ProjectState::Ready {
+                                pcb_path: dir.clone(),
+                                gerber_dir: dir,
+                                last_modified,
+                            });
+                        }
+                    }
 
                     // 2. Restore BOM components if available
                     if !project.bom_components.is_empty() {

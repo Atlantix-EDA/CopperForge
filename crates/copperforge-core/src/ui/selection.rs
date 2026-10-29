@@ -1,24 +1,19 @@
 use crate::platform::{banner, details};
 use crate::event_logger::ReactiveEventLogger;
 
-/// Initialize and display application banner and system information
-pub fn initialize_and_show_banner(
-    logger: &ReactiveEventLogger,
-) {
-    // Create and format banner
+/// Emit just the app banner to the logger — the FSM's Banner phase.
+pub fn show_banner(logger: &ReactiveEventLogger) {
     let mut app_banner = banner::Banner::new();
     app_banner.format();
-    
-    // Create and get system details
+    logger.log_info(&app_banner.message);
+}
+
+/// Emit just the OS / system details (from `platform::details`) to the
+/// logger — the FSM's SystemInfo phase.
+pub fn show_system_details(logger: &ReactiveEventLogger) {
     let mut system_details = details::Details::new();
     system_details.get_os();
-    
-    // Log system details first (will appear below in reverse chronological view)
-    let details_text = system_details.format_os();
-    logger.log_info(&details_text);
-    
-    // Log banner message last (will appear on top in reverse chronological view)
-    logger.log_info(&app_banner.message);
+    logger.log_info(&system_details.format_os());
 }
 
 /// Show system information on demand

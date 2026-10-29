@@ -20,4 +20,4 @@ pub use bom_panel_v2::{show_bom_panel, BomPanelState};
 pub use tabs::{Tab, TabKind, TabViewer};
 
 // Re-export selection functions
-pub use selection::{initialize_and_show_banner, show_system_info};
+pub use selection::{show_banner, show_system_details, show_system_info};

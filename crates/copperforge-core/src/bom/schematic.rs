@@ -18,6 +18,9 @@ pub struct SchBomLine {
     pub reference: String,
     pub qty: String,
     pub description: String,
+    /// Footprint as exported (e.g. "Resistor_SMD:R_0603_1608Metric"); the
+    /// library prefix is stripped at the export layer.
+    pub footprint: String,
     pub manufacturer: String,
     pub mpn: String,
     /// LCSC / JLCPCB part number (e.g. "C42411119"), from the "LCSC Part #"
@@ -52,12 +55,12 @@ pub fn export_sch_bom(
     let fields = "Reference,${QUANTITY},Value,Description,Footprint,\
         Manufacturer,Manufacturer_Name,MANUFACTURER,MF,\
         Manufacturer_Part_Number,MPN,Part Number,PART NUMBER,PARTNUMBER,Manufacturer P/N,\
-        Supplier,SupplierPN,Digi-Key Part Number,Mouser Part Number,\
+        Supplier,SupplierPN,Supplier Part,Digi-Key Part Number,Mouser Part Number,\
         LCSC Part #,LCSC PN,LCSC,${DNP}";
     let labels = "Reference,Qty,Value,Description,Footprint,\
         Mfr,Mfr_Name,MANUF,MF,\
         MPN_a,MPN_b,PartNum,PartNum2,PartNum3,PartNum4,\
-        Supplier,SupplierPN,DigiKeyPNField,MouserPNField,\
+        Supplier,SupplierPN,SupplierPart,DigiKeyPNField,MouserPNField,\
         LCSC_a,LCSC_b,LCSC_c,DNP";
 
     let raw_csv = stage_dir.join(".bom_raw.csv");
@@ -117,16 +120,30 @@ fn parse_bom_csv(content: &str, vendor1: &str, vendor2: &str) -> Vec<SchBomLine>
         if reference.is_empty() {
             continue;
         }
+        // Mounting holes, fiducials and the like are mechanical / fabrication
+        // aids, not orderable parts — same exclusion as the PCB-sourced BOM.
+        if crate::export::is_bom_excluded(&get("Footprint")) {
+            continue;
+        }
         let pn1 = vendor_pn(&header, &record, vendor1);
         let pn2 = vendor_pn(&header, &record, vendor2);
+        // EasyEDA(-Pro) imports store the C-code as "Supplier Part" with
+        // "Supplier" = LCSC — accept that pairing when no LCSC-named field
+        // carries a value, so imported projects produce a populated
+        // "JLCPCB Part #" column without per-symbol field surgery.
+        let mut lcsc = first_nonempty(&header, &record, &LCSC_LABELS);
+        if lcsc.is_empty() && get("Supplier").trim().eq_ignore_ascii_case("lcsc") {
+            lcsc = get("SupplierPart");
+        }
         out.push(SchBomLine {
             item: 0, // assigned below
             reference,
             qty: get("Qty"),
             description: get("Description"),
+            footprint: get("Footprint"),
             manufacturer: first_nonempty(&header, &record, &MFR_LABELS),
             mpn: first_nonempty(&header, &record, &MPN_LABELS),
-            lcsc: first_nonempty(&header, &record, &LCSC_LABELS),
+            lcsc,
             vendor1: if pn1.is_empty() { String::new() } else { vendor1.to_string() },
             vendor1_pn: pn1,
             vendor2: if pn2.is_empty() { String::new() } else { vendor2.to_string() },
@@ -271,6 +288,21 @@ mod tests {
         let lines = parse_bom_csv(csv, "Digi-Key", "Mouser");
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].lcsc, "C42411119");
+    }
+
+    #[test]
+    fn excludes_mounting_holes_and_fiducials() {
+        let csv = "Reference,Qty,Value,Description,Footprint,Mfr,Mfr_Name,MANUF,MF,MPN_a,MPN_b,PartNum,PartNum2,PartNum3,PartNum4,Supplier,SupplierPN,DigiKeyPNField,MouserPNField,DNP\n\
+            C1,1,100n,Cap,Capacitor_SMD:C_0603_1608Metric,KEMET,,,,C100,,,,,,,,,,\n\
+            MH2,1,MountingHole,\"Mounting hole, hole size 2.7mm\",MountingHole:MountingHole_2.7mm_M2.5,,,,,,,,,,,,,,,\n\
+            MH3,1,MountingHole,\"Mounting hole, hole size 2.7mm\",Mounting_Hole_Plated_2.7mm - d3.1mm,,,,,,,,,,,,,,,\n\
+            MH4,1,MountingHole,\"Mounting hole, hole size 2.7mm\",VITA_57_FMC:Mounting_Hole_Plated_2.7mm-COVERED,,,,,,,,,,,,,,,\n\
+            FID1,1,Fiducial,Fiducial mark,Fiducial:Fiducial_0.5mm_Mask1mm,,,,,,,,,,,,,,,\n";
+        let lines = parse_bom_csv(csv, "Digi-Key", "Mouser");
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].reference, "C1");
+        assert_eq!(lines[0].item, 1);
+        assert_eq!(lines[0].footprint, "Capacitor_SMD:C_0603_1608Metric");
     }
 
     #[test]

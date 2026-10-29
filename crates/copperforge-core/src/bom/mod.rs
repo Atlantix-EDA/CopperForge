@@ -241,6 +241,11 @@ fn pad_hole_counts(content: &str) -> (usize, usize, usize, usize) {
 pub fn cover_stats(entries: &[BomEntry], pcb_content: &str) -> CoverStats {
     let mut s = CoverStats::default();
     for e in entries {
+        // Mounting holes / fiducials aren't assembled components — keep them
+        // out of the cover sheet's SMT/TH placement counts.
+        if crate::export::is_bom_excluded(&e.footprint) {
+            continue;
+        }
         let bottom = {
             let l = e.layer.to_lowercase();
             l.starts_with('b') || l.contains("bottom")

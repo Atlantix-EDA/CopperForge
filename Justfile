@@ -1,5 +1,8 @@
 # Justfile for CopperForge Project Management
 
+# The cuforge-services backend repo lives beside this one.
+services_dir := "../cuforge-services"
+
 # Default recipe to display available commands
 default:
     @just --list
@@ -8,9 +11,52 @@ default:
 build:
     cargo build --release
 
-# Run CopperForge
-run:
+# Run CopperForge (starts cuforge-services first if it isn't already up)
+run: start-services
     cargo run --release
+
+# Run ONLY the CopperForge app (no backend startup)
+ui:
+    cargo run --release
+
+# Runs from the services repo root — the server's ./copperforge.db and
+# ./data/releases paths are relative to its cwd. Logs to
+# ../cuforge-services/cuforge-services.log.
+# Start cuforge-services in the background unless :8421 already answers
+start-services:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if curl -sf -m 2 http://127.0.0.1:8421/health >/dev/null 2>&1; then
+        echo "✅ cuforge-services already running on 127.0.0.1:8421"
+        exit 0
+    fi
+    echo "🚀 Starting cuforge-services (127.0.0.1:8421)..."
+    cd {{services_dir}}
+    cargo build --release
+    nohup ./target/release/cuforge-services >> cuforge-services.log 2>&1 &
+    echo $! > cuforge-services.pid
+    # Wait for /health so the app's status badge is green from the start.
+    for _ in $(seq 1 30); do
+        if curl -sf -m 2 http://127.0.0.1:8421/health >/dev/null 2>&1; then
+            echo "✅ cuforge-services is up (pid $(cat cuforge-services.pid))"
+            exit 0
+        fi
+        sleep 0.5
+    done
+    echo "⚠️  cuforge-services didn't answer /health within 15s — check {{services_dir}}/cuforge-services.log"
+
+# Stop a cuforge-services instance started by `just start-services`.
+stop-services:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    pidfile="{{services_dir}}/cuforge-services.pid"
+    if [ -f "${pidfile}" ] && kill "$(cat "${pidfile}")" 2>/dev/null; then
+        echo "🛑 Stopped cuforge-services (pid $(cat "${pidfile}"))"
+        rm -f "${pidfile}"
+    else
+        echo "No cuforge-services pidfile (or process already gone)."
+        rm -f "${pidfile}"
+    fi
 
 # Setup KiCad libraries (KiVerse + Atlantix-EDA resistors)
 setup-libraries:
@@ -145,3 +191,39 @@ show-lib-paths:
         echo "❌ KiVerse: Not installed"
         echo "   Run: just setup-libraries"
     fi
+
+# Install a desktop launcher (Linux Mint / Cinnamon): menu entry + icon.
+# Points at the cargo-installed binary; re-run after `cargo install` if the
+# binary location ever changes. Safe to re-run — it overwrites in place.
+install-launcher:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    BIN="${HOME}/.cargo/bin/copperforge"
+    if [ ! -x "${BIN}" ]; then
+        echo "❌ ${BIN} not found — run 'cargo install --path . --force' first"
+        exit 1
+    fi
+    install -Dm644 assets/media/copperforge-icon.png \
+        "${HOME}/.local/share/icons/hicolor/128x128/apps/copperforge.png"
+    mkdir -p "${HOME}/.local/share/applications"
+    printf '%s\n' \
+        '[Desktop Entry]' \
+        'Type=Application' \
+        'Name=CopperForge' \
+        'Comment=Design automation and rule-driven layout tooling for KiCad' \
+        "Exec=${BIN}" \
+        "Icon=${HOME}/.local/share/icons/hicolor/128x128/apps/copperforge.png" \
+        'Terminal=false' \
+        'Categories=Development;Electronics;Engineering;' \
+        'StartupWMClass=copperforge' \
+        > "${HOME}/.local/share/applications/copperforge.desktop"
+    update-desktop-database "${HOME}/.local/share/applications" 2>/dev/null || true
+    gtk-update-icon-cache -f "${HOME}/.local/share/icons/hicolor" 2>/dev/null || true
+    echo "✅ Launcher installed — CopperForge is in your applications menu."
+
+# Remove the desktop launcher and icon
+uninstall-launcher:
+    rm -f "${HOME}/.local/share/applications/copperforge.desktop" \
+          "${HOME}/.local/share/icons/hicolor/128x128/apps/copperforge.png"
+    -update-desktop-database "${HOME}/.local/share/applications" 2>/dev/null
+    @echo "🗑  Launcher removed."

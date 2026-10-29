@@ -3,6 +3,7 @@
 //! Panel rendering logic migrates here from ui/ in Phase 5.
 
 mod settings;
+mod board_stats;
 mod drc;
 mod view_settings;
 mod projects;
@@ -14,6 +15,7 @@ mod terminal;
 mod logger;
 
 pub use settings::SettingsPanel;
+pub use board_stats::BoardStatsPanel;
 pub use drc::DrcPanel;
 pub use view_settings::ViewSettingsPanel;
 pub use projects::ProjectsPanel;
