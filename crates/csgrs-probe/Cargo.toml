@@ -1,0 +1,20 @@
+# Feasibility probe for the csgrs/Hyper migration (feature-csgrs branch):
+# 1. hyperbrep-io STEP import of a real de-branded LCSC vendor model
+# 2. Hypermesh boolean performance at board scale (slab minus drills)
+# Standalone package (own workspace) so the main CopperForge build never
+# depends on the sibling csgrs checkout.
+[package]
+name = "csgrs-probe"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[dependencies]
+csgrs = { path = "../../../csgrs" }
+hyperbrep = { path = "../../../csgrs/crates/hyperbrep" }
+hyperbrep-io = { path = "../../../csgrs/crates/hyperbrep-io" }
+hyperlattice = { path = "../../../csgrs/crates/hyperlattice" }
+
+[profile.release]
+debug = false
